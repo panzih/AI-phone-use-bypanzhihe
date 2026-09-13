@@ -137,7 +137,7 @@ enum class TouchKind(
         needsPoint = true,
         needsDuration = true,
         requiresExtraComponent = true,
-        extraNote = "无障碍的多指能力已就绪，但还没做"自定义手指路径"的接口。",
+        extraNote = "无障碍的多指能力已就绪，但还没做「自定义手指路径」的接口。",
     ),
 
     // ---- 下面这些是坐标类之外的基础动作，桌面版已有，端上版不该丢 ----
