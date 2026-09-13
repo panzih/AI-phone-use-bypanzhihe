@@ -104,7 +104,7 @@ class AutoService : AccessibilityService() {
         }
 
         val latch = CountDownLatch(1)
-        val result = AtomicReference<ShotResult>(ShotResult.Fail("截图超时"))
+        val result = AtomicReference<ShotResult>(ShotResult.Fail("截图超时（回调没来）"))
 
         takeScreenshot(
             android.view.Display.DEFAULT_DISPLAY,
@@ -128,6 +128,7 @@ class AutoService : AccessibilityService() {
                 }
 
                 override fun onFailure(errorCode: Int) {
+                    Log.w(TAG, "截图失败 code=$errorCode: ${explainError(errorCode)}")
                     result.set(ShotResult.Fail(explainError(errorCode)))
                     latch.countDown()
                 }

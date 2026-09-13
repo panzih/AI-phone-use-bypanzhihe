@@ -55,47 +55,49 @@ class ChannelController(private val context: Context) {
     /**
      * 抓一帧画面。
      *
-     * 这个架构下截图不是为了算坐标，而是给模型**理解界面语义**。
-     * 精确坐标走 UI 控件树，所以截图失败不算致命 —— 只是模型少了点上下文。
+     * 重要：**重活放在 IO 线程，状态更新回到调用方线程**。
+     *
+     * 原来的写法是在 withContext(Dispatchers.IO) 内部直接调 onUpdate，
+     * 那是从后台线程写 Compose 状态 —— 更新可能不生效，界面就一直卡在旧状态。
+     * 这个坑很隐蔽：日志显示一切正常，但界面不刷新。
+     *
+     * 这个架构下截图不是为了算坐标，而是给模型理解界面语义。
+     * 精确坐标走 UI 控件树，所以截图失败不算致命。
      */
     suspend fun captureFrame(onUpdate: (PreviewState) -> Unit) {
         val ch = channel ?: return
 
-        withContext(Dispatchers.IO) {
+        // 重活：截图 + 解码 + 像素分析，全在 IO 线程
+        val next = withContext(Dispatchers.IO) {
             val bytes = ch.screenshot()
             if (bytes == null || bytes.isEmpty()) {
-                onUpdate(
-                    PreviewState(
-                        status = ChannelStatus.UNAVAILABLE,
-                        message = "截图失败。可能是页面有安全保护（银行/支付类），" +
-                            "或者截图太频繁被系统限流。",
-                    )
+                return@withContext PreviewState(
+                    status = ChannelStatus.UNAVAILABLE,
+                    message = "截图失败。可能是页面有安全保护（银行/支付类），" +
+                        "或者截图太频繁被系统限流。",
                 )
-                return@withContext
             }
 
-            val bmp: Bitmap? = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             if (bmp == null) {
-                onUpdate(
-                    PreviewState(
-                        status = ChannelStatus.UNAVAILABLE,
-                        message = "画面解码失败。",
-                    )
+                return@withContext PreviewState(
+                    status = ChannelStatus.UNAVAILABLE,
+                    message = "画面解码失败。",
                 )
-                return@withContext
             }
 
             val size = ch.screenSize()
-            onUpdate(
-                PreviewState(
-                    status = ChannelStatus.READY,
-                    frame = bmp,
-                    screenWidth = size?.first ?: bmp.width,
-                    screenHeight = size?.second ?: bmp.height,
-                    isProbablySecure = isAllBlack(bmp),
-                )
+            PreviewState(
+                status = ChannelStatus.READY,
+                frame = bmp,
+                screenWidth = size?.first ?: bmp.width,
+                screenHeight = size?.second ?: bmp.height,
+                isProbablySecure = isAllBlack(bmp),
             )
         }
+
+        // 状态更新回到调用方的线程（主线程）
+        onUpdate(next)
     }
 
     /**

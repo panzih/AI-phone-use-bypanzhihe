@@ -21,6 +21,8 @@ android-app/.pyinstaller_cache/
 
 # Gradle 缓存
 .gradle/
+# 工程内自带的 Gradle 缓存（322M，可重建；放工作区里是为了绕开文件沙箱）
+android-app/.gradle-home/
 
 # 本地配置：含机器专属的 SDK 路径，不该共享
 local.properties
@@ -37,3 +39,7 @@ captures/
 *.log
 *.tmp
 *~
+
+# ---------- 参考资料 / 二进制（体积大，不入库） ----------
+*.apk
+*.zip

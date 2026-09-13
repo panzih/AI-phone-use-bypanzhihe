@@ -113,6 +113,8 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 }
 
                 is AutoService.ShotResult.Fail -> {
+                    android.util.Log.w("AccessibilityChannel",
+                        "截图失败(尝试 ${attempt + 1}/3): ${r.reason}")
                     // 限流就等一下重试；安全窗口没救，直接放弃
                     if (r.reason.contains("太快") || r.reason.contains("太短")) {
                         Thread.sleep(400L * (attempt + 1))

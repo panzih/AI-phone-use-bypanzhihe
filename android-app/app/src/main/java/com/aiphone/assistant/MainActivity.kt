@@ -6,6 +6,11 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,12 +52,6 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // 用户可能刚去系统设置里开了无障碍，回来时状态就变了。
-        // 这里不主动刷新，交给界面的重连按钮 —— 避免每次切后台回来都抓一帧。
     }
 
     /**
@@ -101,10 +100,40 @@ private fun AppRoot(
         }
     }
 
-    // 首次进入自动检查一次
-    remember {
+    // 自动检查，并在"从系统设置返回"时重试一次。
+    //
+    // 这里原来用的是 remember { connectAndPreview() }，那是错的 ——
+    // remember 只在首次组合时执行，服务晚一点才绑定的话界面永远不会更新。
+    // 必须用 LaunchedEffect，而且要在 ON_RESUME 时重试：
+    // 用户去系统设置开完无障碍回来，正好触发这一条。
+    // 拿宿主 Activity 的 lifecycle。不用 LocalLifecycleOwner 是因为
+    // 它在不同 Compose 版本里位置变过（ui.platform → lifecycle.compose），
+    // 走 Context 拿最稳，也不用多引依赖。
+    val hostLifecycle = (LocalContext.current as? androidx.activity.ComponentActivity)?.lifecycle
+    var resumeTick by remember { mutableStateOf(0) }
+
+    DisposableEffect(hostLifecycle) {
+        // 注意：这个 lambda 必须返回 onDispose { }，不能提前 return
+        val observer = hostLifecycle?.let {
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    resumeTick++
+                }
+            }
+        }
+        if (hostLifecycle != null && observer != null) {
+            hostLifecycle.addObserver(observer)
+        }
+        onDispose {
+            if (hostLifecycle != null && observer != null) {
+                hostLifecycle.removeObserver(observer)
+            }
+        }
+    }
+
+    // 每次 resumed 都重新检测一遍通道状态
+    LaunchedEffect(resumeTick) {
         connectAndPreview()
-        true
     }
 
     when (screen) {
