@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 普通矢量图标（备用，非自适应） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#1F6FEB"
+        android:pathData="M0,0 h108 v108 h-108 z" />
+
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:fillColor="#00000000"
+        android:pathData="M42,30 L66,30 A5,5 0 0 1 71,35 L71,73 A5,5 0 0 1 66,78 L42,78 A5,5 0 0 1 37,73 L37,35 A5,5 0 0 1 42,30 Z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,48 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+</vector>

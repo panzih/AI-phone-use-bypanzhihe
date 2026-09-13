@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI 手机助手</string>
+
+    <!-- 无障碍服务（系统设置里显示的文字） -->
+    <string name="a11y_service_label">AI 手机助手</string>
+    <string name="a11y_service_summary">让 AI 代替你操作手机</string>
+    <string name="a11y_service_description">开启后，AI 可以读取屏幕内容并模拟点击滑动，代替你完成操作。不会在后台偷偷运行，每次执行都有明显的界面提示，可随时停止。</string>
+
+    <!-- 侧边栏 -->
+    <string name="drawer_open">打开侧边栏</string>
+    <string name="drawer_control_phone">控制手机</string>
+    <string name="drawer_coming_soon">敬请期待</string>
+    <string name="drawer_settings">设置</string>
+
+    <!-- 顶栏 -->
+    <string name="appbar_settings">设置</string>
+
+    <!-- 预览区 -->
+    <string name="preview_title">ADB 预览</string>
+    <string name="preview_connecting">正在连接 ...</string>
+    <string name="preview_unavailable">预览不可用</string>
+    <string name="preview_no_frame">还没有画面</string>
+    <string name="preview_refresh">刷新画面</string>
+    <string name="preview_connect">连接</string>
+    <string name="preview_reconnect">重新连接</string>
+    <string name="preview_open_a11y">去开启无障碍服务</string>
+    <string name="preview_secure_window">截图是黑的，当前页面可能有 DRM 保护</string>
+
+    <!-- 输入区 -->
+    <string name="input_hint">告诉 AI 下一步做什么</string>
+    <string name="input_send">发送</string>
+    <string name="input_stop">停止</string>
+    <string name="running_hint">AI 正在执行 ...</string>
+
+    <!-- 设置页 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_back">返回</string>
+    <string name="settings_section_model">模型</string>
+    <string name="settings_section_touch">触控</string>
+    <string name="settings_model_provider">接口地址</string>
+    <string name="settings_model_apikey">API Key</string>
+    <string name="settings_model_name">模型名称</string>
+    <string name="settings_model_detail">图片精度</string>
+    <string name="settings_touch_available">当前可用</string>
+    <string name="settings_touch_extra">需要额外组件</string>
+</resources>
