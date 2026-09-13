@@ -1,0 +1,39 @@
+# ---------- Python 桌面版 ----------
+# 虚拟环境（30M，可重建）
+.venv/
+venv/
+env/
+
+# 打包产物（43M + 5.2M，可重建）
+dist/
+build/
+*.spec.bak
+
+# 运行日志和截图（每次运行都变）
+logs/
+
+# ---------- Android ----------
+# 构建产物
+android-app/build/
+android-app/app/build/
+android-app/.gradle/
+android-app/.pyinstaller_cache/
+
+# Gradle 缓存
+.gradle/
+
+# 本地配置：含机器专属的 SDK 路径，不该共享
+local.properties
+
+# ---------- 系统和 IDE ----------
+.DS_Store
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ---------- 临时文件 ----------
+*.log
+*.tmp
+*~
