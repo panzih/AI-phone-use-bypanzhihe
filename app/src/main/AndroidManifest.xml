@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      联网权限。要调模型 API，没有它连 socket 都建不起来。
+
+      这是普通权限（normal），装上就有，不需要运行时申请。
+      没有它的表现是连接直接失败，而且报错不会说"你没给权限"。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      悬浮窗权限：AI 操作期间的顶部状态卡和底部急停按钮。
+
+      这是**特殊权限**，不是运行时权限 —— 必须跳系统设置页让用户手动开，
+      代码申请不了。没开的话悬浮窗加不上去，任务退化成"看不到进度"。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!--
+      前台服务：悬浮窗要在用户切到别的应用之后继续存在，
+      就必须挂在 Service 上，而 Service 要被系统保活就得是前台服务。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!--
+      通知权限（Android 13+）。前台服务的常驻通知里带了「急停」按钮，
+      用户拒绝通知权限的话按钮就没了 —— 但悬浮窗上的急停还在。
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AiPhoneAssistant">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.AiPhoneAssistant"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          日志导出用的 FileProvider。
+
+          authority 必须和 LogExporter 里拼的一致（<包名>.fileprovider）。
+          exported=false + grantUriPermissions=true 是标准组合：
+          不对外暴露，只把分享出去的那一个 Uri 临时授权读取。
+
+          没有它，分享日志会在 Android 7 以上抛 FileUriExposedException。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
+          悬浮控制面板。
+
+          foregroundServiceType 在 Android 14+ 是**必填**的，不写会直接崩。
+          用 specialUse 是因为它既不是定位也不是播放，是"AI 操作期间的
+          悬浮控制面板"；property 里要写清楚用途，这是上架审核会看的。
+        -->
+        <service
+            android:name=".overlay.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="AI 操作手机期间显示进度与急停按钮的悬浮控制面板" />
+        </service>
+
+        <!--
+          核心无障碍服务。
+
+          permission 必须是 BIND_ACCESSIBILITY_SERVICE，这是系统绑定的凭据。
+          exported=true 也是必须的 —— 系统要能跨应用绑定它。
+
+          meta-data 指向配置文件，里面声明了服务的能力
+          （能不能截图、能不能做手势、要不要读控件树）。
+
+          注意：这个服务是**常驻**的，用户授权后重启手机也会自动恢复 ——
+          这正是选无障碍而不是 Shizuku 的主要原因。
+        -->
+        <service
+            android:name=".a11y.AutoService"
+            android:exported="true"
+            android:label="@string/a11y_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+
+</manifest>

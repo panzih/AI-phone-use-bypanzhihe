@@ -1,45 +1,36 @@
-# ---------- Python 桌面版 ----------
-# 虚拟环境（30M，可重建）
-.venv/
-venv/
-env/
+# ============================================================
+# 纸盒 · AI 操作手机 —— Android 工程
+# ============================================================
 
-# 打包产物（43M + 5.2M，可重建）
-dist/
+# ---------- 构建产物（可重建） ----------
 build/
-*.spec.bak
-
-# 运行日志和截图（每次运行都变）
-logs/
-
-# ---------- Android ----------
-# 构建产物
-android-app/build/
-android-app/app/build/
-android-app/.gradle/
-android-app/.pyinstaller_cache/
-
-# Gradle 缓存
+app/build/
 .gradle/
-# 工程内自带的 Gradle 缓存（322M，可重建；放工作区里是为了绕开文件沙箱）
-android-app/.gradle-home/
-
-# 本地配置：含机器专属的 SDK 路径，不该共享
-local.properties
-
-# ---------- 系统和 IDE ----------
-.DS_Store
-*.iml
-.idea/
+.kotlin/
 captures/
 .externalNativeBuild/
 .cxx/
+
+# 工程内自带的 Gradle 缓存（约 320M）。
+# 放在工程里是因为本机文件沙箱只允许写工作区，默认的 ~/.gradle 写不进去。
+# 它纯粹是缓存，删掉下次构建会重新下。
+.gradle-home/
+
+# ---------- 本地配置 ----------
+# 含机器专属的 SDK 路径，不该共享
+local.properties
+
+# ---------- IDE / 系统 ----------
+.idea/
+*.iml
+.DS_Store
 
 # ---------- 临时文件 ----------
 *.log
 *.tmp
 *~
 
-# ---------- 参考资料 / 二进制（体积大，不入库） ----------
+# ---------- 二进制参考资料（体积大，不入库）----------
+# docs/reference/ 下的 roubao 源码 zip 和 APK
 *.apk
 *.zip
