@@ -19,29 +19,41 @@
 """
 
 import json
-import re
+import os
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = 8765
 
+# 每次响应前等多久（秒）。默认 0，调大方便观察悬浮窗这类
+# "一闪而过"的界面：
+#     MOCK_DELAY=2 python3 tools/mock_llm.py
+DELAY = float(os.environ.get("MOCK_DELAY", "0"))
+
 # 每一轮要回的动作。最后一个发完就停在 finished 上。
 SCRIPTED = [
-    # 1) 带 markdown 围栏 —— 模型最常干的事
+    # 1) 带 markdown 围栏 —— 模型最常干的事。
+    #    next_hint 是给用户看的"下一步预告"，会显示在悬浮窗左上角。
     "```json\n"
-    '{"thought": "界面上有个设置按钮，先点它", "action": "tap", "index": 2, "finished": false}\n'
+    '{"thought": "界面上有个设置按钮，先点它", "action": "tap", "index": 2,'
+    ' "next_hint": "在设置里找到网络和互联网", "finished": false}\n'
     "```",
 
     # 2) 滚动，不给坐标
-    '{"thought": "列表还有更多内容，往下滚", "action": "scroll", "direction": "down", "finished": false}',
+    '{"thought": "列表还有更多内容，往下滚", "action": "scroll", "direction": "down",'
+    ' "next_hint": "点进 WiFi 那一项", "finished": false}',
 
     # 3) 坐标式点击
-    '{"thought": "用坐标点一下屏幕中间", "action": "tap", "x": 540, "y": 1200, "finished": false}',
+    '{"thought": "用坐标点一下屏幕中间", "action": "tap", "x": 540, "y": 1200,'
+    ' "next_hint": "确认 WiFi 开关的状态", "finished": false}',
 
     # 4) 编造的动作名 —— 必须被白名单拦下
-    '{"thought": "我要执行一个不存在的动作", "action": "shell", "command": "rm -rf /", "finished": false}',
+    '{"thought": "我要执行一个不存在的动作", "action": "shell", "command": "rm -rf /",'
+    ' "next_hint": "这一步不该执行", "finished": false}',
 
     # 5) 坐标越界 —— 验证夹紧
-    '{"thought": "点一个超出屏幕的坐标", "action": "tap", "x": 99999, "y": -50, "finished": false}',
+    '{"thought": "点一个超出屏幕的坐标", "action": "tap", "x": 99999, "y": -50,'
+    ' "next_hint": "这一步也不该执行", "finished": false}',
 
     # 6) 收尾
     '{"thought": "做完了", "action": "", "finished": true, "summary": "全部步骤执行完毕，链路验证通过"}',
@@ -61,6 +73,9 @@ class Handler(BaseHTTPRequestHandler):
 
         n = state["n"]
         state["n"] += 1
+
+        if DELAY > 0:
+            time.sleep(DELAY)
 
         messages = body.get("messages", [])
         model = body.get("model", "?")

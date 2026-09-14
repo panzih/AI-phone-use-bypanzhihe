@@ -9,6 +9,27 @@
     -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      悬浮窗权限：AI 操作期间的顶部状态卡和底部急停按钮。
+
+      这是**特殊权限**，不是运行时权限 —— 必须跳系统设置页让用户手动开，
+      代码申请不了。没开的话悬浮窗加不上去，任务退化成"看不到进度"。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!--
+      前台服务：悬浮窗要在用户切到别的应用之后继续存在，
+      就必须挂在 Service 上，而 Service 要被系统保活就得是前台服务。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!--
+      通知权限（Android 13+）。前台服务的常驻通知里带了「急停」按钮，
+      用户拒绝通知权限的话按钮就没了 —— 但悬浮窗上的急停还在。
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -48,6 +69,22 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!--
+          悬浮控制面板。
+
+          foregroundServiceType 在 Android 14+ 是**必填**的，不写会直接崩。
+          用 specialUse 是因为它既不是定位也不是播放，是"AI 操作期间的
+          悬浮控制面板"；property 里要写清楚用途，这是上架审核会看的。
+        -->
+        <service
+            android:name=".overlay.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="AI 操作手机期间显示进度与急停按钮的悬浮控制面板" />
+        </service>
 
         <!--
           核心无障碍服务。

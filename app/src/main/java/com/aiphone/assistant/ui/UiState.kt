@@ -55,6 +55,9 @@ data class MainUiState(
     /** 无障碍服务当前是否真的连着（不是"设置里开着"就算） */
     val authorized: Boolean = false,
 
+    /** 悬浮窗权限（SYSTEM_ALERT_WINDOW）。没有它就没有进度面板和急停按钮 */
+    val overlayGranted: Boolean = false,
+
     /** 设置页显示的日志统计，例如 "共 3 次记录 · 1.2 MB" */
     val logStats: String = "",
 

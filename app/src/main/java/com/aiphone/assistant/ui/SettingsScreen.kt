@@ -94,6 +94,7 @@ fun SettingsScreen(
     onSettingsChange: (AppSettings) -> Unit,
     onBack: () -> Unit,
     onGotoAuth: () -> Unit,
+    onOpenOverlaySettings: () -> Unit,
     onClearContext: () -> Unit,
     onExportLatest: () -> Unit,
     onExportAll: () -> Unit,
@@ -150,6 +151,12 @@ fun SettingsScreen(
                     authorized = state.authorized,
                     onSelect = { onSettingsChange(s.copy(mode = it)) },
                     onGotoAuth = onGotoAuth,
+                )
+            }
+            item {
+                OverlayPermissionRow(
+                    granted = state.overlayGranted,
+                    onOpen = onOpenOverlaySettings,
                 )
             }
 
@@ -396,6 +403,56 @@ private fun AuthSection(
         }
 
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+/**
+ * 悬浮窗授权行。
+ *
+ * 单独列出来是因为它是个**特殊权限**：代码申请不了，必须跳系统设置手动开，
+ * 而且各家 ROM 的入口名字都不一样（小米叫"显示在其他应用上层"，
+ * ColorOS 还会额外锁"受限制的设置"）。不给用户一个明确入口，
+ * 他根本不知道该去哪开。
+ */
+@Composable
+private fun OverlayPermissionRow(
+    granted: Boolean,
+    onOpen: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_overlay_label),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = stringResource(R.string.settings_overlay_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+
+            if (granted) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = stringResource(R.string.settings_overlay_granted),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                OutlinedButton(onClick = onOpen) {
+                    Text(stringResource(R.string.settings_overlay_open))
+                }
+            }
+        }
     }
 }
 

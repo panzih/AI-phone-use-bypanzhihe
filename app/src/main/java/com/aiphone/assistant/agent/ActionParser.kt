@@ -46,8 +46,14 @@ object ActionParser {
         val finished: Boolean,
         val summary: String,
         val raw: String,
+        /**
+         * 模型对**下一步**的预告，显示给用户看的那一行。
+         *
+         * 这是"人在环路"的关键：用户在你动手之前就知道你要干嘛，
+         * 觉得不对就能按急停 —— 而不是事后才发现点错了。
+         */
+        val nextHint: String = "",
         val warning: String? = null,
-        /** 界面变了没有 —— 由 Agent 用截图哈希判断后回填，解析层不关心 */
     )
 
     /** 动作名白名单。不在这张表里的一律拒绝，绝不去执行。 */
@@ -100,25 +106,30 @@ object ActionParser {
 
         val thought = obj.optString("thought").takeIf { it.isNotBlank() }
         val summary = obj.optString("summary").takeIf { it.isNotBlank() }.orEmpty()
+        // 下一步预告。模型可能写成 next_hint / next / hint，都认。
+        val nextHint = sequenceOf("next_hint", "next", "hint")
+            .map { obj.optString(it, "") }
+            .firstOrNull { it.isNotBlank() }
+            .orEmpty()
         val finished = obj.optBoolean("finished", false) ||
             obj.optString("action").equals("finish", true) ||
             obj.optString("action").equals("done", true)
 
         if (finished) {
-            return Parsed(thought, null, true, summary, raw)
+            return Parsed(thought, null, true, summary, raw, nextHint)
         }
 
         val actionName = obj.optString("action").trim().lowercase()
         if (actionName.isBlank()) {
             return Parsed(
-                thought, null, false, summary, raw,
+                thought, null, false, summary, raw, nextHint,
                 warning = "JSON 里没有 action 字段。",
             )
         }
 
         val kind = ALIASES[actionName]
             ?: return Parsed(
-                thought, null, false, summary, raw,
+                thought, null, false, summary, raw, nextHint,
                 warning = "动作「$actionName」不在支持列表里，已忽略。" +
                     "可用动作：${TouchKind.entries.joinToString("/") { it.id }}",
             )
@@ -145,7 +156,7 @@ object ActionParser {
         // ---- 校验：这个动作能不能执行 ----
         val problem = validate(kind, index, x, y, text, pkg)
         if (problem != null) {
-            return Parsed(thought, null, false, summary, raw, warning = problem)
+            return Parsed(thought, null, false, summary, raw, nextHint, warning = problem)
         }
 
         val action = TouchAction(
@@ -157,7 +168,7 @@ object ActionParser {
             text = text,
             packageName = pkg,
         )
-        return Parsed(thought, action, false, summary, raw)
+        return Parsed(thought, action, false, summary, raw, nextHint)
     }
 
     /**

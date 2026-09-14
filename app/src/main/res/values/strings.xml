@@ -45,6 +45,11 @@
     <string name="settings_section_auth">操作授权</string>
     <string name="settings_mode_label">操作方式</string>
     <string name="settings_goto_auth">前往授权</string>
+    <string name="settings_overlay_label">悬浮窗</string>
+    <string name="settings_overlay_desc">AI 操作时显示的进度面板和急停按钮。没有它任务照常跑，但你既看不到进度也停不下来。</string>
+    <string name="settings_overlay_granted">已授权</string>
+    <string name="settings_overlay_open">去开启</string>
+
     <string name="settings_auth_granted">已授权</string>
     <string name="settings_auth_missing">未授权</string>
     <string name="settings_auth_unavailable">当前版本未接入</string>

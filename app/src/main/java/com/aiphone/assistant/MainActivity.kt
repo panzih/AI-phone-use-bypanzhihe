@@ -1,11 +1,16 @@
 package com.aiphone.assistant
 
+import android.Manifest
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -31,6 +36,8 @@ import com.aiphone.assistant.memory.Conversation
 import com.aiphone.assistant.memory.InsightStore
 import com.aiphone.assistant.memory.RawDistiller
 import com.aiphone.assistant.memory.Turn
+import com.aiphone.assistant.overlay.OverlayBus
+import com.aiphone.assistant.overlay.OverlayService
 import com.aiphone.assistant.ui.LogEntry
 import com.aiphone.assistant.ui.LogKind
 import com.aiphone.assistant.ui.MainScreen
@@ -61,6 +68,7 @@ class MainActivity : ComponentActivity() {
                     store = store,
                     appVersion = appVersion(),
                     onOpenAccessibilitySettings = { openAccessibilitySettings() },
+                    onOpenOverlaySettings = { openOverlaySettings() },
                 )
             }
         }
@@ -84,6 +92,27 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
+
+    /**
+     * 跳到悬浮窗授权页。
+     *
+     * SYSTEM_ALERT_WINDOW 是特殊权限，没有 requestPermissions 那条路，
+     * 只能带着包名跳过去让用户自己开。
+     *
+     * 注意各家 ROM 的入口名字不同：原生叫"显示在其他应用上层"，
+     * 小米叫"显示在其他应用上层"、ColorOS 还可能要先解开
+     * "受限制的设置"才能看到这个开关（Roubao 的 issue 里踩过）。
+     */
+    private fun openOverlaySettings() {
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName"),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
 }
 
 /**
@@ -98,9 +127,16 @@ private fun AppRoot(
     store: SettingsStore,
     appVersion: String,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenOverlaySettings: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // 通知权限（Android 13+）。前台服务的常驻通知里挂了「急停」按钮；
+    // 用户拒绝也没关系 —— 悬浮窗上的急停照常能用，所以不阻塞流程。
+    val notifLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* 结果不影响任务能否跑 */ }
 
     var screen by remember { mutableStateOf(Screen.CONTROL) }
     var input by remember { mutableStateOf("") }
@@ -108,6 +144,7 @@ private fun AppRoot(
     var isRunning by remember { mutableStateOf(false) }
     var stopRequested by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(AutoService.isConnected) }
+    var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var logStats by remember { mutableStateOf("") }
     var insightCount by remember { mutableIntStateOf(0) }
     var progress by remember { mutableStateOf("") }
@@ -135,8 +172,11 @@ private fun AppRoot(
     }
 
     // 每次回到前台重新判断授权状态，并处理"闲置超时自动清空上下文"
+    // 任务开始后要把主界面退到后台 —— 否则 Agent 操作的是纸盒自己
+    val hostActivity = LocalContext.current as? ComponentActivity
+
     var resumeTick by remember { mutableIntStateOf(0) }
-    val hostLifecycle = (LocalContext.current as? ComponentActivity)?.lifecycle
+    val hostLifecycle = hostActivity?.lifecycle
     DisposableEffect(hostLifecycle) {
         val observer = hostLifecycle?.let {
             LifecycleEventObserver { _, event ->
@@ -153,6 +193,8 @@ private fun AppRoot(
         // 每次回到前台都重新问一次系统，而不是只在启动时查一次 ——
         // 用户去系统设置开完无障碍回来，正好走到这里。
         authorized = AutoService.isConnected
+        // 用户可能刚从系统设置里开完悬浮窗回来，每次前台都重查
+        overlayGranted = Settings.canDrawOverlays(context)
         refreshStats()
 
         if (conversation.isIdleBeyond(settings.autoClearMinutes)) {
@@ -262,10 +304,34 @@ private fun AppRoot(
         if (task.isBlank() || isRunning) return
         input = ""
         stopRequested = false
+        OverlayBus.clearStop()
         conversation.add(Turn(Turn.Role.USER, task))
 
         scope.launch {
             isRunning = true
+
+            // 通知权限：拒绝也不拦流程，只是少了通知栏那个急停按钮
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+
+            // 起悬浮窗。没权限时 OverlayService 会自己退出，
+            // 任务照常跑，只是用户看不到进度和急停按钮。
+            if (Settings.canDrawOverlays(context)) {
+                OverlayService.start(context)
+            } else {
+                addLog(
+                    LogKind.ERROR,
+                    "没有悬浮窗权限，这次看不到进度面板和急停按钮。" +
+                        "到「设置 → 操作授权 → 悬浮窗」里开一下。",
+                    "悬浮窗不可用",
+                )
+            }
+
+            // 把主界面让开，否则 Agent 第一步要额外按一次 Home，
+            // 而且中间那一下用户会看到纸盒自己的界面被当成操作对象。
+            hostActivity?.moveTaskToBack(true)
+
             try {
                 runTask(task)
             } catch (t: Throwable) {
@@ -274,6 +340,7 @@ private fun AppRoot(
             } finally {
                 isRunning = false
                 progress = ""
+                OverlayService.stop(context)
                 refreshStats()
             }
         }
@@ -322,6 +389,7 @@ private fun AppRoot(
                 logs = logs,
                 settings = settings,
                 authorized = authorized,
+                overlayGranted = overlayGranted,
                 logStats = logStats,
                 insightCount = insightCount,
                 progress = progress,
@@ -343,6 +411,7 @@ private fun AppRoot(
             state = MainUiState(
                 settings = settings,
                 authorized = authorized,
+                overlayGranted = overlayGranted,
                 logStats = logStats,
                 insightCount = insightCount,
                 toast = toast,
@@ -361,6 +430,7 @@ private fun AppRoot(
             },
             onBack = { screen = Screen.CONTROL; toast = null },
             onGotoAuth = { onOpenAccessibilitySettings() },
+            onOpenOverlaySettings = onOpenOverlaySettings,
             onClearContext = { clearContext() },
             onExportLatest = { exportLatest() },
             onExportAll = { exportAll() },

@@ -6,6 +6,7 @@ import com.aiphone.assistant.llm.ChatTurn
 import com.aiphone.assistant.llm.LlmClient
 import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.RunLogger
+import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.touch.TouchKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -96,6 +97,7 @@ class Agent(
         }
         logger?.line("屏幕：${w} x ${h}", "通道")
         logger?.line(llm.describe(), "模型")
+        logger?.line(if (OverlayBus.isShowing) "悬浮窗已就绪" else "悬浮窗未启动（缺权限或未开）", "悬浮")
 
         // ---- 2. 别拍到自己 ----
         ensureNotSelfForeground()
@@ -110,7 +112,7 @@ class Agent(
         var repeatAction = 0
 
         for (step in 1..maxSteps) {
-            if (stopRequested || listener.isStopRequested()) {
+            if (isStopped()) {
                 finish(false, "你停止了任务（第 $step 步）")
                 return
             }
@@ -119,11 +121,18 @@ class Agent(
             logger?.section("第 $step / $maxSteps 步")
 
             // ---- 看一眼 ----
+            // 先把悬浮窗藏起来再截屏。无障碍截图抓的是整块物理屏，
+            // 悬浮窗不藏的话会出现在图里 —— 模型会把"急停按钮"
+            // 当成界面元素去点它。
+            OverlayBus.hide()
+            delay(OVERLAY_SETTLE_MS)
+
             val tree = withContext(Dispatchers.IO) { controller.readUiTree() }
             val nodeCount = tree?.lines()?.count { it.isNotBlank() } ?: 0
             logger?.line("控件树：$nodeCount 个元素", "UI")
 
             val shot = withContext(Dispatchers.IO) { controller.captureFrame() }
+            OverlayBus.show()
             if (shot == null || shot.isEmpty()) {
                 // 截图失败不该直接终止 —— 但这一轮没有画面，模型没法判断。
                 // 记下来，继续下一轮试试。
@@ -242,14 +251,28 @@ class Agent(
                     logger?.line("动作：$desc", "执行")
                     listener.onEvent(EventKind.ACTION, desc, "第 $step 步 · 动作")
 
+                    // 关键的一步：把"我正要做什么"和"我打算接着做什么"
+                    // 显示在悬浮窗上。用户看到下一步不对，可以立刻按急停 ——
+                    // 这正是"人在环路"的意义。
+                    if (parsed.nextHint.isNotBlank()) {
+                        logger?.line("下一步预告：${parsed.nextHint}", "模型")
+                    }
+                    OverlayBus.update(step, maxSteps, desc, parsed.nextHint)
+
                     // 执行前再检查一次停止 —— 把急停的响应窗口从"一步"
                     // 缩短到"一次模型调用"
-                    if (stopRequested || listener.isStopRequested()) {
+                    if (isStopped()) {
                         finish(false, "你停止了任务（执行第 $step 步动作之前）")
                         return
                     }
 
+                    // 注入前也要藏：底部那个急停按钮是可触摸窗口，
+                    // 模型给的坐标万一正好落在它上面，点击会被它吃掉 ——
+                    // 甚至点到"急停"把自己的任务停掉。
+                    OverlayBus.hide()
+                    delay(OVERLAY_SETTLE_MS)
                     val execResult = withContext(Dispatchers.IO) { controller.execute(action) }
+                    OverlayBus.show()
                     val ok = execResult == null
                     val resultText = if (ok) "已执行" else execResult!!
 
@@ -326,6 +349,10 @@ class Agent(
         listener.onFinished(success, message)
     }
 
+    /** 三个停止来源：Agent 自己的标志、宿主界面的、悬浮窗按钮的 */
+    private fun isStopped(): Boolean =
+        stopRequested || listener.isStopRequested() || OverlayBus.stopRequested
+
     /** 动作签名，用来识别"反复做同一件事" */
     private fun actionSignature(kind: TouchKind, index: Int, x: Int, y: Int): String =
         "$kind|$index|$x|$y"
@@ -365,5 +392,14 @@ class Agent(
         val TAP_HOME = com.aiphone.assistant.touch.TouchAction(
             kind = TouchKind.KEY_HOME,
         )
+
+        /**
+         * 藏完悬浮窗后等一小会儿再截图/注入。
+         *
+         * 隐藏是异步的（窗口变更要经过 WindowManager 和 SurfaceFlinger
+         * 才真正生效），立刻截图有可能拍到还没消失的那一帧。
+         * 100ms 对 60Hz 来说是 6 帧，足够。
+         */
+        const val OVERLAY_SETTLE_MS = 100L
     }
 }
