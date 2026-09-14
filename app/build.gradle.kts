@@ -16,6 +16,29 @@ android {
         versionName = "0.1.0"
     }
 
+    /**
+     * 调试签名用工程自带的密钥，不用默认的 ~/.android/debug.keystore。
+     *
+     * 两个原因：
+     *   1. **可移植**：默认位置在用户家目录里，换台机器 / 重新 clone
+     *      就没有，AGP 会尝试现场生成。工程自带一份，clone 下来就能构建。
+     *   2. **沙箱友好**：AGP 会在那个目录里读写锁文件，而本机开发环境的
+     *      文件沙箱不允许写工作区之外，构建会直接失败在
+     *      "Unable to create debug keystore ... because it is not writable"。
+     *
+     * 口令就是 Android 调试密钥的公开默认值（android / androiddebugkey），
+     * 这**不是秘密也不能当秘密用** —— 调试密钥只用于本地安装，
+     * 绝不能拿它签发布包。
+     */
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
