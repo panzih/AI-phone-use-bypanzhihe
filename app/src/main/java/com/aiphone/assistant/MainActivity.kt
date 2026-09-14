@@ -19,10 +19,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.aiphone.assistant.R
+import com.aiphone.assistant.agent.Agent
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.SettingsStore
+import com.aiphone.assistant.llm.LlmClient
+import com.aiphone.assistant.llm.LlmConfig
 import com.aiphone.assistant.log.AppLog
 import com.aiphone.assistant.log.LogExporter
 import com.aiphone.assistant.memory.Conversation
@@ -87,8 +89,8 @@ class MainActivity : ComponentActivity() {
 /**
  * 界面根节点。
  *
- * 用本地状态驱动。等 Agent 循环接上来（会有协程、需要跨重组存活）时
- * 再换 ViewModel，各界面不用改。
+ * 用本地状态驱动。这里的逻辑已经不少（设置、日志、记忆、AI 循环），
+ * 但还没到必须上 ViewModel 的规模；等要加后台服务时再换，各界面不用改。
  */
 @Composable
 private fun AppRoot(
@@ -104,16 +106,25 @@ private fun AppRoot(
     var input by remember { mutableStateOf("") }
     var settings by remember { mutableStateOf(store.load()) }
     var isRunning by remember { mutableStateOf(false) }
+    var stopRequested by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(AutoService.isConnected) }
     var logStats by remember { mutableStateOf("") }
     var insightCount by remember { mutableIntStateOf(0) }
+    var progress by remember { mutableStateOf("") }
     var toast by remember { mutableStateOf<String?>(null) }
 
     val logs = remember { mutableStateListOf<LogEntry>() }
     val conversation = remember { Conversation() }
 
     fun addLog(kind: LogKind, text: String, label: String? = null) {
-        logs.add(LogEntry(id = "l${logs.size}_${System.currentTimeMillis()}", kind = kind, text = text, label = label))
+        logs.add(
+            LogEntry(
+                id = "l${logs.size}_${System.currentTimeMillis()}",
+                kind = kind,
+                text = text,
+                label = label,
+            )
+        )
     }
 
     fun refreshStats() {
@@ -144,25 +155,21 @@ private fun AppRoot(
         authorized = AutoService.isConnected
         refreshStats()
 
-        // 闲置超时：该清的清掉
         if (conversation.isIdleBeyond(settings.autoClearMinutes)) {
             persistConversationIfNeeded(conversation, settings, context)
             conversation.clear()
-            if (settings.saveLogs) {
-                AppLog.i("上下文闲置超时，已清空", "记忆")
-            }
+            if (settings.saveLogs) AppLog.i("上下文闲置超时，已清空", "记忆")
         }
     }
 
     /**
-     * 执行一次任务。
+     * 跑一次 AI 操作任务。
      *
-     * **注意：AI 决策循环还没接上。** 这里做的是循环里"看"的那一半 ——
-     * 探测通道、取屏幕尺寸、读控件树、截图 —— 并且全部写进本次运行的日志。
+     * 这里是"把模型接进来"的那一层：拼 LlmClient → 建 Agent →
+     * 把 Agent 的回调接到界面日志和落盘日志上。
      *
-     * 之所以先把它接通，是因为这条链路（截图 → 落盘 → 导出）是后面
-     * 一切的基础。它现在就是**可验证**的：发一条指令，导出日志，
-     * 里面能看到截图文件和控件树，说明地基是通的。
+     * 真正的循环逻辑在 [Agent] 里，包括防死循环、历史裁剪、
+     * 自己在前台时让位这些防护。
      */
     suspend fun runTask(task: String) {
         val logger = if (settings.saveLogs) {
@@ -178,67 +185,83 @@ private fun AppRoot(
                     detail = settings.detail,
                 ),
             )
-        } else {
-            null
-        }
+        } else null
 
         logger?.line("任务：$task", tag = "任务")
+        logger?.line("最大步数：${settings.maxSteps}", tag = "任务")
         addLog(LogKind.ACTION, task, "指令")
 
-        // 1. 通道能不能用
-        val problem = controller.probe()
-        if (problem != null) {
-            logger?.error(problem, "通道")
-            addLog(LogKind.ERROR, problem, "通道不可用")
+        if (settings.apiKey.isBlank()) {
+            val msg = "还没填 API Key。到「设置 → 模型」里填一个再试。"
+            logger?.error(msg, "模型")
+            addLog(LogKind.ERROR, msg, "模型未配置")
             logger?.close()
             return
         }
-        logger?.line("通道就绪：${settings.mode.label}", "通道")
-        addLog(LogKind.RESULT, "通道就绪：${settings.mode.label}", "通道")
 
-        // 2. 屏幕尺寸
-        val size = controller.screenSize()
-        val w = size?.first ?: 0
-        val h = size?.second ?: 0
-        logger?.line("屏幕：${w} x ${h}", "通道")
+        val llm = LlmClient(
+            LlmConfig(
+                baseUrl = settings.baseUrl,
+                apiKey = settings.apiKey,
+                model = settings.modelName,
+                detail = settings.detail,
+            )
+        )
 
-        // 3. 控件树 —— 这才是定位主力
-        val tree = controller.readUiTree()
-        val nodeCount = tree?.lines()?.count { it.isNotBlank() } ?: 0
-        logger?.line("控件树：$nodeCount 个元素", "UI")
-        if (tree != null) {
-            logger?.section("控件树内容")
-            tree.lines().forEach { logger?.line("  $it") }
+        val agent = Agent(
+            controller = controller,
+            llm = llm,
+            settings = settings,
+            maxSteps = settings.maxSteps,
+            selfPackage = context.packageName,
+            logger = logger,
+            listener = object : Agent.Listener {
+                override fun onEvent(kind: Agent.EventKind, text: String, label: String?) {
+                    addLog(
+                        when (kind) {
+                            Agent.EventKind.THOUGHT -> LogKind.THOUGHT
+                            Agent.EventKind.ACTION -> LogKind.ACTION
+                            Agent.EventKind.RESULT -> LogKind.RESULT
+                            Agent.EventKind.ERROR -> LogKind.ERROR
+                        },
+                        text,
+                        label,
+                    )
+                }
+
+                override fun onProgress(step: Int, maxSteps: Int) {
+                    progress = "AI 正在执行 · 第 $step / $maxSteps 步"
+                }
+
+                override fun onFinished(success: Boolean, message: String) {
+                    conversation.add(
+                        Turn(if (success) Turn.Role.AI else Turn.Role.ACTION, message)
+                    )
+                    progress = ""
+                    addLog(
+                        if (success) LogKind.RESULT else LogKind.ERROR,
+                        message,
+                        if (success) "任务完成" else "任务结束",
+                    )
+                }
+
+                override fun isStopRequested(): Boolean = stopRequested
+            },
+        )
+
+        try {
+            agent.run(task)
+        } finally {
+            // 兜底：Agent 万一提前抛了，也要收口，否则 run.log 停在半截
+            logger?.close()
         }
-        addLog(LogKind.THOUGHT, "读到 $nodeCount 个可操作元素", "控件树")
-
-        // 4. 截图
-        val shot = controller.captureFrame()
-        if (shot != null && shot.isNotEmpty()) {
-            val saved = if (settings.saveScreenshots) {
-                logger?.saveScreenshot(1, shot)
-            } else null
-            val msg = if (saved != null) {
-                "截图已保存：${saved.name}（${shot.size} 字节）"
-            } else {
-                "截图成功（${shot.size} 字节，未保存到本地）"
-            }
-            logger?.line(msg, "截图")
-            addLog(LogKind.RESULT, msg, "截图")
-        } else {
-            val msg = "截图失败。可能是页面有安全保护（银行/支付类），或者被系统限流。"
-            logger?.error(msg, "截图")
-            addLog(LogKind.ERROR, msg, "截图")
-        }
-
-        logger?.line("说明：AI 决策循环尚未接入，本次只完成了「看」这一步。", "状态")
-        logger?.close()
     }
 
     fun submit() {
         val task = input.trim()
         if (task.isBlank() || isRunning) return
         input = ""
+        stopRequested = false
         conversation.add(Turn(Turn.Role.USER, task))
 
         scope.launch {
@@ -247,9 +270,10 @@ private fun AppRoot(
                 runTask(task)
             } catch (t: Throwable) {
                 addLog(LogKind.ERROR, "执行出错：${t.message}", "错误")
-                if (settings.saveLogs) AppLog.e("执行出错：${t}", "任务")
+                if (settings.saveLogs) AppLog.e("执行出错：$t", "任务")
             } finally {
                 isRunning = false
+                progress = ""
                 refreshStats()
             }
         }
@@ -263,9 +287,7 @@ private fun AppRoot(
         scope.launch {
             persistConversationIfNeeded(conversation, settings, context)
             conversation.clear()
-            if (settings.saveLogs) {
-                AppLog.i("手动清空上下文（原有 $had 轮）", "记忆")
-            }
+            if (settings.saveLogs) AppLog.i("手动清空上下文（原有 $had 轮）", "记忆")
             refreshStats()
         }
         toast = context.getString(R.string.settings_clear_context_done)
@@ -302,12 +324,18 @@ private fun AppRoot(
                 authorized = authorized,
                 logStats = logStats,
                 insightCount = insightCount,
+                progress = progress,
                 toast = toast,
             ),
             onSettingsClick = { screen = Screen.SETTINGS },
             onInputChange = { input = it },
             onSubmit = { submit() },
-            onStop = { isRunning = false },
+            onStop = {
+                // 只是"请求停止"。Agent 会在每一步开始前和执行动作前检查，
+                // 不会把正在发出的那一次注入砍断。
+                stopRequested = true
+                addLog(LogKind.ERROR, "已请求停止，等当前这一步走完", "停止")
+            },
             onControlPhone = { screen = Screen.CONTROL },
         )
 
@@ -322,12 +350,11 @@ private fun AppRoot(
             onSettingsChange = { next ->
                 settings = next
                 store.save(next)
-                // 设置变更也记一笔 —— 出问题时"当时是什么配置"是第一批要问的
                 if (next.saveLogs) {
                     AppLog.i(
                         "设置变更：通道=${next.mode.label} 模型=${next.modelName} " +
-                            "精度=${next.detail} 记忆=${next.memoryEnabled} " +
-                            "自动清空=${next.autoClear.label}",
+                            "精度=${next.detail} 最大步数=${next.maxSteps} " +
+                            "记忆=${next.memoryEnabled} 自动清空=${next.autoClear.label}",
                         "设置",
                     )
                 }
@@ -345,7 +372,7 @@ private fun AppRoot(
  * 开了"保存记忆"就把上下文沉淀成 md。
  *
  * 现在的 distiller 是 [RawDistiller]：原样存，不做归纳 ——
- * 因为真正的归纳要调大模型，那是下一步。
+ * 因为真正的归纳要调大模型。
  * 但**存这个动作本身是真的在工作的**，内容不会丢，
  * 接上模型后把 RawDistiller 换掉即可，这里一行都不用改。
  */

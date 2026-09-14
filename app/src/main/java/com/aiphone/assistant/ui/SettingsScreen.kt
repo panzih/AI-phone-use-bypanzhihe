@@ -169,6 +169,19 @@ fun SettingsScreen(
 
             item {
                 DropdownRow(
+                    title = stringResource(R.string.settings_max_steps),
+                    subtitle = stringResource(R.string.settings_max_steps_desc),
+                    current = s.maxSteps,
+                    options = listOf(10, 20, 30, 50, 100),
+                    // 注意：这里不能用 stringResource —— optionLabel 是普通 lambda，
+                    // 不是 @Composable 上下文，调 @Composable 函数编译不过。
+                    optionLabel = { "$it 步" },
+                    onSelect = { onSettingsChange(s.copy(maxSteps = it)) },
+                )
+            }
+
+            item {
+                DropdownRow(
                     title = stringResource(R.string.settings_auto_clear),
                     subtitle = stringResource(R.string.settings_auto_clear_desc),
                     current = s.autoClear,

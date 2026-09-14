@@ -24,6 +24,7 @@ class SettingsStore(context: Context) {
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         detail = sp.getString(KEY_DETAIL, null) ?: DEFAULT.detail,
         mode = OperationMode.fromId(sp.getString(KEY_MODE, null)),
+        maxSteps = sp.getInt(KEY_MAX_STEPS, DEFAULT.maxSteps),
         autoClearMinutes = sp.getInt(KEY_AUTO_CLEAR, DEFAULT.autoClearMinutes),
         memoryEnabled = sp.getBoolean(KEY_MEMORY, DEFAULT.memoryEnabled),
         keepMemory = sp.getBoolean(KEY_KEEP_MEMORY, DEFAULT.keepMemory),
@@ -38,6 +39,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_MODEL, s.modelName)
             .putString(KEY_DETAIL, s.detail)
             .putString(KEY_MODE, s.mode.id)
+            .putInt(KEY_MAX_STEPS, s.maxSteps)
             .putInt(KEY_AUTO_CLEAR, s.autoClearMinutes)
             .putBoolean(KEY_MEMORY, s.memoryEnabled)
             .putBoolean(KEY_KEEP_MEMORY, s.keepMemory)
@@ -58,6 +60,7 @@ class SettingsStore(context: Context) {
         const val KEY_MODEL = "model_name"
         const val KEY_DETAIL = "detail"
         const val KEY_MODE = "operation_mode"
+        const val KEY_MAX_STEPS = "max_steps"
         const val KEY_AUTO_CLEAR = "auto_clear_minutes"
         const val KEY_MEMORY = "memory_enabled"
         const val KEY_KEEP_MEMORY = "keep_memory"

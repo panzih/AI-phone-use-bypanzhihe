@@ -68,6 +68,15 @@ data class AppSettings(
     val mode: OperationMode = OperationMode.ACCESSIBILITY,
 
     // ---------- 开发者设置 ----------
+    /**
+     * 一次任务最多走多少步。
+     *
+     * 这不是"防死循环"（那个由 Agent 里的画面哈希和重复动作检测负责），
+     * 是**给成本兜底** —— 每步都要调一次模型，步数直接等于花多少钱。
+     * 30 步对绝大多数任务够了；卡住的时候加步数不如把任务拆小。
+     */
+    val maxSteps: Int = 30,
+
     /** 多久没发消息就清空上下文。0 = 不清空 */
     val autoClearMinutes: Int = 60,
 

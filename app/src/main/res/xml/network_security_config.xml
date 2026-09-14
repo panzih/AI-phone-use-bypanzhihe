@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置。
+
+  ## 为什么必须放宽明文 HTTP
+
+  Android 9（API 28）起默认禁止明文 HTTP，这是好事 ——
+  但对我们这个工具是个硬伤：用户很可能把接口地址填成局域网里的
+  本地模型服务（Ollama、vLLM、LM Studio 之类），那些基本都跑在
+  http://192.168.x.x:11434 这种地址上，不带 TLS。
+
+  不放宽的话，表现是"点了发送没反应"，日志里只有一句
+  `Cleartext HTTP traffic to ... not permitted` —— 用户很难想到
+  是系统在拦。开发时用 10.0.2.2 连宿主机也一样会被拦。
+
+  ## 代价（这个必须说清楚）
+
+  允许明文意味着：如果用户把地址填成 http:// 开头的公网地址，
+  **API Key 会以明文经过网络**。这是用户自己的选择 ——
+  地址是他手填的，我们能做的是在界面上把这件事说清楚。
+
+  ## 真要分发时应该收紧
+
+  把 base-config 改成 cleartextTrafficPermitted="false"，
+  只给 localhost / 10.0.2.2 开口子。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -64,6 +64,23 @@ class ChannelController(private val context: Context) {
     /** 当前能否操作（服务是否真的连着，不是"设置里开着"） */
     val isReady: Boolean get() = AutoService.isConnected
 
+    /**
+     * 执行一个动作。
+     *
+     * @return null 表示成功，否则是给用户看的中文失败原因
+     */
+    suspend fun execute(action: com.aiphone.assistant.touch.TouchAction): String? =
+        withContext(Dispatchers.IO) { ensureChannel().perform(action) }
+
+    /**
+     * 当前前台应用的包名。
+     *
+     * 用来判断"我们是不是自己在前台" —— 那种情况下截图拍到的是
+     * 纸盒自己的界面，发给模型会误导它去点我们自己的按钮。
+     */
+    suspend fun currentPackage(): String? =
+        withContext(Dispatchers.IO) { AutoService.get()?.currentPackage() }
+
     fun release() {
         channel?.release()
         channel = null

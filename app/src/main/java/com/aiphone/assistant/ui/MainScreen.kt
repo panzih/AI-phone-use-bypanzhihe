@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -153,14 +153,16 @@ fun MainScreen(
                     onSubmit = onSubmit,
                     onStop = onStop,
                     isRunning = state.isRunning,
+                    runningHint = state.progress.ifBlank {
+                        stringResource(R.string.running_hint)
+                    },
                 )
             },
         ) { innerPadding ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .imePadding(),
+                    .padding(innerPadding),
             ) {
                 // 默认是 logo；有日志了才切成日志流
                 if (state.logs.isEmpty()) {
@@ -376,6 +378,7 @@ private fun InputBar(
     onSubmit: () -> Unit,
     onStop: () -> Unit,
     isRunning: Boolean,
+    runningHint: String,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -384,7 +387,10 @@ private fun InputBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.navigationBars)
+                // 导航栏和输入法取并集（union 是逐边取较大值）：
+                // 键盘没弹时用导航栏高度，弹起来时用键盘高度。
+                // 只写 navigationBars 的话输入框会被键盘盖住 —— 实际踩到过。
+                .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                 .windowInsetsPadding(WindowInsets.displayCutout)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
@@ -435,7 +441,7 @@ private fun InputBar(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = stringResource(R.string.running_hint),
+                        text = runningHint,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

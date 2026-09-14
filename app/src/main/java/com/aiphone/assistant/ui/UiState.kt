@@ -43,6 +43,9 @@ data class MainUiState(
     /** 是否正在执行任务（决定底部按钮是"发送"还是"停止"） */
     val isRunning: Boolean = false,
 
+    /** 执行中的进度文字，例如 "AI 正在执行 · 第 3 / 30 步" */
+    val progress: String = "",
+
     /** 中间那块显示的日志（AI 的思考 / 动作 / 结果）。空的时候显示 logo */
     val logs: List<LogEntry> = emptyList(),
 

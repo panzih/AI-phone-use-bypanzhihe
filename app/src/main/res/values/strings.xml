@@ -54,6 +54,8 @@
     <string name="settings_developer_warning">除非你知道这是什么，否则请不要动！</string>
     <string name="settings_clear_context">清空上下文</string>
     <string name="settings_clear_context_done">上下文已清空</string>
+    <string name="settings_max_steps">最大步数</string>
+    <string name="settings_max_steps_desc">一次任务最多走多少步。每步都要调一次模型，这个值直接等于最多花多少钱</string>
     <string name="settings_auto_clear">自动清空上下文</string>
     <string name="settings_auto_clear_desc">这么久没发消息，就自动把上下文清掉</string>
     <string name="settings_memory_enabled">开启记忆</string>
