@@ -72,7 +72,8 @@ class Conversation {
      * 清空。
      *
      * 注意 [clear] 之前应该先让 [InsightStore] 把内容沉淀掉 ——
-     * 直接清就是把记忆丢了。这个顺序由调用方保证（见 shouldAutoClear 的注释）。
+     * 直接清就是把记忆丢了。这个顺序由调用方保证
+     * （MainActivity 里每次都是 persist 之后才 clear）。
      */
     fun clear() {
         synchronized(turns) { turns.clear() }
