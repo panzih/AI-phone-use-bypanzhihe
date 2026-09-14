@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
         controller = ChannelController(applicationContext)
         store = SettingsStore(this)
 
+
         setContent {
             AiPhoneTheme {
                 AppRoot(

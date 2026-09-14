@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- 自适应图标（Android 8.0+ 直接用系统蒙版裁切） -->
-    <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-        <background android:drawable="@color/ic_launcher_background" />
-        <foreground android:drawable="@drawable/ic_box_logo" />
-        <monochrome android:drawable="@drawable/ic_box_logo" />
-    </adaptive-icon>
-</resources>
+<!--
+  ⚠️ 根元素必须直接是 <adaptive-icon>，**不能**用 <resources> 包一层。
+
+  <resources> 是 res/values/ 专用的。放在 mipmap-anydpi-v26/ 里，
+  系统会把 <resources> 当成"要加载一个叫 resources 的 Drawable 类"，
+  加载失败 → 整个图标解析不出来 → 启动器回退成安卓默认的机器人图标。
+
+  这个错误没有任何编译期提示，只会在运行时抛：
+      Resources$NotFoundException: File res/mipmap-anydpi-v26/ic_launcher.xml
+      Caused by: ClassNotFoundException: Didn't find class "resources"
+
+  踩了很久才定位到 —— 记在这里免得重犯。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_box_logo" />
+    <monochrome android:drawable="@drawable/ic_box_logo" />
+</adaptive-icon>
