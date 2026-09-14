@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!--
-      用 Material3 的 DayNight 父主题，跟随系统深色模式。
-      真正的配色由 Compose 里的 AiPhoneTheme 控制，这里只负责窗口本身。
-    -->
-    <style name="Theme.AiPhoneAssistant" parent="android:Theme.Material.Light.NoActionBar" />
-</resources>
