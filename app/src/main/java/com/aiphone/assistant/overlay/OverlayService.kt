@@ -71,6 +71,8 @@ class OverlayService : Service() {
      */
     private var cardParams: WindowManager.LayoutParams? = null
 
+    private lateinit var phaseDot: View
+    private lateinit var phaseText: TextView
     private lateinit var stepText: TextView
     private lateinit var currentText: TextView
     private lateinit var nextText: TextView
@@ -251,6 +253,23 @@ class OverlayService : Service() {
      * 第三行是给用户预判用的 —— 觉得不对就能在事情发生前按急停。
      */
     private fun buildStatusCard(): View {
+        // 阶段行：一个小圆点 + 文字。圆点用颜色区分阶段，
+        // 扫一眼就知道它在忙什么，不用读字。
+        phaseDot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(AgentPhase.IDLE.color)
+            }
+        }
+        phaseText = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            text = AgentPhase.IDLE.label
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+
         stepText = TextView(this).apply {
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
@@ -278,7 +297,21 @@ class OverlayService : Service() {
                 setColor(Color.parseColor("#CC1B1B1B"))
             }
             setPadding(dp(12), dp(10), dp(14), dp(10))
-            addView(stepText)
+
+            // 第一行：圆点 + 阶段
+            addView(
+                LinearLayout(this@OverlayService).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(
+                        phaseDot,
+                        LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(6) },
+                    )
+                    addView(phaseText)
+                }
+            )
+
+            addView(stepText, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(6) })
             addView(currentText, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
             addView(nextText, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
         }
@@ -345,6 +378,33 @@ class OverlayService : Service() {
         }
     }
 
+    /** 切换阶段。圆点颜色和文字一起变 */
+    fun updatePhase(phase: AgentPhase) {
+        main.post {
+            phaseText.text = phase.label
+            (phaseDot.background as? GradientDrawable)?.setColor(phase.color)
+        }
+    }
+
+    /**
+     * 这个坐标是不是压在底部急停按钮上。
+     *
+     * 按钮是可触摸窗口，注入的点击落在它上面会被它吃掉。
+     * 只有真重叠时才需要把悬浮窗藏起来 —— 其余时候留着，
+     * 用户才能看到"正在操作手机"。
+     */
+    fun overlapsStopButton(x: Int, y: Int): Boolean {
+        val v = buttonView ?: return false
+        if (v.visibility != View.VISIBLE) return false
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        // 留 8dp 余量：按钮有圆角，真实可点区域比矩形略小，
+        // 宁可多藏一下也不要漏
+        val pad = dp(8)
+        return x >= loc[0] - pad && x <= loc[0] + v.width + pad &&
+            y >= loc[1] - pad && y <= loc[1] + v.height + pad
+    }
+
     fun updateStatus(step: Int, maxSteps: Int, current: String, nextHint: String) {
         main.post {
             stepText.text = "第 $step / $maxSteps 步"
@@ -375,8 +435,8 @@ class OverlayService : Service() {
         private const val TAG = "OverlayService"
 
         /** 状态卡尺寸（dp）。固定尺寸是为了绕开 WRAP_CONTENT 窗口的测量坑 */
-        private const val CARD_WIDTH_DP = 232
-        private const val CARD_HEIGHT_DP = 96
+        private const val CARD_WIDTH_DP = 236
+        private const val CARD_HEIGHT_DP = 118
         private const val CHANNEL_ID = "aiphone_overlay"
         private const val NOTIFICATION_ID = 1001
 

@@ -12,6 +12,22 @@ package com.aiphone.assistant.overlay
  *   2. Agent 在截图/注入前喊一声"藏一下"，事后喊"出来"
  *   3. 悬浮窗上的急停按钮，把停止请求传回 Agent
  */
+/**
+ * AI 当前处在循环的哪一段。
+ *
+ * 用户光看"第几步"其实不知道它在忙什么 —— 一次截图要几百毫秒，
+ * 一次模型调用要一两秒，中间还有等待。把阶段显示出来，
+ * 用户才知道"它没卡住，是在等模型"。
+ */
+enum class AgentPhase(val label: String, val color: Int) {
+    IDLE("待命", 0xFF9E9E9E.toInt()),
+    SCREENSHOT("截图中", 0xFF29B6F6.toInt()),
+    UPLOADING("上传中", 0xFFFFA726.toInt()),
+    WAITING_MODEL("等待大模型返回结果", 0xFFAB47BC.toInt()),
+    ACTING("正在操作手机", 0xFFEF5350.toInt()),
+    WAITING_SYSTEM("等待系统响应", 0xFF66BB6A.toInt()),
+}
+
 object OverlayBus {
 
     /** 服务实例。没起悬浮窗时是 null，所有方法都做了空判断 */
@@ -33,6 +49,22 @@ object OverlayBus {
     }
 
     val isShowing: Boolean get() = service != null
+
+    /** 切换阶段，左上角那行状态会跟着变 */
+    fun setPhase(phase: AgentPhase) {
+        service?.updatePhase(phase)
+    }
+
+    /**
+     * 某个坐标是不是落在底部那个急停按钮上。
+     *
+     * 注入**点击**之前用得上：按钮是可触摸窗口，如果模型给的坐标正好
+     * 落在它上面，这一下会被按钮吃掉 —— 甚至点到"急停"把自己的任务停掉。
+     * 只有真重叠时才需要把悬浮窗藏起来，其余时候让它留着，
+     * 用户才能看到"正在操作手机"这个状态。
+     */
+    fun overlapsStopButton(x: Int, y: Int): Boolean =
+        service?.overlapsStopButton(x, y) ?: false
 
     /**
      * 更新左上角的状态卡。

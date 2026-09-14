@@ -6,6 +6,7 @@ import com.aiphone.assistant.llm.ChatTurn
 import com.aiphone.assistant.llm.LlmClient
 import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.RunLogger
+import com.aiphone.assistant.overlay.AgentPhase
 import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.touch.TouchKind
 import kotlinx.coroutines.Dispatchers
@@ -139,6 +140,10 @@ class Agent(
             // 先把悬浮窗藏起来再截屏。无障碍截图抓的是整块物理屏，
             // 悬浮窗不藏的话会出现在图里 —— 模型会把"急停按钮"
             // 当成界面元素去点它。
+            //
+            // 注：这一段的"截图中"状态基本看不到 —— 状态卡刚写上就被
+            // 藏起来了。这是隐藏策略的必然代价，不是 bug。
+            OverlayBus.setPhase(AgentPhase.SCREENSHOT)
             OverlayBus.hide()
             delay(OVERLAY_SETTLE_MS)
 
@@ -205,10 +210,14 @@ class Agent(
             // ---- 问模型 ----
             listener.onEvent(EventKind.THOUGHT, "正在请求模型 ...", "第 $step 步")
             val callStart = System.currentTimeMillis()
+            OverlayBus.setPhase(AgentPhase.UPLOADING)
             // 注意：userText 在这之前已经追加进 history 了，
             // 这里只多传一张图 —— history 就是实际发出去的内容。
             val result = withContext(Dispatchers.IO) {
-                llm.chat(system, history, shot)
+                llm.chat(system, history, shot) {
+                    // 请求体传完了，接下来是等服务端算
+                    OverlayBus.setPhase(AgentPhase.WAITING_MODEL)
+                }
             }
             val elapsed = System.currentTimeMillis() - callStart
 
@@ -315,13 +324,25 @@ class Agent(
                         return
                     }
 
-                    // 注入前也要藏：底部那个急停按钮是可触摸窗口，
-                    // 模型给的坐标万一正好落在它上面，点击会被它吃掉 ——
-                    // 甚至点到"急停"把自己的任务停掉。
-                    OverlayBus.hide()
-                    delay(OVERLAY_SETTLE_MS)
+                    // 注入前**只在真会撞上急停按钮时**才藏。
+                    //
+                    // 之前的做法是无条件藏，代价是用户永远看不到
+                    // "正在操作手机"这个状态 —— 而那恰恰是他最想看的。
+                    // 现在改成按坐标判断：只有点击/滑动的路径真压在按钮上，
+                    // 才把悬浮窗让开。
+                    //
+                    // 状态卡本身是 FLAG_NOT_TOUCHABLE，永远不会吃点击，
+                    // 所以只需要担心按钮那一小块。
+                    OverlayBus.setPhase(AgentPhase.ACTING)
+                    val mustHide = touchesStopButton(action)
+                    if (mustHide) {
+                        OverlayBus.hide()
+                        delay(OVERLAY_SETTLE_MS)
+                    }
                     val execResult = withContext(Dispatchers.IO) { controller.execute(action) }
-                    OverlayBus.show()
+                    if (mustHide) {
+                        OverlayBus.show()
+                    }
                     val ok = execResult == null
                     val resultText = if (ok) "已执行" else execResult!!
 
@@ -348,7 +369,11 @@ class Agent(
 
                     // 动作后等页面反应。滚动/点击后通常要一点时间，
                     // 太快截下一张会拍到过渡动画。
-                    delay(waitAfter(action.kind))
+                    val settle = waitAfter(action.kind)
+                    if (settle > 0) {
+                        OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                        delay(settle)
+                    }
                 }
             }
         }
@@ -382,6 +407,7 @@ class Agent(
     }
 
     private fun finish(success: Boolean, message: String) {
+        OverlayBus.setPhase(AgentPhase.IDLE)
         val total = promptTokens + completionTokens
         val cacheTotal = cacheHitTokens + cacheMissTokens
         val hitRate = if (cacheTotal > 0) {
@@ -400,6 +426,22 @@ class Agent(
         logger?.line("结束：$message", "任务")
         logger?.close()
         listener.onFinished(success, message)
+    }
+
+    /**
+     * 这个动作的路径会不会压到底部急停按钮上。
+     *
+     * 按钮只占底部中间一小块，绝大多数点击都碰不到它 ——
+     * 所以大多数步骤里悬浮窗可以一直留着，用户能看见"正在操作手机"。
+     */
+    private fun touchesStopButton(action: com.aiphone.assistant.touch.TouchAction): Boolean {
+        if (OverlayBus.overlapsStopButton(action.x, action.y)) return true
+        // 滑动/拖拽/甩动要连终点一起看，路径可能横穿按钮
+        return when (action.kind) {
+            TouchKind.SWIPE, TouchKind.FLICK, TouchKind.DRAG ->
+                OverlayBus.overlapsStopButton(action.x2, action.y2)
+            else -> false
+        }
     }
 
     /** 三个停止来源：Agent 自己的标志、宿主界面的、悬浮窗按钮的 */

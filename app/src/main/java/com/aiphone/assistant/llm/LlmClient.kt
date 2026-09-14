@@ -107,6 +107,16 @@ class LlmClient(private val cfg: LlmConfig) {
         system: String,
         history: List<ChatTurn>,
         imagePng: ByteArray?,
+        /**
+         * 请求体写完之后回调一次 —— 也就是"传完了，开始等模型"。
+         *
+         * 上传和等待是两件体感完全不同的事：上传快则几百毫秒、
+         * 慢则好几秒（截图 base64 之后一两兆），等待则是另一段。
+         * 分开报给用户，他才知道卡在哪一段。
+         *
+         * 回调在 IO 线程上执行。
+         */
+        onUploaded: (() -> Unit)? = null,
     ): LlmResult {
         if (cfg.apiKey.isBlank()) {
             return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个。")
@@ -125,7 +135,12 @@ class LlmClient(private val cfg: LlmConfig) {
                 setRequestProperty("Accept", "application/json")
             }
 
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val payload = body.toString().toByteArray(Charsets.UTF_8)
+            conn.setFixedLengthStreamingMode(payload.size)
+            conn.outputStream.use { it.write(payload) }
+
+            // 传完了，接下来是等服务端算 —— 切换阶段
+            onUploaded?.invoke()
 
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
