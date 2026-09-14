@@ -22,6 +22,25 @@
         </activity>
 
         <!--
+          日志导出用的 FileProvider。
+
+          authority 必须和 LogExporter 里拼的一致（<包名>.fileprovider）。
+          exported=false + grantUriPermissions=true 是标准组合：
+          不对外暴露，只把分享出去的那一个 Uri 临时授权读取。
+
+          没有它，分享日志会在 Android 7 以上抛 FileUriExposedException。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
           核心无障碍服务。
 
           permission 必须是 BIND_ACCESSIBILITY_SERVICE，这是系统绑定的凭据。

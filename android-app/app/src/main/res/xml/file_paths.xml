@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 暴露给外部的路径白名单。
+
+  只开两个目录，不多开：
+    exports/         导出的 zip（缓存目录，系统可随时清）
+    纸盒/logs/        原始日志（私有目录）
+
+  分享时通过它把 file:// 换成 content:// —— 直接传 file:// 在
+  Android 7 以上会抛 FileUriExposedException。
+-->
+<paths>
+    <cache-path
+        name="exports"
+        path="exports/" />
+
+    <files-path
+        name="logs"
+        path="纸盒/logs/" />
+</paths>

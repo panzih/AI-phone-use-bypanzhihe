@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 自适应图标的背景色 -->
-    <color name="ic_launcher_background">#1F6FEB</color>
+    <!--
+      自适应图标的背景色：浅牛皮纸色。
+      配深棕色的轮廓线，整体就是"纸盒"的样子。
+      比原来的蓝色更贴名字，在浅色壁纸上也不会糊成一片。
+    -->
+    <color name="ic_launcher_background">#E8D5B7</color>
 </resources>

@@ -3,7 +3,7 @@
     <!-- 圆形自适应图标 -->
     <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
         <background android:drawable="@color/ic_launcher_background" />
-        <foreground android:drawable="@drawable/ic_launcher_foreground" />
-        <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+        <foreground android:drawable="@drawable/ic_box_logo" />
+        <monochrome android:drawable="@drawable/ic_box_logo" />
     </adaptive-icon>
 </resources>

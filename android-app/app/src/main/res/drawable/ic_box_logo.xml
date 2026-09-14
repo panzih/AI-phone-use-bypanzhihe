@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「纸盒」图标 —— 一个开口的立方体。
+
+  这是整个应用唯一的 logo，三处都用它：
+    1. 启动图标（自适应图标的前景，见 mipmap-anydpi-v26/ic_launcher.xml）
+    2. 主界面正中央
+    3. 侧边栏标题旁边
+
+  只画一份几何，是为了避免"改了图标但启动图标没跟着变"这种问题。
+  应用内用的时候走 Compose 的 Icon(tint = ...)，tint 会整体替换颜色，
+  所以这里 strokeColor 写死成深棕不影响复用。
+
+  ## 几何说明
+  等轴测（isometric）立方体，三个可见面共用中心顶点 D(54,62)：
+    顶面 A-B-C-D，左面 A-D-D2-A2，右面 C-D-D2-C2
+  外面一圈是六边形轮廓，里面三条是棱。
+  另外画了一圈内缩的顶面轮廓（内壁），这样看起来是**开口的盒子**，
+  而不是一个实心方块 —— 这是"纸盒"和"骰子"的区别所在。
+
+  画布 108x108 是自适应图标规范：可见安全区是中间 72x72，
+  所以盒子控制在 24..86 之间。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 外轮廓（六边形）+ 三条内棱 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#6B4F2A"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M24,46 L54,30 L84,46 L84,70 L54,86 L24,70 Z
+                          M24,46 L54,62 L84,46
+                          M54,62 L54,86" />
+
+    <!-- 开口：内缩一圈的顶面 + 四条连接壁厚的短线 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#6B4F2A"
+        android:strokeWidth="2.1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M29.4,46 L54,32.9 L78.6,46 L54,59.1 Z
+                          M24,46 L29.4,46
+                          M54,30 L54,32.9
+                          M84,46 L78.6,46
+                          M54,62 L54,59.1" />
+</vector>

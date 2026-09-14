@@ -1,5 +1,6 @@
 package com.aiphone.assistant.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -66,17 +68,25 @@ import kotlinx.coroutines.launch
 /**
  * 主界面。
  *
- * 布局对应设计稿：
+ * 布局对应手稿：
  *   ┌─────────────────────────────┐
- *   │  ☰   AI 手机助手             │  ← TopAppBar
- *   ├───┬─────────────────────────┤
- *   │   │                         │
- *   │侧 │   中间大框               │  ← 这块给底层通道用（ADB 等）
- *   │边 │   （AI 输出 / 屏幕画面） │
- *   │栏 │                         │
- *   ├───┴─────────────────────────┤
- *   │  [  文本输入   ]  [发送]     │  ← 输入区
+ *   │  ☰   操作手机                │  ← TopAppBar
+ *   ├─────────────────────────────┤
+ *   │                             │
+ *   │          ╱╲                 │
+ *   │         ╱  ╲   ← 纸盒 logo   │  ← 正中央
+ *   │        ╲  ╱                 │
+ *   │                             │
+ *   │      AI 操作手机.            │
+ *   │       By 潘纸盒              │
+ *   ├─────────────────────────────┤
+ *   │  [  告诉 AI 下一步做什么 ] ➤ │  ← 输入区
  *   └─────────────────────────────┘
+ *
+ * 中间那块**不放预览画面** —— 走无障碍通道时，被操作的 App 就在用户眼前，
+ * 再在应用里显示一份截图没有意义，反而会和真正的界面打架。
+ *
+ * 只有任务跑起来、有了日志之后，中间才切成日志流，方便回看 AI 干了什么。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,8 +97,6 @@ fun MainScreen(
     onSubmit: () -> Unit,
     onStop: () -> Unit,
     onControlPhone: () -> Unit,
-    onRefreshPreview: () -> Unit,
-    onPreviewAction: () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -119,7 +127,7 @@ fun MainScreen(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
                 TopAppBar(
-                    title = { Text(stringResource(R.string.app_name)) },
+                    title = { Text(stringResource(R.string.main_title)) },
                     navigationIcon = {
                         IconButton(onClick = { toggleDrawer() }) {
                             Icon(Icons.Filled.Menu, stringResource(R.string.drawer_open))
@@ -154,15 +162,9 @@ fun MainScreen(
                     .padding(innerPadding)
                     .imePadding(),
             ) {
-                // 中间这块是留给底层通道的预览区（需求原话）。
-                // 有日志时优先显示日志 —— 那是任务执行中的实时反馈；
-                // 没日志时显示 ADB 预览，这是主界面的默认样子。
+                // 默认是 logo；有日志了才切成日志流
                 if (state.logs.isEmpty()) {
-                    PreviewArea(
-                        state = state,
-                        onRefresh = onRefreshPreview,
-                        onPrimaryAction = onPreviewAction,
-                    )
+                    BrandCenter()
                 } else {
                     TaskOutputArea(state = state, modifier = Modifier.fillMaxSize())
                 }
@@ -172,12 +174,50 @@ fun MainScreen(
 }
 
 /**
+ * 正中央的品牌区：纸盒 logo + 两行字。
+ *
+ * 这既是主界面的默认样子，也是应用图标本身 —— 同一个矢量，
+ * 改了图标这里也跟着变。
+ */
+@Composable
+private fun BrandCenter() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.ic_box_logo),
+            contentDescription = stringResource(R.string.main_logo_desc),
+            modifier = Modifier.size(148.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.main_logo_caption),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = stringResource(R.string.main_logo_by),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/**
  * 左侧抽屉。
  *
- * 按需求三项：
- *   1. 控制手机   ← 主功能
+ * 三项：
+ *   1. 操作手机   ← 主功能
  *   2. 敬请期待   ← 占位，还没想好是什么
- *   3. 设置       ← 模型配置 + 触控方式
+ *   3. 设置       ← 置底
  */
 @Composable
 private fun AppDrawer(
@@ -195,12 +235,22 @@ private fun AppDrawer(
                 .windowInsetsPadding(WindowInsets.navigationBars),
         ) {
             Spacer(Modifier.height(20.dp))
-            Text(
-                text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp),
-            )
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_box_logo),
+                    contentDescription = null,
+                    modifier = Modifier.size(34.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
             Spacer(Modifier.height(12.dp))
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Spacer(Modifier.height(8.dp))
@@ -259,10 +309,9 @@ private fun DrawerItem(
 }
 
 /**
- * 中间的大框。
+ * 任务执行中的日志流。
  *
- * 显示 AI 的思考 / 动作 / 结果。
- * 没有日志时中间显示的是 ADB 预览区（见 PreviewArea），不是这里。
+ * 显示 AI 的思考 / 动作 / 结果，也是"任务结束后回看刚才发生了什么"的地方。
  */
 @Composable
 private fun TaskOutputArea(

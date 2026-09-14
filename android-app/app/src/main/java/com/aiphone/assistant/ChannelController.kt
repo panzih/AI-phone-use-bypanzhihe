@@ -1,14 +1,8 @@
 package com.aiphone.assistant
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import com.aiphone.assistant.channel.AccessibilityChannel
 import com.aiphone.assistant.a11y.AutoService
-import com.aiphone.assistant.a11y.UiTreeParser
-import com.aiphone.assistant.ui.ChannelStatus
-import com.aiphone.assistant.ui.PreviewState
-import kotlinx.coroutines.CoroutineScope
+import com.aiphone.assistant.channel.AccessibilityChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -19,127 +13,59 @@ import kotlinx.coroutines.withContext
  * 保留这层是因为：
  *   1. 界面不该直接依赖 AutoService 这种系统组件
  *   2. 将来要加别的通道（比如 ADB 兜底）时，界面代码不用动
+ *
+ * ## 为什么不返回"状态对象"了
+ *
+ * 原来这里返回一个 PreviewState（连接中 / 就绪 / 不可用），
+ * 那是为了驱动主界面中间那块预览区。现在预览区去掉了 ——
+ * 走无障碍时被操作的 App 就在用户眼前，应用里再显示一份截图没有意义。
+ *
+ * 所以这一层回归到最朴素的形态：**要什么给什么，失败返回原因字符串**。
+ * 状态判断（授权没授权）由界面直接问 AutoService.isConnected。
  */
 class ChannelController(private val context: Context) {
 
     private var channel: AccessibilityChannel? = null
 
-    val accessibilityChannel: AccessibilityChannel?
-        get() = channel
+    /** 拿到通道实例（懒建），给需要执行动作的上层用 */
+    fun ensureChannel(): AccessibilityChannel =
+        channel ?: AccessibilityChannel(context).also { channel = it }
 
     /**
-     * 连接并返回状态。
+     * 探测能不能用。
      *
-     * 不抛异常 —— 所有失败都变成 PreviewState.message，
-     * 因为界面要显示的是"为什么不能用"，不是一个崩溃。
+     * @return null 表示可用；否则是给用户看的中文原因
      */
-    suspend fun connect(): PreviewState = withContext(Dispatchers.IO) {
-        val ch = channel ?: AccessibilityChannel(context).also { channel = it }
+    suspend fun probe(): String? = withContext(Dispatchers.IO) { ensureChannel().probe() }
 
-        val problem = ch.probe()
-        if (problem != null) {
-            return@withContext PreviewState(
-                status = ChannelStatus.UNAVAILABLE,
-                message = problem,
-            )
-        }
-
-        val size = ch.screenSize()
-        PreviewState(
-            status = ChannelStatus.READY,
-            screenWidth = size?.first ?: 0,
-            screenHeight = size?.second ?: 0,
-        )
-    }
+    /** 屏幕分辨率，坐标换算要用 */
+    suspend fun screenSize(): Pair<Int, Int>? =
+        withContext(Dispatchers.IO) { ensureChannel().screenSize() }
 
     /**
-     * 抓一帧画面。
-     *
-     * 重要：**重活放在 IO 线程，状态更新回到调用方线程**。
-     *
-     * 原来的写法是在 withContext(Dispatchers.IO) 内部直接调 onUpdate，
-     * 那是从后台线程写 Compose 状态 —— 更新可能不生效，界面就一直卡在旧状态。
-     * 这个坑很隐蔽：日志显示一切正常，但界面不刷新。
-     *
-     * 这个架构下截图不是为了算坐标，而是给模型理解界面语义。
-     * 精确坐标走 UI 控件树，所以截图失败不算致命。
-     */
-    suspend fun captureFrame(onUpdate: (PreviewState) -> Unit) {
-        val ch = channel ?: return
-
-        // 重活：截图 + 解码 + 像素分析，全在 IO 线程
-        val next = withContext(Dispatchers.IO) {
-            val bytes = ch.screenshot()
-            if (bytes == null || bytes.isEmpty()) {
-                return@withContext PreviewState(
-                    status = ChannelStatus.UNAVAILABLE,
-                    message = "截图失败。可能是页面有安全保护（银行/支付类），" +
-                        "或者截图太频繁被系统限流。",
-                )
-            }
-
-            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            if (bmp == null) {
-                return@withContext PreviewState(
-                    status = ChannelStatus.UNAVAILABLE,
-                    message = "画面解码失败。",
-                )
-            }
-
-            val size = ch.screenSize()
-            PreviewState(
-                status = ChannelStatus.READY,
-                frame = bmp,
-                screenWidth = size?.first ?: bmp.width,
-                screenHeight = size?.second ?: bmp.height,
-                isProbablySecure = isAllBlack(bmp),
-            )
-        }
-
-        // 状态更新回到调用方的线程（主线程）
-        onUpdate(next)
-    }
-
-    /**
-     * 读一次控件树并渲染成给模型的文本。
+     * 读一次控件树，返回压缩后的文本列表。
      *
      * 这是本架构的定位主力 —— 模型从这个列表里选编号，
      * 而不是从截图里猜像素。
      */
-    suspend fun readUiTree(): String? = withContext(Dispatchers.IO) {
-        channel?.dumpUiTree()
-    }
-
-    /** 当前能否操作（服务是否连着） */
-    val isReady: Boolean get() = AutoService.isConnected
+    suspend fun readUiTree(): String? =
+        withContext(Dispatchers.IO) { ensureChannel().dumpUiTree() }
 
     /**
-     * 粗判全黑。
+     * 截一帧，返回 PNG 字节。
      *
-     * 只为给用户一个提示，不参与决策。抽样几百个点，
-     * 逐像素扫一张 1080x2400 太慢。
+     * 用途变了：不是给用户看预览，而是
+     *   1. 存进本次运行的日志目录（排查用）
+     *   2. 将来发给多模态模型理解界面语义
      */
-    private fun isAllBlack(bmp: Bitmap): Boolean {
-        val stepX = (bmp.width / 20).coerceAtLeast(1)
-        val stepY = (bmp.height / 20).coerceAtLeast(1)
-        var dark = 0
-        var total = 0
-        var y = 0
-        while (y < bmp.height) {
-            var x = 0
-            while (x < bmp.width) {
-                val c = bmp.getPixel(x, y)
-                val lum = ((c shr 16 and 0xFF) + (c shr 8 and 0xFF) + (c and 0xFF)) / 3
-                if (lum < 8) dark++
-                total++
-                x += stepX
-            }
-            y += stepY
-        }
-        return total > 0 && dark.toFloat() / total > 0.98f
-    }
+    suspend fun captureFrame(): ByteArray? =
+        withContext(Dispatchers.IO) { ensureChannel().screenshot() }
+
+    /** 当前能否操作（服务是否真的连着，不是"设置里开着"） */
+    val isReady: Boolean get() = AutoService.isConnected
 
     fun release() {
         channel?.release()
+        channel = null
     }
 }
