@@ -77,8 +77,17 @@ data class AppSettings(
      */
     val maxSteps: Int = 30,
 
-    /** 多久没发消息就清空上下文。0 = 不清空 */
-    val autoClearMinutes: Int = 60,
+    /**
+     * 多久没发消息就清空上下文。0 = 不清空（**默认**）。
+     *
+     * 默认改成不清空，因为服务端的上下文缓存**按前缀匹配**：
+     * 上下文留着不用重算，命中缓存的那部分便宜很多；
+     * 一清掉，下次请求就是全新前缀，全部按未命中计价。
+     *
+     * 所以"清空"现在只是给用户的一个手动开关，
+     * 不该是默认行为。
+     */
+    val autoClearMinutes: Int = 0,
 
     /** 开启记忆：让 AI 有机会把上下文沉淀成洞察 */
     val memoryEnabled: Boolean = false,

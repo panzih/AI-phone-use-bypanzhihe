@@ -49,6 +49,16 @@ sealed class LlmResult {
         val text: String,
         val promptTokens: Int = 0,
         val completionTokens: Int = 0,
+        /**
+         * 上下文缓存命中/未命中的 token 数。
+         *
+         * 服务端会按**最长的公共前缀**复用上一次的计算结果，
+         * 命中的那部分便宜很多。字段名沿用服务端的
+         * prompt_cache_hit_tokens / prompt_cache_miss_tokens；
+         * 不支持这个特性的服务不会返回，保持 0 即可。
+         */
+        val cacheHitTokens: Int = 0,
+        val cacheMissTokens: Int = 0,
     ) : LlmResult()
 
     /** message 是可以直接显示给用户的中文原因 */
@@ -77,20 +87,32 @@ class LlmClient(private val cfg: LlmConfig) {
      *
      * 阻塞式，调用方必须放到 IO 线程（Agent 里用 withContext 包了）。
      *
-     * @param imagePng 本轮截图。**只有这一张**，历史轮次的图不带 ——
-     *                 这是刻意的成本控制，见 Agent 里的说明。
+     * ## history 就是实际发出去的内容
+     *
+     * 这一点是刻意设计的：调用方把本轮 user 消息**追加进 history** 之后
+     * 直接传进来，图片挂在**最后一条 user 消息**上。也就是说
+     * `history` 和真正发出去的 messages 是同一份东西，不存在"发一套、
+     * 记另一套"的可能。
+     *
+     * 为什么重要：服务端的上下文缓存是**按前缀匹配**的。只要有一轮
+     * 记录和实际发送的内容不一致，前缀就从那里断开，**之后所有轮次
+     * 全部缓存未命中**。之前的实现正是在这里出的问题 ——
+     * 发出去的消息带着控件树，历史里记的却是一句"已执行"。
+     *
+     * @param imagePng 本轮截图，挂在最后一条 user 消息上。
+     *                 **只有这一张**，历史轮次的图不带 ——
+     *                 否则每次请求都要重传几十张图，上传体积和 token 都爆炸。
      */
     fun chat(
         system: String,
         history: List<ChatTurn>,
-        userText: String,
         imagePng: ByteArray?,
     ): LlmResult {
         if (cfg.apiKey.isBlank()) {
             return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个。")
         }
 
-        val body = buildBody(system, history, userText, imagePng)
+        val body = buildBody(system, history, imagePng)
 
         return try {
             val conn = (URL(endpoint()).openConnection() as HttpURLConnection).apply {
@@ -145,7 +167,6 @@ class LlmClient(private val cfg: LlmConfig) {
     private fun buildBody(
         system: String,
         history: List<ChatTurn>,
-        userText: String,
         imagePng: ByteArray?,
     ): JSONObject {
         val messages = JSONArray()
@@ -157,45 +178,40 @@ class LlmClient(private val cfg: LlmConfig) {
             }
         )
 
-        history.forEach { turn ->
+        val lastUserIndex = history.indexOfLast { it.role == ChatTurn.USER }
+
+        history.forEachIndexed { i, turn ->
             messages.put(
                 JSONObject().apply {
                     put("role", turn.role)
-                    // 历史一律是纯文本 —— 图片只有当前这一轮有
-                    put("content", turn.text)
+                    // 只有最后一条 user 消息挂图片，其余一律纯文本
+                    if (i == lastUserIndex && imagePng != null && imagePng.isNotEmpty()) {
+                        val parts = JSONArray()
+                        parts.put(
+                            JSONObject().apply {
+                                put("type", "text")
+                                put("text", turn.text)
+                            }
+                        )
+                        parts.put(
+                            JSONObject().apply {
+                                put("type", "image_url")
+                                put(
+                                    "image_url",
+                                    JSONObject().apply {
+                                        put("url", "data:image/png;base64,${b64(imagePng)}")
+                                        put("detail", cfg.detail)
+                                    },
+                                )
+                            }
+                        )
+                        put("content", parts)
+                    } else {
+                        put("content", turn.text)
+                    }
                 }
             )
         }
-
-        // 当前轮：文本 + 图片
-        val userMessage = JSONObject().apply {
-            put("role", "user")
-            if (imagePng == null || imagePng.isEmpty()) {
-                put("content", userText)
-            } else {
-                val parts = JSONArray()
-                parts.put(
-                    JSONObject().apply {
-                        put("type", "text")
-                        put("text", userText)
-                    }
-                )
-                parts.put(
-                    JSONObject().apply {
-                        put("type", "image_url")
-                        put(
-                            "image_url",
-                            JSONObject().apply {
-                                put("url", "data:image/png;base64,${b64(imagePng)}")
-                                put("detail", cfg.detail)
-                            },
-                        )
-                    }
-                )
-                put("content", parts)
-            }
-        }
-        messages.put(userMessage)
 
         return JSONObject().apply {
             put("model", cfg.model)
@@ -236,6 +252,8 @@ class LlmClient(private val cfg: LlmConfig) {
                 text = content,
                 promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
                 completionTokens = usage?.optInt("completion_tokens", 0) ?: 0,
+                cacheHitTokens = usage?.optInt("prompt_cache_hit_tokens", 0) ?: 0,
+                cacheMissTokens = usage?.optInt("prompt_cache_miss_tokens", 0) ?: 0,
             )
         } catch (t: Throwable) {
             LlmResult.Fail("响应不是合法 JSON：${t.message}\n原始内容：${raw.take(300)}")

@@ -79,6 +79,17 @@ class Agent(
     private var promptTokens = 0
     private var completionTokens = 0
 
+    /**
+     * 上下文缓存的命中情况。
+     *
+     * 这个数字值得盯着：本轮对话是**严格追加**的，所以从第 2 步开始，
+     * 系统提示词和前面所有轮次都应该命中缓存。
+     * 如果稳定是 0，说明前缀被打断了 —— 先查是不是有人往 history 里
+     * 塞了和实际发送内容不一致的东西。
+     */
+    private var cacheHitTokens = 0
+    private var cacheMissTokens = 0
+
     suspend fun run(task: String) {
         // ---- 1. 通道就绪？ ----
         val problem = controller.probe()
@@ -110,6 +121,10 @@ class Agent(
         var sameFrame = 0
         var lastActionSig = ""
         var repeatAction = 0
+
+        // 上一步的执行结果。它会拼进**下一条** user 消息里，
+        // 而不是单独发一条 —— 见下面 history.add 处的说明。
+        var lastResult: String? = null
 
         for (step in 1..maxSteps) {
             if (isStopped()) {
@@ -171,13 +186,29 @@ class Agent(
                 task = task,
                 uiTree = tree,
                 interruption = interruptions.ifBlank { null },
+                lastResult = lastResult,
             )
+
+            // ⚠️ 必须把**实际发出去的这条文本**原样追加进 history。
+            //
+            // 之前的写法是：发出去的 user 消息（含控件树）从不入历史，
+            // 只在事后补一条 "第 N 步执行结果：已执行"。
+            // 后果是对话从系统提示词之后就开始分叉 ——
+            // 下一次请求的第一条 user 消息和上一次的完全不同，
+            // **前缀匹配直接断掉，缓存命中率是 0**。
+            //
+            // 改成原样追加之后，整条对话变成严格递增：
+            //     [system][user1][assistant1][user2][assistant2]...
+            // 前缀永不变动，缓存才能一直命中。
+            history.add(ChatTurn(ChatTurn.USER, userText))
 
             // ---- 问模型 ----
             listener.onEvent(EventKind.THOUGHT, "正在请求模型 ...", "第 $step 步")
             val callStart = System.currentTimeMillis()
+            // 注意：userText 在这之前已经追加进 history 了，
+            // 这里只多传一张图 —— history 就是实际发出去的内容。
             val result = withContext(Dispatchers.IO) {
-                llm.chat(system, history, userText, shot)
+                llm.chat(system, history, shot)
             }
             val elapsed = System.currentTimeMillis() - callStart
 
@@ -191,9 +222,31 @@ class Agent(
                 is LlmResult.Ok -> {
                     promptTokens += result.promptTokens
                     completionTokens += result.completionTokens
+                    cacheHitTokens += result.cacheHitTokens
+                    cacheMissTokens += result.cacheMissTokens
+
+                    // ---- 上下文长度兜底 ----
+                    // 上下文不裁剪了，所以得防着撑爆模型窗口。
+                    // 用服务端返回的真实 prompt_tokens，比本地估算准。
+                    if (result.promptTokens >= CONTEXT_STOP_TOKENS) {
+                        val msg = "上下文已经 ${result.promptTokens} token，接近模型上限，" +
+                            "为避免请求被拒先停下。开个新任务继续吧。"
+                        logger?.error(msg, "上下文")
+                        listener.onEvent(EventKind.ERROR, msg, "上下文过长")
+                        finish(false, msg)
+                        return
+                    }
+                    if (result.promptTokens >= CONTEXT_WARN_TOKENS) {
+                        logger?.warn(
+                            "上下文已到 ${result.promptTokens} token，快满了",
+                            "上下文",
+                        )
+                    }
                     logger?.line(
                         "模型返回 ${elapsed}ms，token：输入 ${result.promptTokens} / " +
-                            "输出 ${result.completionTokens}",
+                            "输出 ${result.completionTokens}" +
+                            "（缓存命中 ${result.cacheHitTokens} / " +
+                            "未命中 ${result.cacheMissTokens}）",
                         "模型",
                     )
                     logger?.section("模型原始输出")
@@ -220,16 +273,12 @@ class Agent(
                         val warning = parsed.warning ?: "没能解析出动作。"
                         logger?.warn("解析失败：$warning", "解析")
                         listener.onEvent(EventKind.ERROR, warning, "解析失败")
-                        // 把失败原因回灌给模型，让它重出 —— 比直接终止有用得多
+                        // 失败原因回灌给模型，让它重出 —— 但**不单独发一条消息**，
+                        // 而是记进 lastResult，拼到下一条 user 消息里。
+                        // 单独发消息会让对话结构每轮都不一样，把缓存前缀打断。
                         history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
-                        history.add(
-                            ChatTurn(
-                                ChatTurn.USER,
-                                "你上一个输出有问题：$warning\n" +
-                                    "请重新输出一个**只包含 JSON 对象**的动作，不要任何其他文字。",
-                            )
-                        )
-                        trimHistory(history)
+                        lastResult = "上一个输出有问题：$warning" +
+                            "请重新输出一个只包含 JSON 对象的动作，不要任何其他文字。"
                         continue
                     }
 
@@ -295,13 +344,7 @@ class Agent(
 
                     // ---- 回灌给模型 ----
                     history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
-                    history.add(
-                        ChatTurn(
-                            ChatTurn.USER,
-                            "第 $step 步执行结果：$resultText",
-                        )
-                    )
-                    trimHistory(history)
+                    lastResult = resultText
 
                     // 动作后等页面反应。滚动/点击后通常要一点时间，
                     // 太快截下一张会拍到过渡动画。
@@ -340,8 +383,18 @@ class Agent(
 
     private fun finish(success: Boolean, message: String) {
         val total = promptTokens + completionTokens
+        val cacheTotal = cacheHitTokens + cacheMissTokens
+        val hitRate = if (cacheTotal > 0) {
+            "%.0f%%".format(cacheHitTokens * 100.0 / cacheTotal)
+        } else {
+            "无数据"
+        }
         logger?.line(
             "本次共用 token：输入 $promptTokens / 输出 $completionTokens / 合计 $total",
+            "统计",
+        )
+        logger?.line(
+            "上下文缓存：命中 $cacheHitTokens / 未命中 $cacheMissTokens（命中率 $hitRate）",
             "统计",
         )
         logger?.line("结束：$message", "任务")
@@ -357,18 +410,6 @@ class Agent(
     private fun actionSignature(kind: TouchKind, index: Int, x: Int, y: Int): String =
         "$kind|$index|$x|$y"
 
-    /**
-     * 历史裁剪。
-     *
-     * 保留最近若干轮。上下文无限涨的话，token 成本是平方级增长的，
-     * 而且模型对很早的内容本来也不敏感。
-     */
-    private fun trimHistory(history: MutableList<ChatTurn>, keepRounds: Int = 12) {
-        val max = keepRounds * 2
-        while (history.size > max) {
-            history.removeAt(0)
-        }
-    }
 
     /**
      * 动作后等多久。
@@ -401,5 +442,17 @@ class Agent(
          * 100ms 对 60Hz 来说是 6 帧，足够。
          */
         const val OVERLAY_SETTLE_MS = 100L
+
+        /**
+         * 上下文预算。
+         *
+         * 上下文**不做裁剪**（缓存按前缀匹配，一裁前缀就断，反而更贵），
+         * 所以这里给个上限兜底，避免请求被服务端直接拒掉。
+         *
+         * 这两个数是保守值，按所用模型的窗口大小调整：
+         * 窗口比它大就调大，比它小就调小。
+         */
+        const val CONTEXT_WARN_TOKENS = 100_000
+        const val CONTEXT_STOP_TOKENS = 120_000
     }
 }

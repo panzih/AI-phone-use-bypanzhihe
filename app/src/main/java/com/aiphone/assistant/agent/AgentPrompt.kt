@@ -119,9 +119,15 @@ action 留空。
         task: String,
         uiTree: String?,
         interruption: String? = null,
+        lastResult: String? = null,
     ): String = buildString {
         appendLine("当前是第 $step / $maxSteps 步。")
         appendLine("用户的任务：$task")
+        // 上一步的执行结果放在这里，而不是单独发一条消息 ——
+        // 这样整条对话就是"严格的追加"，前缀永远不变，缓存才命中得了。
+        if (!lastResult.isNullOrBlank()) {
+            appendLine("上一步的执行结果：$lastResult")
+        }
         if (!interruption.isNullOrBlank()) {
             appendLine()
             appendLine("⚠️ $interruption")
@@ -137,21 +143,6 @@ action 留空。
         appendLine()
         append("请输出下一个动作的 JSON。")
     }
-
-    /**
-     * 动作的历史摘要。
-     *
-     * 历史只给文本，**不带图**。这是刻意的成本控制：
-     * 每轮都带一张手机截图的话，30 步下来 token 量会翻好几倍
-     * （参考 Roubao 的教训：三角色 + 每步双图，一章游戏关卡花了 $7）。
-     */
-    fun historyLine(step: Int, thought: String?, actionSummary: String, result: String?): String =
-        buildString {
-            append("第 $step 步：")
-            if (!thought.isNullOrBlank()) append("想法「${thought.take(60)}」")
-            append(" 动作：$actionSummary")
-            if (!result.isNullOrBlank()) append(" → $result")
-        }
 
     /** 把动作翻译成一句人话，给历史和日志用 */
     fun describeAction(kind: TouchKind, index: Int, x: Int, y: Int, x2: Int, y2: Int,

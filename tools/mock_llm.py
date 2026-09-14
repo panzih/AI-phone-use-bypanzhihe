@@ -59,7 +59,7 @@ SCRIPTED = [
     '{"thought": "做完了", "action": "", "finished": true, "summary": "全部步骤执行完毕，链路验证通过"}',
 ]
 
-state = {"n": 0}
+state = {"n": 0, "last_messages": None, "last_texts": None}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -90,7 +90,37 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(c, list):
                 img_count += sum(1 for p in c if isinstance(p, dict) and p.get("type") == "image_url")
 
+        # ---- 前缀校验 ----
+        #
+        # 上下文缓存是按**最长公共前缀**复用的。所以这里把这次请求的
+        # 消息序列和上次比，看前缀有没有被保住。
+        # 如果历史被裁剪、或者"发一套记一套"，这里的匹配长度会骤降到 1
+        # （只剩 system），并直接暴露出来。
+        texts = []
+        for m in messages:
+            c = m.get("content")
+            if isinstance(c, str):
+                texts.append(m.get("role") + ":" + c[:40])
+            else:
+                parts = [p.get("text", "[图]") for p in c if isinstance(p, dict)]
+                texts.append(m.get("role") + ":" + "".join(parts)[:40])
+
+        prefix = 0
+        if state["last_texts"] is not None:
+            for a, b in zip(state["last_texts"], texts):
+                if a == b:
+                    prefix += 1
+                else:
+                    break
+        # 上一次的整条序列如果原样成为这次的前缀，就是 100% 命中
+        prev_len = len(state["last_texts"]) if state["last_texts"] else 0
+        state["last_texts"] = texts
+
         print(f"\n=== 第 {n + 1} 次请求 ===")
+        print(f"  消息数    : {len(messages)}  上次 {prev_len} 条")
+        print(f"  前缀复用  : {prefix} / {prev_len} 条" +
+              ("   ✅ 前缀完整保留" if prev_len and prefix == prev_len else
+               "   ⚠️ 前缀被打断" if prev_len else ""))
         print(f"  模型      : {model}")
         print(f"  消息数    : {len(messages)}")
         print(f"  带图的消息: {img_count}  (当前轮有图 = {has_image})")
@@ -122,10 +152,15 @@ class Handler(BaseHTTPRequestHandler):
                     "finish_reason": "stop",
                 }
             ],
+            # 粗略模拟：每条消息算 400 token。
+            # 前缀保住的那部分算缓存命中，剩下的算未命中 ——
+            # 数字本身是编的，重点是让"命中率"这个上报能被验证。
             "usage": {
-                "prompt_tokens": 1200,
+                "prompt_tokens": 400 * len(messages),
                 "completion_tokens": 40,
-                "total_tokens": 1240,
+                "total_tokens": 400 * len(messages) + 40,
+                "prompt_cache_hit_tokens": 400 * prefix,
+                "prompt_cache_miss_tokens": 400 * (len(messages) - prefix),
             },
         }
         data = json.dumps(payload).encode("utf-8")
