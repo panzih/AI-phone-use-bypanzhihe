@@ -38,6 +38,8 @@ import com.aiphone.assistant.memory.RawDistiller
 import com.aiphone.assistant.memory.Turn
 import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.overlay.OverlayService
+import com.aiphone.assistant.skill.SkillContext
+import com.aiphone.assistant.skill.SkillRegistry
 import com.aiphone.assistant.ui.LogEntry
 import com.aiphone.assistant.ui.LogKind
 import com.aiphone.assistant.ui.MainScreen
@@ -257,6 +259,11 @@ private fun AppRoot(
             settings = settings,
             maxSteps = settings.maxSteps,
             selfPackage = context.packageName,
+            // 技能注册表：模型用 use_skill 主动要"屏幕上没有的信息"。
+            // 传 applicationContext —— 它会活到任务结束，不能攥着 Activity
+            skills = SkillRegistry(
+                SkillContext(context.applicationContext, controller),
+            ),
             logger = logger,
             listener = object : Agent.Listener {
                 override fun onEvent(kind: Agent.EventKind, text: String, label: String?) {

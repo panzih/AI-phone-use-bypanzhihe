@@ -44,9 +44,13 @@ object AgentPrompt {
     /**
      * 系统提示词。
      *
-     * **无参数、纯静态**，就是为了让前缀缓存稳定命中。
+     * **去掉技能目录之后是纯静态的**，就是为了让前缀缓存稳定命中。
+     * 技能目录本身在同一个任务里也不会变（它是代码里写死的注册表），
+     * 所以对缓存没有影响。
+     *
+     * @param skillCatalog 技能目录，一行一个。空串表示没有技能，整段省略
      */
-    fun system(): String = """
+    fun system(skillCatalog: String = ""): String = """
 你是一个安卓手机操作助手。
 
 每一轮你会拿到：当前屏幕的「界面元素」编号列表（来自系统的控件树），以及屏幕分辨率和前台应用名。
@@ -110,6 +114,8 @@ actions 是一个**按顺序执行**的数组。
   "thought": "一句话：你现在看到了什么、为什么这么做",
   "next_hint": "这一批做完之后，接下来要做什么（一句话，给用户看的）",
   "need_image": false,
+  "use_skill": "",
+  "skill_args": {},
   "actions": [
     {"action": "tap", "index": 3},
     {"action": "sleep", "duration_ms": 1500},
@@ -146,7 +152,31 @@ actions 是一个**按顺序执行**的数组。
 2. 完成用户的任务就立刻停下来并设 finished=true，不要顺手多做别的事。
 3. 如果连续几步都推不动，直接在 summary 里说明卡在哪里、需要用户做什么，
    然后设 finished=true。
-""".trimIndent()
+4. **不要凭记忆编包名。** 要用 open_app 打开应用之前，先调 list_apps 技能
+   拿到真实包名 —— 编错了系统只会说"没找到这个包"，你看不出是名字记错了。
+""".trimIndent() + skillSection(skillCatalog)
+
+    /**
+     * 技能那一节。没有技能时整段不出现，省 token。
+     *
+     * 只放目录（一行一个），完整说明让模型自己用
+     * `use_skill: "list_skills"` 拉 —— 和截图一样，便宜的常驻、贵的按需。
+     */
+    private fun skillSection(catalog: String): String {
+        if (catalog.isBlank()) return ""
+        return """
+
+# 技能（skills）
+有些信息不在屏幕上 —— 比如手机里装了哪些应用。这类信息用"技能"去取：
+
+$catalog
+
+调用方式：在 JSON 里写 "use_skill": "<技能id>"（需要参数的再加 "skill_args"）。
+系统会把技能返回的内容发回给你，**这一轮不算一步**，你拿到结果后再给动作。
+想知道某个技能的完整说明（参数、返回格式、什么时候该用），
+先写 "use_skill": "list_skills"。
+""".trimIndent().let { "\n\n$it" }
+    }
 
     /**
      * 每一轮发给模型的当前状态。
@@ -161,6 +191,7 @@ actions 是一个**按顺序执行**的数组。
      * 而这份列表是这一步最关键的输入。
      *
      * @param imageNote 非空表示**这一条消息附了截图**，内容是附图的说明。
+     * @param skillNote 非空表示**这一条消息带了技能返回**，内容是技能的输出。
      */
     fun stepMessage(
         step: Int,
@@ -173,6 +204,7 @@ actions 是一个**按顺序执行**的数组。
         interruption: String? = null,
         lastResult: String? = null,
         imageNote: String? = null,
+        skillNote: String? = null,
     ): String = buildString {
         appendLine("当前是第 $step / $maxSteps 步。")
         appendLine("用户的任务：$task")
@@ -192,6 +224,11 @@ actions 是一个**按顺序执行**的数组。
             appendLine("当前前台应用：$foregroundPackage")
         }
         appendLine()
+        if (skillNote != null) {
+            appendLine("# 技能返回")
+            appendLine(skillNote)
+            appendLine()
+        }
         if (imageNote != null) {
             appendLine("# 截图")
             appendLine(imageNote)
@@ -204,10 +241,14 @@ actions 是一个**按顺序执行**的数组。
         )
         appendLine()
         append(
-            if (imageNote != null) {
-                "截图已附在本条消息里。请结合界面元素重新判断，输出本轮的 JSON。"
-            } else {
-                "请输出本轮的 JSON。"
+            when {
+                imageNote != null && skillNote != null ->
+                    "截图和技能返回都附在本条消息里。请重新判断，输出本轮的 JSON。"
+                imageNote != null ->
+                    "截图已附在本条消息里。请结合界面元素重新判断，输出本轮的 JSON。"
+                skillNote != null ->
+                    "技能返回已附在上面。请据此继续，输出本轮的 JSON。"
+                else -> "请输出本轮的 JSON。"
             }
         )
     }

@@ -35,8 +35,9 @@ import org.json.JSONObject
  * 内层每一条单独校验 —— **坏的那条丢掉，好的照常执行**，
  * 而不是因为一条写错就整轮作废。丢掉的会在 warning 里说明并回灌给模型。
  *
- * **2. `need_image`。** 模型可以只要一张截图而不给动作。
- * 这不算"没解析出动作"，Agent 会截图后重新问它一次。
+ * **2. `need_image` / `use_skill`。** 模型可以只要一张截图、或者只要调用一个技能，
+ * 而不给动作。这不算"没解析出动作" —— Agent 会把结果取回来重新问它一次，
+ * 而且这一轮不算一步。
  */
 object ActionParser {
 
@@ -73,6 +74,15 @@ object ActionParser {
         val nextHint: String = "",
         /** 非致命的问题说明（某些动作被丢掉了之类），会回灌给模型 */
         val warning: String? = null,
+        /**
+         * 模型要求调用的技能 id。
+         *
+         * 和 `needImage` 一样属于"先给我信息，我再决定怎么做"：
+         * 有它的时候 [actions] 会被忽略 —— 等技能结果回来再说。
+         */
+        val skillId: String? = null,
+        /** 技能的参数，可能没有 */
+        val skillArgs: JSONObject? = null,
     )
 
     /** 动作名白名单。不在这张表里的一律拒绝，绝不去执行。 */
@@ -149,6 +159,13 @@ object ActionParser {
             obj.optBoolean("need_screenshot", false) ||
             obj.optBoolean("needShot", false)
 
+        // 要调用技能：字段名模型可能写成好几种，都认
+        val skillId = sequenceOf("use_skill", "skill", "call_skill", "useSkill")
+            .map { obj.optString(it, "").trim() }
+            .firstOrNull { it.isNotBlank() }
+        // 参数：skill_args 优先，写成 args 也认
+        val skillArgs = obj.optJSONObject("skill_args") ?: obj.optJSONObject("args")
+
         // ---- 收集原始动作条目 ----
         val items = ArrayList<JSONObject>()
         val arr: JSONArray? = obj.optJSONArray("actions")
@@ -203,10 +220,10 @@ object ActionParser {
             )
         }
 
-        // 既没动作也不要图 —— 这一轮等于空转，把原因回灌给模型
-        if (actions.isEmpty() && !needImage) {
+        // 既没动作、也不要图、也不调技能 —— 这一轮等于空转，把原因回灌给模型
+        if (actions.isEmpty() && !needImage && skillId == null) {
             val reason = notes.firstOrNull()
-                ?: "输出里既没有可用的 actions，也没有把 need_image 设为 true。"
+                ?: "输出里既没有可用的 actions，也没有 need_image，也没有 use_skill。"
             return Parsed(
                 thought, emptyList(), false, false, summary, raw, nextHint, warning = reason,
             )
@@ -221,6 +238,8 @@ object ActionParser {
             raw = raw,
             nextHint = nextHint,
             warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
+            skillId = skillId,
+            skillArgs = skillArgs,
         )
     }
 

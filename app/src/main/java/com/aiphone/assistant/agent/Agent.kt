@@ -8,6 +8,7 @@ import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.RunLogger
 import com.aiphone.assistant.overlay.AgentPhase
 import com.aiphone.assistant.overlay.OverlayBus
+import com.aiphone.assistant.skill.SkillRegistry
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,12 @@ import java.security.MessageDigest
  * 模型一次给出若干个动作，中间自动补默认间隔（[AgentPrompt.DEFAULT_GAP_MS]）；
  * 模型显式写了 sleep 就完全不补，用它的值。往返次数因此大幅下降。
  *
- * **3. 防死循环改用控件树指纹。**
+ * **3. 模型可以主动调技能。**
+ * 控件树只能看到屏幕上有什么，看不到"手机里装了什么应用"这类信息。
+ * 模型用 `use_skill` 要，系统取回来塞进上下文，这一轮不算一步 ——
+ * 和 `need_image` 是同一种机制。第一个技能是 list_apps（应用列表 + 包名）。
+ *
+ * **4. 防死循环改用控件树指纹。**
  * 原来比的是截图 MD5，现在默认没有截图可比了 —— 控件树文本没变
  * 同样说明"上一个动作没生效"，而且比截图更准（没有动画、时钟干扰）。
  *
@@ -53,6 +59,8 @@ class Agent(
     private val maxSteps: Int,
     /** 本应用的包名，用来识别"自己在前台" */
     private val selfPackage: String,
+    /** 技能注册表 —— 模型用 use_skill 主动要"屏幕上没有的信息" */
+    private val skills: SkillRegistry,
     private val logger: RunLogger?,
     private val listener: Listener,
 ) {
@@ -112,12 +120,13 @@ class Agent(
         logger?.line(llm.describe(), "模型")
         logger?.line("默认不发截图，模型用 need_image 主动要", "模型")
         logger?.line(if (OverlayBus.isShowing) "悬浮窗已就绪" else "悬浮窗未启动（缺权限或未开）", "悬浮")
+        logger?.line("技能：${skills.ids().size} 个（${skills.ids().joinToString("、")}）", "技能")
 
         // ---- 2. 别拍到自己 ----
         ensureNotSelfForeground()
 
         // ---- 3. 开跑 ----
-        val system = AgentPrompt.system()
+        val system = AgentPrompt.system(skills.catalog())
         val history = mutableListOf<ChatTurn>()
 
         var lastTreeHash = 0
@@ -172,12 +181,14 @@ class Agent(
                 }
             }.joinToString("\n")
 
-            // ---- 问模型（可能要图，可能来回几次）----
+            // ---- 问模型（可能要图、可能要调技能，可能来回几次）----
             var parsed: ActionParser.Parsed? = null
             var modelOutput = ""
             var imageRequests = 0
+            var skillCalls = 0
             var pendingImage: ByteArray? = null
             var imageNote: String? = null
+            var skillNote: String? = null
 
             ask@ while (true) {
                 if (isStopped()) {
@@ -196,6 +207,7 @@ class Agent(
                     interruption = interruptions.ifBlank { null },
                     lastResult = lastResult,
                     imageNote = imageNote,
+                    skillNote = skillNote,
                 )
 
                 // ⚠️ 必须把**实际发出去的这条文本**原样追加进 history。
@@ -294,6 +306,44 @@ class Agent(
                             logger?.warn(
                                 "模型又要截图，但这一轮已经给过 $MAX_IMAGE_REQUESTS 次了，先按它给的动作走",
                                 "截图",
+                            )
+                        }
+
+                        // ---- 模型要调用技能 ----
+                        // 和要截图一样：先给它信息，这一轮不算一步。
+                        // 技能取的是"屏幕上没有的信息"（装了什么应用之类），
+                        // 所以必须在给动作之前拿到。
+                        val skillId = p.skillId
+                        if (skillId != null && skillCalls < MAX_SKILL_CALLS) {
+                            history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
+                            skillCalls++
+                            logger?.line("调用技能：$skillId（第 $skillCalls 次）", "技能")
+
+                            OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                            val outcome = skills.run(skillId, p.skillArgs)
+
+                            // 技能返回会留在上下文里，日志里给个缩略就够了 ——
+                            // 应用列表那种几千字符的全打进日志会把 run.log 撑爆
+                            logger?.line(
+                                "技能返回${if (outcome.ok) "" else "（失败）"}：" +
+                                    outcome.text.take(200).replace("\n", " | ") +
+                                    if (outcome.text.length > 200) " …（共 ${outcome.text.length} 字符，已发给模型）" else "",
+                                "技能",
+                            )
+                            if (!outcome.ok) {
+                                listener.onEvent(EventKind.ERROR, outcome.text, "技能失败")
+                            }
+                            skillNote = if (outcome.ok) {
+                                "技能 $skillId 返回：\n${outcome.text}"
+                            } else {
+                                "技能 $skillId 没能取到信息：${outcome.text}"
+                            }
+                            continue@ask
+                        }
+                        if (skillId != null) {
+                            logger?.warn(
+                                "模型又要调技能，但这一轮已经调过 $MAX_SKILL_CALLS 次了，先按它给的动作走",
+                                "技能",
                             )
                         }
 
@@ -563,6 +613,14 @@ class Agent(
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
+
+        /**
+         * 同一轮里最多调几次技能。
+         *
+         * 技能结果会留在上下文里，模型可能陷入"再查一次确认"。
+         * 给三次机会足够（查文档 + 调一次 + 补查），之后必须做决定。
+         */
+        const val MAX_SKILL_CALLS = 3
 
         /**
          * 同一轮里最多给几次截图。

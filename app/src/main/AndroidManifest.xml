@@ -30,6 +30,28 @@
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+      包可见性声明（Android 11 / API 30 起必需）。
+
+      从 Android 11 开始，queryIntentActivities() 这类"查别人装了什么"的
+      接口默认是**被过滤的**：不声明 <queries> 的话，你只能看到自己和
+      少数几个包。表现极其隐蔽 —— 不报错、不抛异常，就是列表很短。
+
+      这里声明"我要看所有有桌面入口的应用"，覆盖两处：
+        - list_apps 技能：拿应用列表和包名
+        - open_app 动作：getLaunchIntentForPackage() 也属于被过滤的查询接口，
+          拿不到就会返回 null，日志里只会说"没找到这个包"
+
+      用 <queries> 而不是 QUERY_ALL_PACKAGES 权限：前者是声明式的最小范围，
+      不需要申请任何权限；后者是敏感权限，上架要额外说明用途。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
