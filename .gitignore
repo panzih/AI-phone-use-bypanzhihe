@@ -26,6 +26,15 @@ captures/
 # 含机器专属的 SDK 路径，不该共享
 local.properties
 
+# ---------- 发布签名 ----------
+# 密钥和口令**绝不能进仓库**。丢了密钥就永久失去给老用户升级的能力，
+# 泄漏了口令别人就能冒名发布"官方升级包"。模板见 keystore.properties.example
+keystore.properties
+*.jks
+*.keystore
+# 调试密钥是例外：它是公开的默认口令，工程自带一份方便 clone 后直接构建
+!keystore/debug.keystore
+
 # ---------- IDE / 系统 ----------
 .idea/
 *.iml

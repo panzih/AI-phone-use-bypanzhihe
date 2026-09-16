@@ -1,7 +1,35 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+}
+
+/**
+ * 发布签名的配置来源。
+ *
+ * `keystore.properties` 长这样（见 keystore.properties.example）：
+ *
+ *     storeFile=keystore/release.keystore
+ *     storePassword=...
+ *     keyAlias=...
+ *     keyPassword=...
+ *
+ * 它和密钥文件都在 .gitignore 里，**永远不要提交**。
+ */
+val releaseProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+/** 配置齐了、而且密钥文件真的在，才启用发布签名 */
+val hasReleaseKey: Boolean = run {
+    val path = releaseProps.getProperty("storeFile") ?: return@run false
+    releaseProps.getProperty("storePassword") != null &&
+        releaseProps.getProperty("keyAlias") != null &&
+        releaseProps.getProperty("keyPassword") != null &&
+        rootProject.file(path).exists()
 }
 
 android {
@@ -37,6 +65,25 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+
+        /**
+         * 发布签名。
+         *
+         * 密钥和口令**不进仓库** —— 从 `keystore.properties` 读，那个文件在
+         * .gitignore 里。跑一次 `bash setup_release_keystore.sh` 生成。
+         *
+         * 文件不存在时**不报错**，只是 release 产物没有签名
+         * （出 app-release-unsigned.apk）。这样 clone 下来的人不会因为
+         * 缺密钥连构建都过不去 —— 他只是发不了包而已。
+         */
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = rootProject.file(releaseProps.getProperty("storeFile"))
+                storePassword = releaseProps.getProperty("storePassword")
+                keyAlias = releaseProps.getProperty("keyAlias")
+                keyPassword = releaseProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -46,6 +93,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasReleaseKey) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

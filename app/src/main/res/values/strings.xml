@@ -37,7 +37,6 @@
     <string name="settings_model_provider">接口地址</string>
     <string name="settings_model_apikey">API Key</string>
     <string name="settings_model_name">模型</string>
-    <string name="settings_model_detail">图片精度</string>
     <string name="settings_apikey_show">显示</string>
     <string name="settings_apikey_hide">隐藏</string>
 
@@ -60,7 +59,17 @@
     <string name="settings_clear_context">清空上下文</string>
     <string name="settings_clear_context_done">上下文已清空</string>
     <string name="settings_max_steps">最大步数</string>
-    <string name="settings_max_steps_desc">一次任务最多走多少步。每步都要调一次模型，这个值直接等于最多花多少钱</string>
+    <string name="settings_max_steps_desc">一次任务最多走多少步。每步都要调一次模型，这个值就是花费上限。拉到最右是不限 —— 只有模型自己判断做完、或者判断做不下去才会停</string>
+    <string name="settings_steps_value">%1$d 步</string>
+    <string name="settings_steps_unlimited">不限</string>
+
+    <!-- 关于 -->
+    <string name="settings_about_tagline">让 AI 直接操作你的安卓手机</string>
+    <string name="settings_about_version">版本</string>
+    <string name="settings_about_author">作者</string>
+    <string name="settings_about_license">开源协议</string>
+    <string name="settings_about_repo">项目主页</string>
+    <string name="settings_a11y_label">无障碍服务</string>
     <string name="settings_auto_clear">自动清空上下文</string>
     <string name="settings_auto_clear_desc">这么久没发消息，就自动把上下文清掉</string>
     <string name="settings_memory_enabled">开启记忆</string>

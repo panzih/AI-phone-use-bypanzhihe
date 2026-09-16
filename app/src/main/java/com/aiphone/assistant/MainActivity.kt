@@ -28,6 +28,7 @@ import com.aiphone.assistant.agent.Agent
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.SettingsStore
+import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.llm.LlmClient
 import com.aiphone.assistant.llm.LlmConfig
 import com.aiphone.assistant.log.AppLog
@@ -227,13 +228,15 @@ private fun AppRoot(
                     channelLabel = settings.mode.label,
                     modelName = settings.modelName,
                     baseUrl = settings.baseUrl,
-                    detail = settings.detail,
                 ),
             )
         } else null
 
         logger?.line("任务：$task", tag = "任务")
-        logger?.line("最大步数：${settings.maxSteps}", tag = "任务")
+        logger?.line(
+            if (settings.maxSteps <= 0) "最大步数：不限" else "最大步数：${settings.maxSteps}",
+            tag = "任务",
+        )
         addLog(LogKind.ACTION, task, "指令")
 
         if (settings.apiKey.isBlank()) {
@@ -249,7 +252,6 @@ private fun AppRoot(
                 baseUrl = settings.baseUrl,
                 apiKey = settings.apiKey,
                 model = settings.modelName,
-                detail = settings.detail,
             )
         )
 
@@ -280,7 +282,7 @@ private fun AppRoot(
                 }
 
                 override fun onProgress(step: Int, maxSteps: Int) {
-                    progress = "AI 正在执行 · 第 $step / $maxSteps 步"
+                    progress = "AI 正在执行 · " + stepsLabel(step, maxSteps)
                 }
 
                 override fun onFinished(success: Boolean, message: String) {
@@ -400,6 +402,7 @@ private fun AppRoot(
                 overlayGranted = overlayGranted,
                 logStats = logStats,
                 insightCount = insightCount,
+                appVersion = appVersion,
                 progress = progress,
                 toast = toast,
             ),
@@ -422,6 +425,7 @@ private fun AppRoot(
                 overlayGranted = overlayGranted,
                 logStats = logStats,
                 insightCount = insightCount,
+                appVersion = appVersion,
                 toast = toast,
             ),
             onSettingsChange = { next ->
@@ -430,7 +434,7 @@ private fun AppRoot(
                 if (next.saveLogs) {
                     AppLog.i(
                         "设置变更：通道=${next.mode.label} 模型=${next.modelName} " +
-                            "精度=${next.detail} 最大步数=${next.maxSteps} " +
+                            "最大步数=${next.maxSteps} " +
                             "记忆=${next.memoryEnabled} 自动清空=${next.autoClear.label}",
                         "设置",
                     )

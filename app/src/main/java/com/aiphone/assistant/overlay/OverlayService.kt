@@ -23,6 +23,7 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.aiphone.assistant.R
+import com.aiphone.assistant.data.stepsLabel
 
 /**
  * AI 操作手机时的悬浮控制面板。
@@ -407,7 +408,7 @@ class OverlayService : Service() {
 
     fun updateStatus(step: Int, maxSteps: Int, current: String, nextHint: String) {
         main.post {
-            stepText.text = "第 $step / $maxSteps 步"
+            stepText.text = stepsLabel(step, maxSteps)
             currentText.text = "正在：$current"
             nextText.text = if (nextHint.isBlank()) "下一步：—" else "下一步：$nextHint"
 

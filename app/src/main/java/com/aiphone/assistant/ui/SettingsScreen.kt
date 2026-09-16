@@ -40,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -51,17 +52,20 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
+import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.AutoClear
 import com.aiphone.assistant.data.OperationMode
@@ -137,6 +141,11 @@ fun SettingsScreen(
                 .windowInsetsPadding(WindowInsets.navigationBars),
             contentPadding = PaddingValues(bottom = 32.dp),
         ) {
+            // ================= 关于 =================
+            item { AboutSection(appVersion = state.appVersion) }
+
+            item { SectionDivider() }
+
             // ================= 模型 =================
             item { SectionHeader(stringResource(R.string.settings_section_model)) }
             item { ModelSection(s, onSettingsChange) }
@@ -154,9 +163,13 @@ fun SettingsScreen(
                 )
             }
             item {
-                OverlayPermissionRow(
+                PermissionRow(
+                    title = stringResource(R.string.settings_overlay_label),
+                    desc = stringResource(R.string.settings_overlay_desc),
                     granted = state.overlayGranted,
-                    onOpen = onOpenOverlaySettings,
+                    actionText = stringResource(R.string.settings_overlay_open),
+                    grantedText = stringResource(R.string.settings_overlay_granted),
+                    onAction = onOpenOverlaySettings,
                 )
             }
 
@@ -175,15 +188,9 @@ fun SettingsScreen(
             }
 
             item {
-                DropdownRow(
-                    title = stringResource(R.string.settings_max_steps),
-                    subtitle = stringResource(R.string.settings_max_steps_desc),
-                    current = s.maxSteps,
-                    options = listOf(10, 20, 30, 50, 100),
-                    // 注意：这里不能用 stringResource —— optionLabel 是普通 lambda，
-                    // 不是 @Composable 上下文，调 @Composable 函数编译不过。
-                    optionLabel = { "$it 步" },
-                    onSelect = { onSettingsChange(s.copy(maxSteps = it)) },
+                StepsSliderRow(
+                    maxSteps = s.maxSteps,
+                    onChange = { onSettingsChange(s.copy(maxSteps = it)) },
                 )
             }
 
@@ -314,18 +321,6 @@ private fun ModelSection(
             shape = RoundedCornerShape(12.dp),
         )
 
-        Spacer(Modifier.height(12.dp))
-
-        DropdownRow(
-            title = stringResource(R.string.settings_model_detail),
-            subtitle = "original 保留原图；low 压到 512×512（手机 UI 文字多，建议 original）",
-            current = s.detail,
-            options = listOf("original", "low"),
-            optionLabel = { it },
-            onSelect = { onChange(s.copy(detail = it)) },
-            horizontalPadding = 0.dp,
-        )
-
         Spacer(Modifier.height(4.dp))
     }
 }
@@ -352,90 +347,75 @@ private fun AuthSection(
             horizontalPadding = 0.dp,
         )
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(4.dp))
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                onClick = onGotoAuth,
-                enabled = current.available,
-            ) {
-                Text(stringResource(R.string.settings_goto_auth))
-            }
+        PermissionRow(
+            title = stringResource(R.string.settings_a11y_label),
+            desc = null,
+            granted = authorized,
+            enabled = current.available,
+            actionText = stringResource(R.string.settings_goto_auth),
+            grantedText = stringResource(R.string.settings_auth_granted),
+            unavailableText = stringResource(R.string.settings_auth_unavailable),
+            onAction = onGotoAuth,
+        )
+    }
+}
 
-            Spacer(Modifier.width(12.dp))
-
-            // 授权状态：说清楚是"系统里开着"还是"真的连上了"
-            if (current.available) {
-                Icon(
-                    imageVector = if (authorized) {
-                        Icons.Filled.CheckCircle
-                    } else {
-                        Icons.Filled.Warning
-                    },
-                    contentDescription = null,
-                    tint = if (authorized) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(6.dp))
+/**
+ * 权限行 —— 无障碍和悬浮窗**共用同一个组件**。
+ *
+ * 之前这两行是两个各写一遍的 Row：无障碍用实心 `Button`、悬浮窗用
+ * `OutlinedButton`，摆在同一个列表里看着像两种不同性质的东西，
+ * 其实它们是一回事 —— 都是"未授权 → 去系统设置开 → 已授权"。
+ * 抄成两遍的后果就是改一处漏一处，现在合成一个。
+ *
+ * @param desc 可为空。无障碍那行不写说明，因为上面的「操作方式」下拉里
+ *             已经有同样一段话，重复两遍反而乱
+ * @param enabled false 表示这个能力当前版本还没接入
+ */
+@Composable
+private fun PermissionRow(
+    title: String,
+    desc: String?,
+    granted: Boolean,
+    actionText: String,
+    grantedText: String,
+    enabled: Boolean = true,
+    unavailableText: String = "",
+    onAction: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            if (!desc.isNullOrBlank()) {
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = stringResource(
-                        if (authorized) R.string.settings_auth_granted
-                        else R.string.settings_auth_missing
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (authorized) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                )
-            } else {
-                Text(
-                    text = stringResource(R.string.settings_auth_unavailable),
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = desc,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
 
-        Spacer(Modifier.height(12.dp))
-    }
-}
+        Spacer(Modifier.width(12.dp))
 
-/**
- * 悬浮窗授权行。
- *
- * 单独列出来是因为它是个**特殊权限**：代码申请不了，必须跳系统设置手动开，
- * 而且各家 ROM 的入口名字都不一样（小米叫"显示在其他应用上层"，
- * ColorOS 还会额外锁"受限制的设置"）。不给用户一个明确入口，
- * 他根本不知道该去哪开。
- */
-@Composable
-private fun OverlayPermissionRow(
-    granted: Boolean,
-    onOpen: () -> Unit,
-) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.settings_overlay_label),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = stringResource(R.string.settings_overlay_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
+        when {
+            !enabled -> Text(
+                text = unavailableText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
-            if (granted) {
+            granted -> {
                 Icon(
                     imageVector = Icons.Filled.CheckCircle,
                     contentDescription = null,
@@ -444,15 +424,164 @@ private fun OverlayPermissionRow(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = stringResource(R.string.settings_overlay_granted),
+                    text = grantedText,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-            } else {
-                OutlinedButton(onClick = onOpen) {
-                    Text(stringResource(R.string.settings_overlay_open))
-                }
+            }
+
+            else -> OutlinedButton(onClick = onAction) {
+                Text(actionText)
             }
         }
+    }
+}
+
+// ----------------------------------------------------------------------
+// 关于
+// ----------------------------------------------------------------------
+
+/**
+ * 关于本软件。
+ *
+ * 放在设置页最顶上，是"打开设置第一眼要看到的东西"：这是什么应用、
+ * 什么版本、什么协议、去哪找源码。出问题时报版本号也是第一步。
+ */
+@Composable
+private fun AboutSection(appVersion: String) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(12.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 和主界面、启动图标共用同一份矢量，不做第二份图标资源
+            Icon(
+                painter = painterResource(R.drawable.ic_box_logo),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(36.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = stringResource(R.string.settings_about_tagline),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        AboutRow(stringResource(R.string.settings_about_version), appVersion.ifBlank { "?" })
+        AboutRow(stringResource(R.string.settings_about_author), AppInfo.AUTHOR)
+        AboutRow(stringResource(R.string.settings_about_license), AppInfo.LICENSE)
+
+        // 仓库地址留空时不显示这一行 —— 免得点开一个 404
+        if (AppInfo.REPO_URL.isNotBlank()) {
+            AboutRow(stringResource(R.string.settings_about_repo), AppInfo.REPO_URL)
+        }
+
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+@Composable
+private fun AboutRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(76.dp),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+// ----------------------------------------------------------------------
+// 最大步数
+// ----------------------------------------------------------------------
+
+/** 滑块左端 = 最少步数 */
+private const val STEPS_MIN = 10
+
+/**
+ * 滑块右端 = **不限**。
+ *
+ * 所以 100 这个刻度不代表"100 步"，而是"不设上限"。存的时候写 0，
+ * 全工程统一用 `maxSteps <= 0` 表示不限（见 AppSettings.maxSteps）。
+ */
+private const val STEPS_UNLIMITED = 100
+
+/**
+ * 最大步数滑块。
+ *
+ * 原来是个 10/20/30/50/100 的下拉框 —— 那等于替用户决定了"可以选哪几个值"。
+ * 改成滑块之后可以连续调，最右边直接是"不限"。
+ *
+ * 拖拽过程中**不落盘**：`onValueChange` 在手指移动时每帧都触发，
+ * 每一帧写一次 SharedPreferences 是浪费。松手（`onValueChangeFinished`）才存。
+ */
+@Composable
+private fun StepsSliderRow(
+    maxSteps: Int,
+    onChange: (Int) -> Unit,
+) {
+    val stored = if (maxSteps <= 0) STEPS_UNLIMITED
+    else maxSteps.coerceIn(STEPS_MIN, STEPS_UNLIMITED - 1)
+
+    var draft by remember(stored) { mutableFloatStateOf(stored.toFloat()) }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.settings_max_steps),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = if (draft >= STEPS_UNLIMITED) {
+                    stringResource(R.string.settings_steps_unlimited)
+                } else {
+                    stringResource(R.string.settings_steps_value, draft.toInt())
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+
+        Slider(
+            value = draft,
+            onValueChange = { draft = it },
+            onValueChangeFinished = {
+                val v = draft.toInt()
+                // 满格 = 不限（存 0）
+                onChange(if (v >= STEPS_UNLIMITED) 0 else v)
+            },
+            valueRange = STEPS_MIN.toFloat()..STEPS_UNLIMITED.toFloat(),
+            // 整数刻度：(100-10+1) 个取值 → 中间 89 个分隔点
+            steps = STEPS_UNLIMITED - STEPS_MIN - 1,
+        )
+
+        Text(
+            text = stringResource(R.string.settings_max_steps_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

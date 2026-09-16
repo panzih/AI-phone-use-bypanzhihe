@@ -64,6 +64,9 @@ data class MainUiState(
     /** 已沉淀的用户洞察份数 */
     val insightCount: Int = 0,
 
+    /** 应用版本号，给设置页的「关于」显示 */
+    val appVersion: String = "",
+
     /** 一次性提示（导出结果之类），显示完由界面清掉 */
     val toast: String? = null,
 )

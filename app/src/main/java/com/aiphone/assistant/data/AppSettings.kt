@@ -61,8 +61,6 @@ data class AppSettings(
     val baseUrl: String = "https://api.deepseek.com",
     val apiKey: String = "",
     val modelName: String = "deepseek-flash",
-    /** original 保留原图；low 压到 512×512。手机 UI 文字多，默认必须 original */
-    val detail: String = "original",
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,
@@ -71,9 +69,13 @@ data class AppSettings(
     /**
      * 一次任务最多走多少步。
      *
-     * 这不是"防死循环"（那个由 Agent 里的画面哈希和重复动作检测负责），
+     * 这不是"防死循环"（那个由 Agent 里的控件树指纹和重复动作检测负责），
      * 是**给成本兜底** —— 每步都要调一次模型，步数直接等于花多少钱。
      * 30 步对绝大多数任务够了；卡住的时候加步数不如把任务拆小。
+     *
+     * **0 表示不限。** 设置页的滑块拉到最右就是这个值。不限不等于失控：
+     * 模型自己判断做完/做不下去会主动收尾（finished / failed），
+     * 而且上下文接近模型窗口上限时 Agent 会强制停下。
      */
     val maxSteps: Int = 30,
 
@@ -111,3 +113,10 @@ data class AppSettings(
 
     val autoClear: AutoClear get() = AutoClear.fromMinutes(autoClearMinutes)
 }
+
+/**
+ * 步数文案。**上限 0 = 不限**，这个约定散落在提示词、界面、悬浮窗三处，
+ * 所以文案也统一在这里生成 —— 否则迟早会出现"第 3 / 0 步"这种东西。
+ */
+fun stepsLabel(step: Int, maxSteps: Int): String =
+    if (maxSteps <= 0) "第 $step 步（不限）" else "第 $step / $maxSteps 步"

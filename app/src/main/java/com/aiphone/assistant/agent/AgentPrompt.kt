@@ -1,5 +1,6 @@
 package com.aiphone.assistant.agent
 
+import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
 
@@ -206,7 +207,7 @@ $catalog
         imageNote: String? = null,
         skillNote: String? = null,
     ): String = buildString {
-        appendLine("当前是第 $step / $maxSteps 步。")
+        appendLine("当前是" + stepsLabel(step, maxSteps) + "。")
         appendLine("用户的任务：$task")
         // 上一批的执行结果放在这里，而不是单独发一条消息 ——
         // 这样整条对话就是"严格的追加"，前缀永远不变，缓存才命中得了。

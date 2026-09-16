@@ -138,7 +138,11 @@ class Agent(
         // 而不是单独发一条 —— 这样整条对话是严格追加，缓存才命中得了。
         var lastResult: String? = null
 
-        for (step in 1..maxSteps) {
+        // 0 = 不限。不设上限不等于失控：模型会主动 finished / failed 收尾，
+        // 而且上下文接近窗口上限时下面会强制停下（见 CONTEXT_STOP_TOKENS）
+        val stepLimit = if (maxSteps <= 0) Int.MAX_VALUE else maxSteps
+
+        for (step in 1..stepLimit) {
             if (isStopped()) {
                 finish(false, "你停止了任务（第 $step 步）")
                 return
@@ -478,7 +482,10 @@ class Agent(
             lastResult = resultText
         }
 
-        finish(false, "到了最大步数 $maxSteps 还没做完。可以加大步数，或者把任务拆小一点。")
+        finish(
+            false,
+            "到了最大步数 $maxSteps 还没做完。可以加大步数，或者把任务拆小一点。",
+        )
     }
 
     // ------------------------------------------------------------------
