@@ -45,6 +45,20 @@
       用 <queries> 而不是 QUERY_ALL_PACKAGES 权限：前者是声明式的最小范围，
       不需要申请任何权限；后者是敏感权限，上架要额外说明用途。
     -->
+    <!--
+      定时任务的两个权限。
+
+      SCHEDULE_EXACT_ALARM：Android 12 起"精确闹钟"要单独授权，
+      而且 **Android 14 默认是拒绝的**（用户得去系统设置里允许）。
+      拿不到时 Scheduler 会退回不精确闹钟（可能晚几分钟），
+      界面上会显示当前是哪种并提供授权入口 —— 不会静默失效。
+
+      RECEIVE_BOOT_COMPLETED：闹钟在重启后会被系统清空，
+      必须在开机广播里重新登记，否则用户设的定时任务重启一次就没了。
+    -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -107,6 +121,32 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="AI 操作手机期间显示进度与急停按钮的悬浮控制面板" />
         </service>
+
+        <!--
+          定时任务到点的触发点。
+
+          **不导出**：闹钟是我们自己用 PendingIntent 登记的显式广播，
+          不需要外面能发进来。导出一个"能触发任务"的入口没有必要，
+          而攻击面是实打实的。
+        -->
+        <receiver
+            android:name=".schedule.ScheduleReceiver"
+            android:exported="false" />
+
+        <!--
+          开机后重新登记定时任务（闹钟在重启时会被系统清空）。
+
+          这个**必须导出** —— 开机广播是系统发的，不导出收不到。
+          它不接收任何参数，只做重排，所以没有可利用的面。
+        -->
+        <receiver
+            android:name=".schedule.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!--
           核心无障碍服务。

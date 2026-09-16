@@ -41,6 +41,10 @@ import com.aiphone.assistant.memory.Turn
 import com.aiphone.assistant.record.MacroLearner
 import com.aiphone.assistant.record.MacroStore
 import com.aiphone.assistant.record.Recorder
+import com.aiphone.assistant.schedule.ScheduleReceiver
+import com.aiphone.assistant.schedule.Schedule
+import com.aiphone.assistant.schedule.ScheduleStore
+import com.aiphone.assistant.schedule.Scheduler
 import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.overlay.OverlayService
 import com.aiphone.assistant.skill.SkillContext
@@ -51,6 +55,7 @@ import com.aiphone.assistant.ui.MainScreen
 import com.aiphone.assistant.ui.MacroSummary
 import com.aiphone.assistant.ui.MainUiState
 import com.aiphone.assistant.ui.RecordingScreen
+import com.aiphone.assistant.ui.ScheduleScreen
 import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
@@ -62,6 +67,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var controller: ChannelController
     private lateinit var store: SettingsStore
 
+    /**
+     * 定时任务到点时带进来的任务。
+     *
+     * 用 Compose 的 state 而不是普通字段：闹钟可能在应用已经开着的时候响，
+     * 那时走的是 onNewIntent，界面需要跟着重新触发一次。
+     */
+    private val pendingTask = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // 边到边显示：内容铺到状态栏和导航栏下面，
         // 再靠 WindowInsets 给内容留出安全区。
@@ -71,6 +84,14 @@ class MainActivity : ComponentActivity() {
         controller = ChannelController(applicationContext)
         store = SettingsStore(this)
 
+        // 冷启动时把定时任务取出来
+        readScheduledIntent(intent)
+
+        // 顺手重排一次定时任务。闹钟除了重启会丢，应用被"强行停止"过
+        // 也会被系统清掉（而强行停止后开机广播也不会再发给本应用）——
+        // 用户重新打开一次应用就自动恢复，比让他去设置里找一遍强
+        runCatching { Scheduler.rescheduleAll(applicationContext) }
+
 
         setContent {
             AiPhoneTheme {
@@ -78,11 +99,55 @@ class MainActivity : ComponentActivity() {
                     controller = controller,
                     store = store,
                     appVersion = appVersion(),
+                    pendingTask = pendingTask.value,
+                    onPendingTaskHandled = { pendingTask.value = null },
+                    onRequestExactAlarm = { requestExactAlarm() },
                     onOpenAccessibilitySettings = { openAccessibilitySettings() },
                     onOpenOverlaySettings = { openOverlaySettings() },
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // 应用已经开着的时候闹钟响了走这里
+        setIntent(intent)
+        readScheduledIntent(intent)
+    }
+
+    private fun readScheduledIntent(intent: Intent?) {
+        val task = intent?.getStringExtra(EXTRA_RUN_TASK)?.trim().orEmpty()
+        if (task.isBlank()) return
+        val id = intent?.getStringExtra(EXTRA_SCHEDULE_ID)
+        pendingTask.value = task
+        // 界面已经在用户眼前了，那条提醒就多余了。放在这一层是因为
+        // 只有 Activity 拿得到 scheduleId（Compose 那一层只拿到任务文本）
+        id?.let { ScheduleReceiver.cancelNotification(this, it) }
+    }
+
+    /**
+     * 跳到系统的「闹钟与提醒」授权页。
+     *
+     * Android 14 起精确闹钟默认拒绝，必须用户手动允许；不给这个入口，
+     * 用户只会看到"设了 9 点却 9 点 07 才动"，而且查不出原因。
+     */
+    private fun requestExactAlarm() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        runCatching {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                    .setData(android.net.Uri.parse("package:$packageName"))
+            )
+        }
+    }
+
+    companion object {
+        /** 定时任务到点时带进来的任务内容 */
+        const val EXTRA_RUN_TASK = "run_task"
+
+        /** 哪条定时任务触发的（用来撤掉它的通知） */
+        const val EXTRA_SCHEDULE_ID = "schedule_id"
     }
 
     private fun appVersion(): String = runCatching {
@@ -137,6 +202,9 @@ private fun AppRoot(
     controller: ChannelController,
     store: SettingsStore,
     appVersion: String,
+    pendingTask: String?,
+    onPendingTaskHandled: () -> Unit,
+    onRequestExactAlarm: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
 ) {
@@ -167,6 +235,10 @@ private fun AppRoot(
     var macros by remember { mutableStateOf(loadMacroSummaries(context)) }
     var learning by remember { mutableStateOf(false) }
 
+    // ---- 定时任务 ----
+    var schedules by remember { mutableStateOf(ScheduleStore.loadAll(context)) }
+    var exactAlarmGranted by remember { mutableStateOf(Scheduler.canScheduleExact(context)) }
+
     val logs = remember { mutableStateListOf<LogEntry>() }
     val conversation = remember { Conversation() }
 
@@ -187,6 +259,8 @@ private fun AppRoot(
         logStats = context.getString(R.string.settings_log_stats, runs.size, formatBytes(total))
         insightCount = InsightStore.list(context).size
         macros = loadMacroSummaries(context)
+        schedules = ScheduleStore.loadAll(context)
+        exactAlarmGranted = Scheduler.canScheduleExact(context)
     }
 
     fun stopRecording() {
@@ -267,6 +341,37 @@ private fun AppRoot(
             }
             learning = false
         }
+    }
+
+    fun addSchedule(task: String, hour: Int, minute: Int, daily: Boolean) {
+        if (task.isBlank()) return
+        val s = Schedule(
+            id = ScheduleStore.newId(),
+            task = task,
+            hour = hour,
+            minute = minute,
+            repeatDaily = daily,
+        )
+        schedules = ScheduleStore.upsert(context, s)
+        Scheduler.schedule(context, s)
+        if (!Scheduler.canScheduleExact(context)) {
+            toast = context.getString(R.string.schedule_toast_no_exact)
+        } else {
+            toast = context.getString(R.string.schedule_toast_added, s.timeLabel())
+        }
+    }
+
+    fun toggleSchedule(schedule: Schedule, enabled: Boolean) {
+        val next = schedule.copy(enabled = enabled)
+        schedules = ScheduleStore.upsert(context, next)
+        if (enabled) Scheduler.schedule(context, next) else Scheduler.cancel(context, next.id)
+    }
+
+    fun deleteSchedule(id: String) {
+        Scheduler.cancel(context, id)
+        ScheduleReceiver.cancelNotification(context, id)
+        schedules = ScheduleStore.delete(context, id)
+        toast = context.getString(R.string.schedule_toast_deleted)
     }
 
     fun deleteMacro(id: String) {
@@ -507,6 +612,21 @@ private fun AppRoot(
         LogExporter.share(context, f, "纸盒日志")
     }
 
+    /**
+     * 定时任务到点自动开跑。
+     *
+     * 必须放在 submit() 后面 —— Kotlin 的局部函数不能先用后定义，
+     * 放前面是编译错误（这一步实际踩到了）。
+     */
+    LaunchedEffect(pendingTask) {
+        val task = pendingTask ?: return@LaunchedEffect
+        if (task.isBlank()) return@LaunchedEffect
+        addLog(LogKind.ACTION, task, "定时任务")
+        input = task
+        submit()
+        onPendingTaskHandled()
+    }
+
     when (screen) {
         Screen.CONTROL -> MainScreen(
             state = MainUiState(
@@ -526,6 +646,8 @@ private fun AppRoot(
                 recordedSteps = recordedSteps,
                 macros = macros,
                 learning = learning,
+                schedules = schedules,
+                exactAlarmGranted = exactAlarmGranted,
             ),
             onSettingsClick = { screen = Screen.SETTINGS },
             onInputChange = { input = it },
@@ -538,6 +660,7 @@ private fun AppRoot(
             },
             onControlPhone = { screen = Screen.CONTROL },
             onRecording = { screen = Screen.RECORDING },
+            onSchedules = { screen = Screen.SCHEDULES },
         )
 
         Screen.RECORDING -> RecordingScreen(
@@ -554,6 +677,19 @@ private fun AppRoot(
             onDiscard = { discardRecording() },
             onLearn = { nameHint -> learnRecording(nameHint) },
             onDeleteMacro = { id -> deleteMacro(id) },
+        )
+
+        Screen.SCHEDULES -> ScheduleScreen(
+            state = MainUiState(
+                toast = toast,
+                schedules = schedules,
+                exactAlarmGranted = exactAlarmGranted,
+            ),
+            onBack = { screen = Screen.CONTROL },
+            onAdd = { task, h, m, daily -> addSchedule(task, h, m, daily) },
+            onToggle = { s, on -> toggleSchedule(s, on) },
+            onDelete = { id -> deleteSchedule(id) },
+            onRequestExactAlarm = onRequestExactAlarm,
         )
 
         Screen.SETTINGS -> SettingsScreen(

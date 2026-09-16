@@ -81,6 +81,14 @@ data class MainUiState(
     /** 正在让 AI 学习（学习要调模型，可能几秒） */
     val learning: Boolean = false,
 
+    // ---------- 定时任务 ----------
+
+    /** 已有的定时任务 */
+    val schedules: List<com.aiphone.assistant.schedule.Schedule> = emptyList(),
+
+    /** 系统是否允许精确闹钟。false 时只能不精确触发，可能晚几分钟 */
+    val exactAlarmGranted: Boolean = true,
+
     /** 一次性提示（导出结果之类），显示完由界面清掉 */
     val toast: String? = null,
 )

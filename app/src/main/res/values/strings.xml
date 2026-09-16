@@ -11,6 +11,7 @@
     <string name="drawer_open">打开侧边栏</string>
     <string name="drawer_control_phone">操作手机</string>
     <string name="drawer_recording">操作记录</string>
+    <string name="drawer_schedules">定时任务</string>
     <string name="drawer_settings">设置</string>
 
     <!-- 顶栏 -->
@@ -54,6 +55,26 @@
     <string name="recording_toast_learn_failed">学习失败：%1$s</string>
     <string name="recording_toast_deleted">已删除技能</string>
     <string name="recording_need_api_key">还没填 API Key。到「设置 → 模型」里填一个再试。</string>
+
+    <!-- 定时任务 -->
+    <string name="schedule_title">定时任务</string>
+    <string name="schedule_intro">到点自动执行一条任务。注意：手机必须是解锁、亮屏状态，AI 才操作得了 —— 所以它是"到点提醒你、你看着它干"，不是半夜无人值守。</string>
+    <string name="schedule_inexact_warning">系统未允许「精确闹钟」，触发可能晚几分钟</string>
+    <string name="schedule_grant_exact">去允许</string>
+    <string name="schedule_new">新建</string>
+    <string name="schedule_task_hint">要执行什么（例如：打开设置看看还剩多少存储）</string>
+    <string name="schedule_daily">每天重复</string>
+    <string name="schedule_pick_time">选择时间</string>
+    <string name="schedule_save">保存</string>
+    <string name="schedule_cancel">取消</string>
+    <string name="schedule_existing">已有的定时任务</string>
+    <string name="schedule_empty">还没有。上面写一条任务、选个时间就有了。</string>
+    <string name="schedule_delete">删除这条定时任务</string>
+    <string name="schedule_footer">一次性的任务跑完会自动关闭；每天重复的会继续排下一次。</string>
+    <string name="schedule_notify_title">纸盒：到点执行任务</string>
+    <string name="schedule_toast_added">已添加：%1$s</string>
+    <string name="schedule_toast_deleted">已删除定时任务</string>
+    <string name="schedule_toast_no_exact">这台设备没有授予「精确闹钟」权限，触发时间可能晚几分钟</string>
     <string name="settings_back">返回</string>
 
     <!-- 设置 · 模型 -->

@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
@@ -98,6 +99,7 @@ fun MainScreen(
     onStop: () -> Unit,
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
+    onSchedules: () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -118,6 +120,10 @@ fun MainScreen(
                 },
                 onRecording = {
                     onRecording()
+                    scope.launch { drawerState.close() }
+                },
+                onSchedules = {
+                    onSchedules()
                     scope.launch { drawerState.close() }
                 },
                 onSettings = {
@@ -224,12 +230,14 @@ private fun BrandCenter() {
  * 三项：
  *   1. 操作手机   ← 主功能
  *   2. 操作记录   ← 手动录一段操作，交给 AI 学成技能
+ *   3. 定时任务   ← 到点自动跑一条任务
  *   3. 设置       ← 置底
  */
 @Composable
 private fun AppDrawer(
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
+    onSchedules: () -> Unit,
     onSettings: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
@@ -272,6 +280,11 @@ private fun AppDrawer(
                 icon = Icons.Filled.FiberManualRecord,
                 title = stringResource(R.string.drawer_recording),
                 onClick = onRecording,
+            )
+            DrawerItem(
+                icon = Icons.Filled.Schedule,
+                title = stringResource(R.string.drawer_schedules),
+                onClick = onSchedules,
             )
 
             Spacer(Modifier.weight(1f))
