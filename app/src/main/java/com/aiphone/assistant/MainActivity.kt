@@ -35,6 +35,7 @@ import com.aiphone.assistant.log.AppLog
 import com.aiphone.assistant.log.LogExporter
 import com.aiphone.assistant.memory.Conversation
 import com.aiphone.assistant.memory.InsightStore
+import com.aiphone.assistant.memory.LlmDistiller
 import com.aiphone.assistant.memory.RawDistiller
 import com.aiphone.assistant.memory.Turn
 import com.aiphone.assistant.overlay.OverlayBus
@@ -228,6 +229,7 @@ private fun AppRoot(
                     channelLabel = settings.mode.label,
                     modelName = settings.modelName,
                     baseUrl = settings.baseUrl,
+                    thinkingLabel = settings.thinking.label,
                 ),
             )
         } else null
@@ -252,6 +254,7 @@ private fun AppRoot(
                 baseUrl = settings.baseUrl,
                 apiKey = settings.apiKey,
                 model = settings.modelName,
+                thinking = settings.thinking,
             )
         )
 
@@ -290,6 +293,19 @@ private fun AppRoot(
                         Turn(if (success) Turn.Role.AI else Turn.Role.ACTION, message)
                     )
                     progress = ""
+
+                    // 开了记忆就让 AI 把这一趟归纳成一条「用户洞察」。
+                    // 放在这里而不是等上下文被清空 —— 任务刚结束时记录最新鲜，
+                    // 而且用户可能几个月都不手动清一次上下文。
+                    memorizeAfterTask(
+                        scope = scope,
+                        context = context.applicationContext,
+                        settings = settings,
+                        conversation = conversation,
+                        llm = llm,
+                        onDone = { refreshStats() },
+                    )
+
                     addLog(
                         if (success) LogKind.RESULT else LogKind.ERROR,
                         message,
@@ -451,12 +467,14 @@ private fun AppRoot(
 }
 
 /**
- * 开了"保存记忆"就把上下文沉淀成 md。
+ * 清空上下文之前，把内容沉淀成 md。
  *
- * 现在的 distiller 是 [RawDistiller]：原样存，不做归纳 ——
- * 因为真正的归纳要调大模型。
- * 但**存这个动作本身是真的在工作的**，内容不会丢，
- * 接上模型后把 RawDistiller 换掉即可，这里一行都不用改。
+ * **只在「开启记忆」关着的时候才走这条路。** 开着的时候内容在任务结束时
+ * 就已经被 AI 归纳过了，这里再原样存一份只是重复的噪声。
+ *
+ * 两个开关的分工：
+ *   开启记忆  任务结束后让 AI 归纳一次（真正会"学到东西"的那条路）
+ *   保存记忆  没开记忆时，清空之前原样转存一份，免得内容直接丢掉
  */
 private suspend fun persistConversationIfNeeded(
     conversation: Conversation,
@@ -464,11 +482,44 @@ private suspend fun persistConversationIfNeeded(
     context: android.content.Context,
 ) {
     if (!settings.keepMemory) return
+    // 开记忆时任务结束已经归纳过了，不再重复
+    if (settings.memoryEnabled) return
     val turns = conversation.snapshot()
     if (turns.isEmpty()) return
     runCatching {
         val insight = RawDistiller().distill(turns)
         if (insight != null) InsightStore.save(context, insight)
+    }
+}
+
+/**
+ * 任务结束时让 AI 归纳一次记忆。
+ *
+ * 为什么放在**任务结束**而不是等上下文被清空：这时候记录最新鲜，
+ * 而且用户可能几个月都不手动清一次上下文 —— 那样就永远学不到东西。
+ *
+ * 成本是一次纯文字的模型调用（不带图）。所以只在「开启记忆」打开时才做。
+ */
+private fun memorizeAfterTask(
+    scope: kotlinx.coroutines.CoroutineScope,
+    context: android.content.Context,
+    settings: AppSettings,
+    conversation: Conversation,
+    llm: LlmClient,
+    onDone: () -> Unit,
+) {
+    if (!settings.memoryEnabled) return
+    val turns = conversation.snapshot()
+    if (turns.isEmpty()) return
+    scope.launch {
+        runCatching {
+            val insight = LlmDistiller(llm).distill(turns)
+            if (insight != null) {
+                InsightStore.save(context, insight)
+                if (settings.saveLogs) AppLog.i("已沉淀记忆：${insight.title}", "记忆")
+            }
+        }
+        onDone()
     }
 }
 

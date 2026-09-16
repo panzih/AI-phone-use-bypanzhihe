@@ -133,6 +133,9 @@ class Agent(
         var sameTree = 0
         var lastSig = ""
         var repeatAction = 0
+        // 模型连续几次没给出可用动作。原本这种情况会一直 continue 到步数上限 ——
+        // 步数改成"不限"之后，那等于死循环烧钱，所以单独计数
+        var parseFails = 0
 
         // 上一批动作的执行结果。它会拼进**下一条** user 消息里，
         // 而不是单独发一条 —— 这样整条对话是严格追加，缓存才命中得了。
@@ -169,6 +172,22 @@ class Agent(
             val treeHash = if (tree.isNullOrBlank()) 0 else md5(tree.toByteArray())
             if (treeHash != 0 && treeHash == lastTreeHash) sameTree++ else sameTree = 0
             if (treeHash != 0) lastTreeHash = treeHash
+
+            // ---- 卡死止损 ----
+            // 注入提示只到 2 次；再往下就是明知道没用还在烧钱，直接停。
+            if (sameTree >= STUCK_LIMIT || repeatAction >= STUCK_LIMIT) {
+                val why = if (sameTree >= STUCK_LIMIT) {
+                    "界面连续 ${sameTree + 1} 步没有任何变化"
+                } else {
+                    "模型连续 ${repeatAction + 1} 次给出同一批动作"
+                }
+                val msg = "卡住了：$why，已经停下。可能是这个界面点不动、" +
+                    "或者需要你自己操作一下（比如输入密码）。"
+                logger?.error(msg, "卡死")
+                listener.onEvent(EventKind.ERROR, msg, "卡住")
+                finish(false, msg)
+                return
+            }
 
             val interruptions = buildList {
                 if (sameTree >= 2) {
@@ -273,6 +292,15 @@ class Agent(
                             listener.onEvent(EventKind.THOUGHT, it, "第 $step 步 · 思考")
                         }
 
+                        // ---- 模型说做不下去 ----
+                        if (p.failed) {
+                            val why = p.summary.ifBlank { "模型判断这个任务做不下去" }
+                            logger?.warn("模型主动放弃：$why", "任务")
+                            listener.onEvent(EventKind.ERROR, why, "做不了")
+                            finish(false, why)
+                            return
+                        }
+
                         // ---- 任务完成？ ----
                         if (p.finished) {
                             val summary = p.summary.ifBlank { "模型判断任务已完成" }
@@ -368,8 +396,17 @@ class Agent(
             // ---- 一批动作都没有 ----
             if (p.actions.isEmpty()) {
                 val warning = p.warning ?: "没能解析出动作。"
-                logger?.warn("解析失败：$warning", "解析")
+                parseFails++
+                logger?.warn("解析失败（第 $parseFails 次）：$warning", "解析")
                 listener.onEvent(EventKind.ERROR, warning, "解析失败")
+                if (parseFails >= MAX_PARSE_FAILS) {
+                    finish(
+                        false,
+                        "模型连续 $parseFails 次没给出能执行的动作，已经停下。" +
+                            "换个模型或者把任务说具体一点再试。",
+                    )
+                    return
+                }
                 // 失败原因回灌给模型，让它重出 —— 但**不单独发一条消息**，
                 // 而是记进 lastResult，拼到下一条 user 消息里。
                 history.add(ChatTurn(ChatTurn.ASSISTANT, modelOutput))
@@ -620,6 +657,17 @@ class Agent(
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
+
+        /**
+         * 卡死的硬上限。
+         *
+         * 2 次是"提醒模型换做法"，到 5 次就说明换做法也没用 —— 再跑下去
+         * 纯粹是烧 token。步数上限现在是"不限"，所以这条兜底必须存在。
+         */
+        const val STUCK_LIMIT = 5
+
+        /** 连续几次解析不出动作就停 */
+        const val MAX_PARSE_FAILS = 5
 
         /**
          * 同一轮里最多调几次技能。

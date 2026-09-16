@@ -34,6 +34,90 @@ enum class OperationMode(
     }
 }
 
+/**
+ * 思考模式（模型的思维链）。
+ *
+ * ## 为什么要有这个开关
+ *
+ * DeepSeek 官方文档写得很清楚：**思考模式默认就是开着的，强度默认 high**。
+ * 也就是说如果不发任何参数，每一步都在做高强度的思维链推理 ——
+ * 对"点哪个按钮"这种任务既慢又贵，但确实更准。
+ *
+ * 所以这里不是"打开思考"，而是**把控制权交给用户**。
+ *
+ * ## 参数是怎么发的
+ *
+ * 官方给的 OpenAI 格式是：
+ *   - 开关：`{"thinking": {"type": "enabled" | "disabled"}}`
+ *   - 强度：`{"reasoning_effort": "low" | "high" | "max"}`
+ *
+ * [SERVER_DEFAULT] 一个参数都不发，完全跟着服务端的默认走。
+ * 另外：**思考模式下服务端会忽略 temperature**（官方原话：不报错但也不生效），
+ * 所以开着思考时我们干脆不传它。
+ *
+ * 注意这套是 DeepSeek 的参数名。别的服务商可能不认 —— 不认就改回
+ * [SERVER_DEFAULT]，那就一个额外参数都不发了。
+ */
+enum class ThinkingMode(
+    val id: String,
+    val label: String,
+    val note: String,
+    /** 发给服务端的 thinking.type；null 表示不发这个字段 */
+    val toggle: String?,
+    /** 发给服务端的 reasoning_effort；null 表示不发 */
+    val effort: String?,
+) {
+    SERVER_DEFAULT(
+        id = "default",
+        label = "跟随服务端默认",
+        note = "一个参数都不发。DeepSeek 的默认是「开着 + 强度 high」，也就是最贵但最准的一档",
+        toggle = null,
+        effort = null,
+    ),
+    OFF(
+        id = "off",
+        label = "关闭",
+        note = "不推理，直接给动作。最快最省，适合「点哪个按钮」这类简单判断",
+        toggle = "disabled",
+        effort = null,
+    ),
+    LOW(
+        id = "low",
+        label = "低",
+        note = "少量推理。速度接近关闭，遇到复杂界面比关闭更稳",
+        toggle = "enabled",
+        effort = "low",
+    ),
+    HIGH(
+        id = "high",
+        label = "高",
+        note = "充分推理。慢一些、贵一些，界面复杂或者要绕圈子时更靠谱",
+        toggle = "enabled",
+        effort = "high",
+    ),
+    MAX(
+        id = "max",
+        label = "最高",
+        note = "推理拉满。最慢最贵，只在你确认任务确实难的时候用",
+        toggle = "enabled",
+        effort = "max",
+    );
+
+    /**
+     * 是不是真的在做思维链。
+     *
+     * [SERVER_DEFAULT] 也算"可能在做" —— 因为 DeepSeek 的默认是开着的，
+     * 所以我们不能替它断言"没思考"。这个属性只用来决定**要不要传
+     * temperature**：只要可能在做思维链，传了也没用。
+     */
+    val thinkingOn: Boolean get() = this != OFF
+
+    companion object {
+        fun fromId(id: String?): ThinkingMode =
+            entries.firstOrNull { it.id == id } ?: SERVER_DEFAULT
+    }
+}
+
 /** 自动清空上下文的档位。0 表示从不自动清空。 */
 enum class AutoClear(val minutes: Int, val label: String) {
     NEVER(0, "不自动清空"),
@@ -61,6 +145,9 @@ data class AppSettings(
     val baseUrl: String = "https://api.deepseek.com",
     val apiKey: String = "",
     val modelName: String = "deepseek-flash",
+
+    /** 思考模式。默认跟服务端走，不改用户原来看到的行为 */
+    val thinking: ThinkingMode = ThinkingMode.SERVER_DEFAULT,
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,

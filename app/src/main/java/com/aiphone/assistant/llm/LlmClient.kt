@@ -1,5 +1,6 @@
 package com.aiphone.assistant.llm
 
+import com.aiphone.assistant.data.ThinkingMode
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -32,6 +33,13 @@ data class LlmConfig(
      * "看不清楚该点哪"时变得犹豫、反复输出同一个无效动作。
      */
     val temperature: Double = 1.0,
+    /**
+     * 思考模式。
+     *
+     * 官方文档：DeepSeek **默认就开着思考**（强度 high）。见 ThinkingMode ——
+     * 这里只是把控制权透传出去，`SERVER_DEFAULT` 表示一个参数都不发。
+     */
+    val thinking: ThinkingMode = ThinkingMode.SERVER_DEFAULT,
     val timeoutMs: Int = 120_000,
 )
 
@@ -231,7 +239,15 @@ class LlmClient(private val cfg: LlmConfig) {
         return JSONObject().apply {
             put("model", cfg.model)
             put("messages", messages)
-            put("temperature", cfg.temperature)
+            // 思考模式下服务端会忽略 temperature（官方：不报错，也不生效），
+            // 那就干脆不传 —— 免得用户以为调了它有用
+            if (!cfg.thinking.thinkingOn) {
+                put("temperature", cfg.temperature)
+            }
+            cfg.thinking.toggle?.let { toggle ->
+                put("thinking", JSONObject().put("type", toggle))
+            }
+            cfg.thinking.effort?.let { put("reasoning_effort", it) }
             put("stream", false)
         }
     }
@@ -315,5 +331,6 @@ class LlmClient(private val cfg: LlmConfig) {
     }
 
     /** 给连通性自检用的短描述 */
-    fun describe(): String = "模型=${cfg.model} 地址=${endpoint()} 精度=${cfg.detail}"
+    fun describe(): String =
+        "模型=${cfg.model} 地址=${endpoint()} 图片=${cfg.detail} 思考=${cfg.thinking.label}"
 }

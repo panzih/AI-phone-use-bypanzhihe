@@ -62,7 +62,16 @@ object ActionParser {
         val actions: List<TouchAction>,
         /** 模型要求看截图 */
         val needImage: Boolean,
+        /** 任务成功收尾 */
         val finished: Boolean,
+        /**
+         * 模型判断**做不下去**了（不是失败，是止损）。
+         *
+         * 和 [finished] 分开是必须的：把"做不成"报成"已完成"，用户会以为
+         * 事情办好了；而这两种情况该给他看的东西完全不同 ——
+         * 一个是结果，一个是"卡在哪、需要你做什么"。
+         */
+        val failed: Boolean = false,
         val summary: String,
         val raw: String,
         /**
@@ -113,8 +122,18 @@ object ActionParser {
         "screenshot", "screen_shot", "screencap", "look", "see", "view_image", "request_image",
     )
 
-    /** 这些"动作名"表示任务结束 */
-    private val FINISH_NAMES = setOf("finish", "done", "complete", "stop")
+    /** 这些"动作名"表示**成功**收尾 */
+    private val FINISH_NAMES = setOf("finish", "done", "complete", "success")
+
+    /**
+     * 这些"动作名"表示**做不下去**。
+     *
+     * `stop` 放在这里而不是上面：模型在半路说 stop，几乎都是"我不想继续试了"，
+     * 而不是"任务完成了"。报成成功会骗到用户。
+     */
+    private val FAIL_NAMES = setOf(
+        "fail", "failed", "give_up", "giveup", "abort", "blocked", "cannot", "cant", "stuck", "stop",
+    )
 
     fun parse(
         raw: String,
@@ -182,6 +201,10 @@ object ActionParser {
         val actions = ArrayList<TouchAction>()
         val notes = ArrayList<String>()
         var finished = obj.optBoolean("finished", false)
+        // failed 可以写在顶层，也可以当成数组里的一个"动作"
+        var failed = obj.optBoolean("failed", false) ||
+            obj.optBoolean("give_up", false) ||
+            obj.optBoolean("blocked", false)
 
         for ((i, item) in items.withIndex()) {
             val name = item.optString("action").trim().lowercase()
@@ -192,6 +215,10 @@ object ActionParser {
             }
             if (name in FINISH_NAMES) {
                 finished = true
+                continue
+            }
+            if (name in FAIL_NAMES) {
+                failed = true
                 continue
             }
             if (actions.size >= MAX_ACTIONS) {
@@ -205,11 +232,25 @@ object ActionParser {
             }
         }
 
-        // finish 也可能只写在 action 字段里
-        if (obj.optString("action").equals("finish", true) ||
-            obj.optString("action").equals("done", true)
-        ) {
-            finished = true
+        // finish / fail 也可能只写在 action 字段里
+        val topAction = obj.optString("action").trim().lowercase()
+        if (topAction == "finish" || topAction == "done") finished = true
+        if (topAction in FAIL_NAMES) failed = true
+
+        // failed 优先于 finished：两个都给了的话，宁可报"没做成"，
+        // 也不要谎报成功
+        if (failed) {
+            return Parsed(
+                thought = thought,
+                actions = emptyList(),
+                needImage = false,
+                finished = false,
+                failed = true,
+                summary = summary,
+                raw = raw,
+                nextHint = nextHint,
+                warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
+            )
         }
 
         if (finished) {
@@ -225,7 +266,14 @@ object ActionParser {
             val reason = notes.firstOrNull()
                 ?: "输出里既没有可用的 actions，也没有 need_image，也没有 use_skill。"
             return Parsed(
-                thought, emptyList(), false, false, summary, raw, nextHint, warning = reason,
+                thought = thought,
+                actions = emptyList(),
+                needImage = false,
+                finished = false,
+                summary = summary,
+                raw = raw,
+                nextHint = nextHint,
+                warning = reason,
             )
         }
 

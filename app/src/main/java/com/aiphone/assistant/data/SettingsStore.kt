@@ -22,6 +22,7 @@ class SettingsStore(context: Context) {
         baseUrl = sp.getString(KEY_BASE_URL, null) ?: DEFAULT.baseUrl,
         apiKey = sp.getString(KEY_API_KEY, null) ?: DEFAULT.apiKey,
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
+        thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
         mode = OperationMode.fromId(sp.getString(KEY_MODE, null)),
         maxSteps = sp.getInt(KEY_MAX_STEPS, DEFAULT.maxSteps),
         autoClearMinutes = sp.getInt(KEY_AUTO_CLEAR, DEFAULT.autoClearMinutes),
@@ -36,6 +37,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_BASE_URL, s.baseUrl)
             .putString(KEY_API_KEY, s.apiKey)
             .putString(KEY_MODEL, s.modelName)
+            .putString(KEY_THINKING, s.thinking.id)
             .putString(KEY_MODE, s.mode.id)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
             .putInt(KEY_AUTO_CLEAR, s.autoClearMinutes)
@@ -56,6 +58,7 @@ class SettingsStore(context: Context) {
         const val KEY_BASE_URL = "base_url"
         const val KEY_API_KEY = "api_key"
         const val KEY_MODEL = "model_name"
+        const val KEY_THINKING = "thinking_mode"
         const val KEY_MODE = "operation_mode"
         const val KEY_MAX_STEPS = "max_steps"
         const val KEY_AUTO_CLEAR = "auto_clear_minutes"

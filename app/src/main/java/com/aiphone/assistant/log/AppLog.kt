@@ -279,6 +279,7 @@ object AppLog {
         channelLabel: String,
         modelName: String,
         baseUrl: String,
+        thinkingLabel: String,
     ): List<String> = listOf(
         "应用版本：$appVersion",
         "系统    ：Android ${Build.VERSION.RELEASE}（API ${Build.VERSION.SDK_INT}）",
@@ -286,6 +287,7 @@ object AppLog {
         "操作通道：$channelLabel",
         "模型    ：$modelName",
         "接口地址：$baseUrl",
+        "思考模式：$thinkingLabel",
     )
 
     /**

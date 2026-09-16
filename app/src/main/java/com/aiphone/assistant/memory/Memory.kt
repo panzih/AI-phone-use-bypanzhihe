@@ -30,11 +30,12 @@ import java.util.Locale
  *   1. 用户自己能用任何编辑器看、改、删 —— 记忆不该是黑盒
  *   2. 可以整个目录丢进任何支持"知识库"的工具里
  *
- * ## 当前进度
+ * ## 两层记忆
  *
- * 落盘、读取、清理策略都做好了，**只差真正的 AI 分析那一步** ——
- * 那需要 LLM 客户端，属于下一步。所以 [InsightDistiller] 是个接口，
- * 现在是空实现，接上模型就能用，上层一行不用改。
+ *   [LlmDistiller]  模型归纳：任务结束后让 AI 提炼"以后还用得上的"
+ *   [RawDistiller]  原样转存：不调模型，只是别把内容丢了
+ *
+ * 前者是"学习"，后者是"不丢"，两个开关各管一件事。
  */
 
 /** 一轮对话。 */
@@ -180,9 +181,8 @@ object InsightStore {
 /**
  * 把上下文分析成洞察。
  *
- * 这一层是接口，因为实现要调大模型 —— 那是下一步的事。
- * 留成接口的意义在于：**上层的"什么时候该存""存到哪""怎么读回来"现在就是完整可用的**，
- * 接上模型只需实现这一个方法。
+ * 两个实现：调模型的 [LlmDistiller] 和原样转存的 [RawDistiller]。
+ * 留在接口后面是因为"什么时候该存""存到哪""怎么读回来"跟怎么归纳无关。
  */
 interface InsightDistiller {
     /**
@@ -213,5 +213,113 @@ class RawDistiller : InsightDistiller {
             }
         }
         return Insight(title = "上下文快照", markdown = body)
+    }
+}
+
+
+/**
+ * 让模型把操作记录归纳成一份「用户洞察」。
+ *
+ * ## 为什么值得多花一次模型调用
+ *
+ * 上下文里的东西 99% 是这一次任务的细节（"点了 3 号按钮""界面没变化"），
+ * 下次一点用都没有。真正该留下的是**跨任务成立的东西**：
+ * 你常用什么 App、你有哪些固定要求、这台机器上哪些页面有坑。
+ * 这需要判断力，不是 `grep` 能干的。
+ *
+ * ## 两个刻意的设计
+ *
+ * **入参截断。** 一次任务可能有几十轮、上万字符。全喂进去归纳一次要花不少钱，
+ * 而"最近的几轮"通常信息量最大（前面大多是重复的界面操作）。所以按
+ * [MAX_INPUT_CHARS] 从**尾部**往前截。
+ *
+ * **明确允许"没东西可记"。** 提示词里直接要求"没什么值得记的就只输出「无」"，
+ * 否则模型会为了交差硬编点什么出来 —— 那比没有记忆更糟，因为它会被当成事实
+ * 在以后的任务里使用。
+ */
+class LlmDistiller(
+    private val llm: com.aiphone.assistant.llm.LlmClient,
+) : InsightDistiller {
+
+    override suspend fun distill(turns: List<Turn>): Insight? {
+        if (turns.isEmpty()) return null
+
+        val transcript = buildString {
+            turns.forEach { t ->
+                val who = when (t.role) {
+                    Turn.Role.USER -> "用户"
+                    Turn.Role.AI -> "AI"
+                    Turn.Role.ACTION -> "动作"
+                }
+                appendLine("$who：${t.text}")
+            }
+        }
+        val clipped = if (transcript.length > MAX_INPUT_CHARS) {
+            "（前面省略了 ${transcript.length - MAX_INPUT_CHARS} 个字符的早期记录）\n" +
+                transcript.takeLast(MAX_INPUT_CHARS)
+        } else {
+            transcript
+        }
+
+        val result = llm.chat(
+            system = SYSTEM,
+            history = listOf(
+                com.aiphone.assistant.llm.ChatTurn(
+                    com.aiphone.assistant.llm.ChatTurn.USER,
+                    "下面是一次任务的操作记录：\n\n$clipped",
+                )
+            ),
+            imagePng = null,
+        )
+
+        val text = when (result) {
+            is com.aiphone.assistant.llm.LlmResult.Fail -> {
+                AppLog.w("归纳记忆失败：${result.message}", "记忆")
+                return null
+            }
+            is com.aiphone.assistant.llm.LlmResult.Ok -> result.text.trim()
+        }
+
+        // 模型判断没有值得记的
+        if (text.isBlank() || text == "无" || text.startsWith("无\n")) {
+            AppLog.i("这次没有值得沉淀的内容", "记忆")
+            return null
+        }
+
+        val lines = text.lines()
+        val title = lines.firstOrNull { it.isNotBlank() }
+            ?.trimStart('#', ' ', '-')
+            ?.take(24)
+            ?.ifBlank { null }
+            ?: "用户洞察"
+        val body = lines.drop(1).joinToString("\n").trim().ifBlank { text }
+
+        return Insight(title = title, markdown = body)
+    }
+
+    private companion object {
+        /** 喂给模型的记录上限（字符）。超出就从最早的部分砍掉 */
+        const val MAX_INPUT_CHARS = 6000
+
+        val SYSTEM = """
+你是"记忆整理助手"。用户在安卓手机上用 AI 操作手机，下面是一轮操作的记录。
+
+请从中提炼**以后还用得上的信息**，写成一份简短的 markdown。
+
+只写这几类：
+- 用户的偏好和习惯（例如「喜欢深色模式」「发消息后要确认一下」）
+- 常用应用及其包名（记录里出现过的）
+- 这台设备上的坑（例如「这个页面要等两秒才加载完」「那个按钮要点两次」）
+- 用户对任务的固定要求
+
+规则（很重要）：
+1. **只写记录里确实出现过的，绝不编造。** 宁可少写。
+2. 只写对**未来的操作**有用的。这次任务的具体结果（例如「打开了 WiFi」）
+   不用写 —— 那是已经完成的事，不是记忆。
+3. 用短句和列表，不要客套话，不要总结这次任务的经过。
+4. 没什么值得记的，就**只输出一个字：无**
+
+输出格式：第一行是一句话标题（不超过 15 字），第二行开始是正文。
+""".trimIndent()
     }
 }

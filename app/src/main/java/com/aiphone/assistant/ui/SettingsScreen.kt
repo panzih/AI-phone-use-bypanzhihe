@@ -69,6 +69,7 @@ import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.AutoClear
 import com.aiphone.assistant.data.OperationMode
+import com.aiphone.assistant.data.ThinkingMode
 
 /**
  * 设置页。
@@ -319,6 +320,18 @@ private fun ModelSection(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        DropdownRow(
+            title = stringResource(R.string.settings_model_thinking),
+            subtitle = s.thinking.note,
+            current = s.thinking,
+            options = ThinkingMode.entries.toList(),
+            optionLabel = { it.label },
+            onSelect = { onChange(s.copy(thinking = it)) },
+            horizontalPadding = 0.dp,
         )
 
         Spacer(Modifier.height(4.dp))

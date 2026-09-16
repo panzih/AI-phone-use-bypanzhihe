@@ -113,4 +113,5 @@ private const val TAG = "SkillRegistry"
  */
 private val DEFAULT_SKILLS: List<Skill> = listOf(
     AppListSkill,
+    MemorySkill,
 )
