@@ -3,6 +3,7 @@ package com.aiphone.assistant.agent
 import com.aiphone.assistant.touch.ScrollDirection
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -13,36 +14,53 @@ import org.json.JSONObject
  * 就算提示词里写"只输出 JSON"，模型实际会给你这些东西：
  *
  *   ```json
- *   {"action":"tap", ...}
+ *   {"actions":[{"action":"tap","index":3}]}
  *   ```
  *
  *   好的，我来帮你操作手机：
- *   {"action":"tap", ...}
+ *   {"actions":[...]}
  *
- *   {
- *     "thought": "...",
- *     "action": "shell",        ← 编出来的动作名
- *     ...
- *   }
+ *   {"action": "shell", ...}                  ← 编出来的动作名
  *
- *   {"action": "tap", "index": 3,   ← 截断了
+ *   {"actions":[{"action":"tap","index":3}    ← 截断了
  *
  * 所以流程是：剥围栏 → 提取第一个配平的花括号块 → 解析 →
- * 校验动作名在白名单里 → 校验并夹紧坐标。
- * **任何一步失败都不抛异常**，而是返回一个带 warning 的结果，
+ * 逐条校验动作名 / 参数 → 夹紧坐标和时长。
+ * **任何一步失败都不抛异常**，而是返回带 warning 的结果，
  * 由 Agent 决定是重试还是跳过。
+ *
+ * ## 这一版新增的两件事
+ *
+ * **1. `actions` 是数组。** 一轮可以给一批动作，按顺序执行。
+ * 内层每一条单独校验 —— **坏的那条丢掉，好的照常执行**，
+ * 而不是因为一条写错就整轮作废。丢掉的会在 warning 里说明并回灌给模型。
+ *
+ * **2. `need_image`。** 模型可以只要一张截图而不给动作。
+ * 这不算"没解析出动作"，Agent 会截图后重新问它一次。
  */
 object ActionParser {
+
+    /** 一轮最多执行多少个动作，防止模型给一条超长脚本 */
+    const val MAX_ACTIONS = 12
+
+    /** sleep 没写时长时用的默认值 */
+    const val DEFAULT_SLEEP_MS = 1500
+
+    /** 单次等待的上限，防止模型写出一个"等一小时"的手滑值 */
+    const val MAX_SLEEP_MS = 60_000
 
     /**
      * 解析结果。
      *
-     * [action] 为 null 且 [finished] 为 false 时，说明这一轮没解析出可用动作，
-     * 看 [warning] 里的原因。
+     * [actions] 为空且 [finished] 和 [needImage] 都是 false 时，
+     * 说明这一轮没解析出可用动作，看 [warning] 里的原因。
      */
     data class Parsed(
         val thought: String?,
-        val action: TouchAction?,
+        /** 按顺序执行的动作列表。sleep 也是其中一个元素（kind = WAIT） */
+        val actions: List<TouchAction>,
+        /** 模型要求看截图 */
+        val needImage: Boolean,
         val finished: Boolean,
         val summary: String,
         val raw: String,
@@ -53,6 +71,7 @@ object ActionParser {
          * 觉得不对就能按急停 —— 而不是事后才发现点错了。
          */
         val nextHint: String = "",
+        /** 非致命的问题说明（某些动作被丢掉了之类），会回灌给模型 */
         val warning: String? = null,
     )
 
@@ -64,7 +83,9 @@ object ActionParser {
         put("press", TouchKind.TAP)
         put("longpress", TouchKind.LONG_PRESS)
         put("long-click", TouchKind.LONG_PRESS)
+        put("longclick", TouchKind.LONG_PRESS)
         put("doubleclick", TouchKind.DOUBLE_TAP)
+        put("double-click", TouchKind.DOUBLE_TAP)
         put("swipe_up", TouchKind.SCROLL)
         put("swipe_down", TouchKind.SCROLL)
         put("back", TouchKind.KEY_BACK)
@@ -74,7 +95,16 @@ object ActionParser {
         put("input", TouchKind.INPUT_TEXT)
         put("launch_app", TouchKind.OPEN_APP)
         put("sleep", TouchKind.WAIT)
+        put("delay", TouchKind.WAIT)
     }
+
+    /** 这些"动作名"其实是"我要看截图"，不是真动作 */
+    private val IMAGE_REQUESTS = setOf(
+        "screenshot", "screen_shot", "screencap", "look", "see", "view_image", "request_image",
+    )
+
+    /** 这些"动作名"表示任务结束 */
+    private val FINISH_NAMES = setOf("finish", "done", "complete", "stop")
 
     fun parse(
         raw: String,
@@ -84,7 +114,8 @@ object ActionParser {
         val json = extractJson(raw)
             ?: return Parsed(
                 thought = null,
-                action = null,
+                actions = emptyList(),
+                needImage = false,
                 finished = false,
                 summary = "",
                 raw = raw,
@@ -96,7 +127,8 @@ object ActionParser {
         } catch (t: Throwable) {
             return Parsed(
                 thought = null,
-                action = null,
+                actions = emptyList(),
+                needImage = false,
                 finished = false,
                 summary = "",
                 raw = raw,
@@ -111,97 +143,165 @@ object ActionParser {
             .map { obj.optString(it, "") }
             .firstOrNull { it.isNotBlank() }
             .orEmpty()
-        val finished = obj.optBoolean("finished", false) ||
-            obj.optString("action").equals("finish", true) ||
+
+        // 要截图：可以写在顶层，也可以当成数组里的一个"动作"
+        var needImage = obj.optBoolean("need_image", false) ||
+            obj.optBoolean("need_screenshot", false) ||
+            obj.optBoolean("needShot", false)
+
+        // ---- 收集原始动作条目 ----
+        val items = ArrayList<JSONObject>()
+        val arr: JSONArray? = obj.optJSONArray("actions")
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                arr.optJSONObject(i)?.let { items.add(it) }
+            }
+        } else if (obj.has("action")) {
+            // 兼容旧格式：单个动作直接写在顶层
+            items.add(obj)
+        }
+
+        // ---- 逐条解析 ----
+        val actions = ArrayList<TouchAction>()
+        val notes = ArrayList<String>()
+        var finished = obj.optBoolean("finished", false)
+
+        for ((i, item) in items.withIndex()) {
+            val name = item.optString("action").trim().lowercase()
+
+            if (name in IMAGE_REQUESTS) {
+                needImage = true
+                continue
+            }
+            if (name in FINISH_NAMES) {
+                finished = true
+                continue
+            }
+            if (actions.size >= MAX_ACTIONS) {
+                notes.add("动作太多（给了 ${items.size} 个），只执行了前 $MAX_ACTIONS 个。")
+                break
+            }
+
+            val problem = parseOne(item, name, actions, screenWidth, screenHeight)
+            if (problem != null) {
+                notes.add("第 ${i + 1} 个动作被丢弃：$problem")
+            }
+        }
+
+        // finish 也可能只写在 action 字段里
+        if (obj.optString("action").equals("finish", true) ||
             obj.optString("action").equals("done", true)
+        ) {
+            finished = true
+        }
 
         if (finished) {
-            return Parsed(thought, null, true, summary, raw, nextHint)
-        }
-
-        val actionName = obj.optString("action").trim().lowercase()
-        if (actionName.isBlank()) {
             return Parsed(
-                thought, null, false, summary, raw, nextHint,
-                warning = "JSON 里没有 action 字段。",
+                thought, emptyList(), needImage = false, finished = true,
+                summary = summary, raw = raw, nextHint = nextHint,
+                warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
             )
         }
 
-        val kind = ALIASES[actionName]
-            ?: return Parsed(
-                thought, null, false, summary, raw, nextHint,
-                warning = "动作「$actionName」不在支持列表里，已忽略。" +
-                    "可用动作：${TouchKind.entries.joinToString("/") { it.id }}",
+        // 既没动作也不要图 —— 这一轮等于空转，把原因回灌给模型
+        if (actions.isEmpty() && !needImage) {
+            val reason = notes.firstOrNull()
+                ?: "输出里既没有可用的 actions，也没有把 need_image 设为 true。"
+            return Parsed(
+                thought, emptyList(), false, false, summary, raw, nextHint, warning = reason,
             )
-
-        // ---- 参数 ----
-        val index = obj.optInt("index", 0)
-        val x = clamp(obj.optInt("x", 0), screenWidth)
-        val y = clamp(obj.optInt("y", 0), screenHeight)
-        val x2 = clamp(obj.optInt("x2", 0), screenWidth)
-        val y2 = clamp(obj.optInt("y2", 0), screenHeight)
-        val duration = obj.optInt("duration_ms", obj.optInt("duration", 0))
-        val text = obj.optString("text", obj.optString("content", ""))
-        val pkg = obj.optString("package", obj.optString("package_name", ""))
-
-        // 方向：模型可能写在 direction 里，也可能写在 action 名里（swipe_up）
-        val direction = ScrollDirection.fromId(obj.optString("direction", "").ifBlank {
-            when (actionName) {
-                "swipe_up" -> "up"
-                "swipe_down" -> "down"
-                else -> null
-            }
-        })
-
-        // ---- 校验：这个动作能不能执行 ----
-        val problem = validate(kind, index, x, y, text, pkg)
-        if (problem != null) {
-            return Parsed(thought, null, false, summary, raw, nextHint, warning = problem)
         }
 
-        val action = TouchAction(
-            kind = kind,
-            targetIndex = if (index > 0) index else 0,
-            x = x, y = y, x2 = x2, y2 = y2,
-            durationMs = duration,
-            direction = direction,
-            text = text,
-            packageName = pkg,
+        return Parsed(
+            thought = thought,
+            actions = actions,
+            needImage = needImage,
+            finished = false,
+            summary = summary,
+            raw = raw,
+            nextHint = nextHint,
+            warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
         )
-        return Parsed(thought, action, false, summary, raw, nextHint)
     }
 
     /**
-     * 这个动作缺不缺必需参数。
+     * 解析一条动作，成功就 append 进 [out]，返回 null；
+     * 失败返回给模型看的原因。
      *
-     * 缺参数时**不能**硬执行 —— 比如 tap 没有 index 也没有坐标，
-     * 执行下去就是点 (0,0)，会误触左上角。宁可让模型重出一遍。
+     * 时长和坐标都在这里夹紧 —— 越界的值一定是模型手滑，
+     * 直接照着执行会点到界面外面去。
      */
-    private fun validate(
-        kind: TouchKind,
-        index: Int,
-        x: Int,
-        y: Int,
-        text: String,
-        pkg: String,
-    ): String? = when (kind) {
-        TouchKind.TAP, TouchKind.LONG_PRESS, TouchKind.DOUBLE_TAP ->
-            if (index <= 0 && (x <= 0 || y <= 0)) {
-                "「${kind.label}」既没给 index 也没给有效的 x/y，无法执行。"
-            } else null
+    private fun parseOne(
+        item: JSONObject,
+        actionName: String,
+        out: MutableList<TouchAction>,
+        screenWidth: Int,
+        screenHeight: Int,
+    ): String? {
+        if (actionName.isBlank()) return "没有 action 字段"
 
-        TouchKind.SWIPE, TouchKind.FLICK, TouchKind.DRAG ->
-            if (x <= 0 || y <= 0) {
-                "「${kind.label}」缺少起点坐标 x/y。"
-            } else null
+        val kind = ALIASES[actionName]
+            ?: return "动作「$actionName」不在支持列表里（可用：" +
+                TouchKind.entries.joinToString("/") { it.id } + "）"
 
-        TouchKind.INPUT_TEXT ->
-            if (text.isBlank()) "「输入文字」的 text 是空的。" else null
+        val index = item.optInt("index", 0)
+        val x = clamp(item.optInt("x", 0), screenWidth)
+        val y = clamp(item.optInt("y", 0), screenHeight)
+        val x2 = clamp(item.optInt("x2", 0), screenWidth)
+        val y2 = clamp(item.optInt("y2", 0), screenHeight)
+        val duration = item.optInt("duration_ms", item.optInt("duration", 0))
+        val text = item.optString("text", item.optString("content", ""))
+        val pkg = item.optString("package", item.optString("package_name", ""))
 
-        TouchKind.OPEN_APP ->
-            if (pkg.isBlank()) "「打开应用」缺少 package 包名。" else null
+        // 方向：模型可能写在 direction 里，也可能写在 action 名里（swipe_up）
+        val direction = ScrollDirection.fromId(
+            item.optString("direction", "").ifBlank {
+                when (actionName) {
+                    "swipe_up" -> "up"
+                    "swipe_down" -> "down"
+                    else -> null
+                }
+            }
+        )
 
-        else -> null
+        // ---- 校验：这条动作缺不缺必需参数 ----
+        val problem = when (kind) {
+            TouchKind.TAP, TouchKind.LONG_PRESS, TouchKind.DOUBLE_TAP ->
+                if (index <= 0 && (x <= 0 || y <= 0)) {
+                    "「${kind.label}」既没给 index 也没给有效的 x/y"
+                } else null
+
+            TouchKind.SWIPE, TouchKind.FLICK, TouchKind.DRAG ->
+                if (x <= 0 || y <= 0) "「${kind.label}」缺少起点坐标 x/y" else null
+
+            TouchKind.INPUT_TEXT ->
+                if (text.isBlank()) "「输入文字」的 text 是空的" else null
+
+            TouchKind.OPEN_APP ->
+                if (pkg.isBlank()) "「打开应用」缺少 package 包名" else null
+
+            else -> null
+        }
+        if (problem != null) return problem
+
+        // sleep 没写时长就按默认值处理（不算错，不用回灌）
+        val ms = when (kind) {
+            TouchKind.WAIT -> duration.takeIf { it > 0 } ?: DEFAULT_SLEEP_MS
+            else -> duration
+        }.coerceIn(0, MAX_SLEEP_MS)
+
+        out.add(
+            TouchAction(
+                kind = kind,
+                targetIndex = if (index > 0) index else 0,
+                x = x, y = y, x2 = x2, y2 = y2,
+                durationMs = ms,
+                direction = direction,
+                text = text,
+                packageName = pkg,
+            )
+        )
+        return null
     }
 
     private fun clamp(v: Int, max: Int): Int = when {

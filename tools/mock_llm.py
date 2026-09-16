@@ -2,13 +2,28 @@
 """
 假的 OpenAI 兼容服务，用来端到端验证纸盒的 AI 循环。
 
-它按顺序返回一串预设动作，模拟"模型在一步步操作手机"：
+它按顺序返回一串预设回复，专门覆盖新协议的边界情况：
 
-    第1轮  tap 编号[2]      —— 故意带 markdown 围栏，验证防御性解析
-    第2轮  scroll down      —— 验证不需要坐标的滚动
-    第3轮  tap 坐标(540,1200) —— 验证坐标式点击
-    第4轮  编了个假动作      —— 验证白名单拦截（应该被拒绝并重试）
-    第5轮  finished=true    —— 验证正常收尾
+    第1轮  一批 3 个动作（点 2 → 显式 sleep 10s → 点 5）
+           —— 验证"一轮一批动作"，以及显式 sleep 顶掉默认间隔
+    第2轮  need_image=true（不给动作）
+           —— 验证按需截图：这一轮之后系统应该带着图再问一次，
+              而且这次请求**不算新的一步**
+    第3轮  旧的单动作格式（action 直接写在顶层）
+           —— 验证向后兼容
+    第4轮  连点两次 + 中间 sleep 1ms
+           —— 模拟双击
+    第5轮  actions 里混一个编造的动作名（shell）和一个合法动作
+           —— 验证白名单：坏的那条丢掉、好的照常执行
+    第6轮  坐标越界
+           —— 验证夹紧
+    第7轮  finished=true
+           —— 验证正常收尾
+
+关键看服务端这边的两行输出：
+
+    带图的消息: N   ← 第 1 轮必须是 0（默认不发图），第 2 轮之后才会出现 > 0
+    前缀复用  : X / Y 条   ✅ 前缀完整保留
 
 跑起来：
 
@@ -20,8 +35,16 @@
 
 import json
 import os
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# 默认 stdout 是块缓冲的，日志会卡在缓冲区里看不见 ——
+# 排查问题时最想看的恰好是最后那几行，所以改成行缓冲。
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 PORT = 8765
 
@@ -30,32 +53,50 @@ PORT = 8765
 #     MOCK_DELAY=2 python3 tools/mock_llm.py
 DELAY = float(os.environ.get("MOCK_DELAY", "0"))
 
-# 每一轮要回的动作。最后一个发完就停在 finished 上。
+# 每一轮要回的回复。最后一个发完就停在 finished 上。
 SCRIPTED = [
-    # 1) 带 markdown 围栏 —— 模型最常干的事。
-    #    next_hint 是给用户看的"下一步预告"，会显示在悬浮窗左上角。
-    "```json\n"
-    '{"thought": "界面上有个设置按钮，先点它", "action": "tap", "index": 2,'
-    ' "next_hint": "在设置里找到网络和互联网", "finished": false}\n'
-    "```",
+    # 1) 一轮一批动作，中间夹一个显式 sleep。
+    #    预期：点 2 → 等 10 秒（而不是 10+1.5 秒）→ 点 5 → 等 1.5 秒 → 下一轮
+    '{"thought": "先点设置，等页面加载完，再点网络和互联网",'
+    ' "next_hint": "在设置里找到网络和互联网",'
+    ' "need_image": false,'
+    ' "actions": ['
+    '   {"action": "tap", "index": 2},'
+    '   {"action": "sleep", "duration_ms": 10000},'
+    '   {"action": "tap", "index": 5}'
+    ' ], "finished": false}',
 
-    # 2) 滚动，不给坐标
-    '{"thought": "列表还有更多内容，往下滚", "action": "scroll", "direction": "down",'
-    ' "next_hint": "点进 WiFi 那一项", "finished": false}',
+    # 2) 控件树说不清这一屏，要一张截图。
+    #    预期：系统截图后**立刻重发**一次请求（消息数 +2），这次带图
+    '{"thought": "界面元素看不出来这是什么页面，要一张截图确认",'
+    ' "next_hint": "确认当前页面", "need_image": true, "actions": []}',
 
-    # 3) 坐标式点击
-    '{"thought": "用坐标点一下屏幕中间", "action": "tap", "x": 540, "y": 1200,'
-    ' "next_hint": "确认 WiFi 开关的状态", "finished": false}',
+    # 3) 看完图之后给动作。顺便用**旧的单动作格式 + markdown 围栏**，
+    #    验证防御性解析和向后兼容
+    '```json\n'
+    '{"thought": "看清楚了，是设置页，点第一个可点元素", "action": "tap", "index": 4,'
+    ' "next_hint": "打开 WiFi 设置", "finished": false}\n'
+    '```',
 
-    # 4) 编造的动作名 —— 必须被白名单拦下
-    '{"thought": "我要执行一个不存在的动作", "action": "shell", "command": "rm -rf /",'
-    ' "next_hint": "这一步不该执行", "finished": false}',
+    # 4) 连点两次同一个元素，中间只等 1ms —— 模拟双击
+    '{"thought": "双击放大这个区域", "next_hint": "确认放大结果", "finished": false,'
+    ' "actions": [{"action": "tap", "index": 7},'
+    '             {"action": "sleep", "duration_ms": 1},'
+    '             {"action": "tap", "index": 7}]}',
 
-    # 5) 坐标越界 —— 验证夹紧
-    '{"thought": "点一个超出屏幕的坐标", "action": "tap", "x": 99999, "y": -50,'
-    ' "next_hint": "这一步也不该执行", "finished": false}',
+    # 5) 一条编造的动作用 + 一条合法的。
+    #    预期：shell 被丢掉并回灌给模型，合法的 tap 照常执行
+    '{"thought": "混一个不存在的动作进去", "next_hint": "只应该执行点击", "finished": false,'
+    ' "actions": ['
+    '   {"action": "shell", "command": "rm -rf /"},'
+    '   {"action": "scroll", "direction": "down"}'
+    ' ]}',
 
-    # 6) 收尾
+    # 6) 坐标越界 —— 验证夹紧
+    '{"thought": "点一个超出屏幕的坐标", "next_hint": "这一步不该执行", "finished": false,'
+    ' "actions": [{"action": "tap", "x": 99999, "y": -50}]}',
+
+    # 7) 收尾
     '{"thought": "做完了", "action": "", "finished": true, "summary": "全部步骤执行完毕，链路验证通过"}',
 ]
 

@@ -8,6 +8,7 @@ import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.RunLogger
 import com.aiphone.assistant.overlay.AgentPhase
 import com.aiphone.assistant.overlay.OverlayBus
+import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -18,32 +19,32 @@ import java.security.MessageDigest
  * AI 决策循环。
  *
  * ```
- *   截图 + 控件树 ──→ 模型 ──→ 解析动作 ──→ 执行 ──→ 等一会儿 ──┐
- *        ↑                                                      │
- *        └──────────────────────────────────────────────────────┘
+ *   控件树 ──→ 模型 ──→ 一批动作 ──→ 逐个执行（中间补默认间隔）──┐
+ *     ↑                                                        │
+ *     └────────────────────────────────────────────────────────┘
+ *              ↑ 只有模型主动要求时才加一张截图
  * ```
  *
- * ## 三个必须做的防护
+ * ## 与上一版的三处不同
  *
- * **1. 画面没变 = 上一步没用。**
- * 纯视觉方案最典型的失败是"反复点同一个点"。这里对每张截图算哈希，
- * 连续几步画面完全一样就直接在下一轮的提示里点破它，
- * 逼模型换策略。光靠 max_steps 拦不住这种情况 —— 30 步全点在同一个
- * 没反应的位置，钱花了、事没办。
+ * **1. 默认不再每步发截图。**
+ * 一张 1080x2400 的 PNG base64 之后一两兆，是整条链路里最贵的东西。
+ * 控件树已经能给出精确的元素编号，截图只在"这一屏说不清是什么"时
+ * 才有价值 —— 所以改成由模型自己用 `need_image` 要。
  *
- * **2. 同一个动作重复 = 死循环。**
- * 画面哈希会被动画干扰（时钟、加载圈），所以再加一道动作签名比对。
+ * **2. 一轮执行一批动作。**
+ * 模型一次给出若干个动作，中间自动补默认间隔（[AgentPrompt.DEFAULT_GAP_MS]）；
+ * 模型显式写了 sleep 就完全不补，用它的值。往返次数因此大幅下降。
  *
- * **3. 历史不带图。**
- * 只有当前这一轮的截图会发给模型，历史全是文本摘要。
- * 30 步每步带一张 1080×2400 的截图，token 量会翻好几倍 ——
- * Roubao 的教训是三角色 + 每步双图，一章游戏关卡花了 $7。
+ * **3. 防死循环改用控件树指纹。**
+ * 原来比的是截图 MD5，现在默认没有截图可比了 —— 控件树文本没变
+ * 同样说明"上一个动作没生效"，而且比截图更准（没有动画、时钟干扰）。
  *
  * ## 关于"自己拍自己"
  *
- * 无障碍截图抓的是整块物理屏。控制应用自己在前台时，
- * 截到的就是纸盒自己的界面，模型会对着它操作 —— 必然出错。
- * 所以循环开始前会检查前台包名，是我们就先按一下回桌面。
+ * 无障碍读的是当前活动窗口，控制应用自己在前台时读到的是纸盒自己的界面，
+ * 模型会对着它操作。所以循环开始前会检查前台包名，是我们就先按一下回桌面。
+ * 另外控件树解析时会**按包名过滤掉我们自己的节点**，双保险。
  */
 class Agent(
     private val controller: ChannelController,
@@ -83,7 +84,7 @@ class Agent(
     /**
      * 上下文缓存的命中情况。
      *
-     * 这个数字值得盯着：本轮对话是**严格追加**的，所以从第 2 步开始，
+     * 本轮对话是**严格追加**的，所以从第 2 步开始，
      * 系统提示词和前面所有轮次都应该命中缓存。
      * 如果稳定是 0，说明前缀被打断了 —— 先查是不是有人往 history 里
      * 塞了和实际发送内容不一致的东西。
@@ -100,31 +101,32 @@ class Agent(
         }
         logger?.line("通道就绪：${settings.mode.label}", "通道")
 
-        val size = controller.screenSize()
-        val w = size?.first ?: 0
-        val h = size?.second ?: 0
+        var w = 0
+        var h = 0
+        controller.screenSize()?.let { if (it.first > 0 && it.second > 0) { w = it.first; h = it.second } }
         if (w <= 0 || h <= 0) {
             fail("拿不到屏幕分辨率，无法把模型给的坐标换算成真实位置。", "通道")
             return
         }
         logger?.line("屏幕：${w} x ${h}", "通道")
         logger?.line(llm.describe(), "模型")
+        logger?.line("默认不发截图，模型用 need_image 主动要", "模型")
         logger?.line(if (OverlayBus.isShowing) "悬浮窗已就绪" else "悬浮窗未启动（缺权限或未开）", "悬浮")
 
         // ---- 2. 别拍到自己 ----
         ensureNotSelfForeground()
 
         // ---- 3. 开跑 ----
-        val system = AgentPrompt.system(w, h)
+        val system = AgentPrompt.system()
         val history = mutableListOf<ChatTurn>()
 
-        var lastHash = 0
-        var sameFrame = 0
-        var lastActionSig = ""
+        var lastTreeHash = 0
+        var sameTree = 0
+        var lastSig = ""
         var repeatAction = 0
 
-        // 上一步的执行结果。它会拼进**下一条** user 消息里，
-        // 而不是单独发一条 —— 见下面 history.add 处的说明。
+        // 上一批动作的执行结果。它会拼进**下一条** user 消息里，
+        // 而不是单独发一条 —— 这样整条对话是严格追加，缓存才命中得了。
         var lastResult: String? = null
 
         for (step in 1..maxSteps) {
@@ -137,200 +139,232 @@ class Agent(
             logger?.section("第 $step / $maxSteps 步")
 
             // ---- 看一眼 ----
-            // 先把悬浮窗藏起来再截屏。无障碍截图抓的是整块物理屏，
-            // 悬浮窗不藏的话会出现在图里 —— 模型会把"急停按钮"
-            // 当成界面元素去点它。
-            //
-            // 注：这一段的"截图中"状态基本看不到 —— 状态卡刚写上就被
-            // 藏起来了。这是隐藏策略的必然代价，不是 bug。
-            OverlayBus.setPhase(AgentPhase.SCREENSHOT)
-            OverlayBus.hide()
-            delay(OVERLAY_SETTLE_MS)
+            // 分辨率每步重读：横竖屏切换、部分 ROM 的游戏模式都会改它
+            controller.screenSize()?.let {
+                if (it.first > 0 && it.second > 0) { w = it.first; h = it.second }
+            }
+            val foreground = withContext(Dispatchers.IO) { controller.currentPackage() }
 
+            // 读控件树。这次**不藏悬浮窗** —— 我们自己的节点已经在
+            // 解析层按包名过滤掉了，没必要为它闪一下。
             val tree = withContext(Dispatchers.IO) { controller.readUiTree() }
             val nodeCount = tree?.lines()?.count { it.isNotBlank() } ?: 0
             logger?.line("控件树：$nodeCount 个元素", "UI")
 
-            val shot = withContext(Dispatchers.IO) { controller.captureFrame() }
-            OverlayBus.show()
-            if (shot == null || shot.isEmpty()) {
-                // 截图失败不该直接终止 —— 但这一轮没有画面，模型没法判断。
-                // 记下来，继续下一轮试试。
-                logger?.error("截图失败，跳过本轮", "截图")
-                listener.onEvent(EventKind.ERROR, "截图失败，跳过本轮", "截图")
-                delay(1500)
-                continue
-            }
-            logger?.line("截图：${w}x$h，${shot.size} 字节", "截图")
-            logger?.saveScreenshot(step, shot)
+            // ---- 界面变了没有 ----
+            // 用控件树文本的指纹，不再依赖截图（默认没有截图了）
+            val treeHash = if (tree.isNullOrBlank()) 0 else md5(tree.toByteArray())
+            if (treeHash != 0 && treeHash == lastTreeHash) sameTree++ else sameTree = 0
+            if (treeHash != 0) lastTreeHash = treeHash
 
-            // ---- 画面变了没有 ----
-            val hash = md5(shot)
-            if (hash == lastHash) sameFrame++ else sameFrame = 0
-            lastHash = hash
-
-            // ---- 拼提示 ----
             val interruptions = buildList {
-                if (sameFrame >= 2) {
+                if (sameTree >= 2) {
                     add(
-                        "画面已经连续 $sameFrame 步没有任何变化，说明你上一个动作**没有生效**。" +
+                        "界面元素和上一步完全一样，说明你上一批动作**没有生效**。" +
                             "不要再用同样的方式。换一个元素编号，或者换一种动作。"
                     )
                 }
                 if (repeatAction >= 2) {
                     add(
-                        "你已经连续 $repeatAction 次输出同一个动作了，它显然不work。" +
-                            "这一步必须换一个完全不同的动作。"
+                        "你已经连续 $repeatAction 次给出同一批动作了，它显然不起作用。" +
+                            "这一次必须换一个完全不同的做法。"
                     )
                 }
             }.joinToString("\n")
 
-            val userText = AgentPrompt.stepMessage(
-                step = step,
-                maxSteps = maxSteps,
-                task = task,
-                uiTree = tree,
-                interruption = interruptions.ifBlank { null },
-                lastResult = lastResult,
-            )
+            // ---- 问模型（可能要图，可能来回几次）----
+            var parsed: ActionParser.Parsed? = null
+            var modelOutput = ""
+            var imageRequests = 0
+            var pendingImage: ByteArray? = null
+            var imageNote: String? = null
 
-            // ⚠️ 必须把**实际发出去的这条文本**原样追加进 history。
-            //
-            // 之前的写法是：发出去的 user 消息（含控件树）从不入历史，
-            // 只在事后补一条 "第 N 步执行结果：已执行"。
-            // 后果是对话从系统提示词之后就开始分叉 ——
-            // 下一次请求的第一条 user 消息和上一次的完全不同，
-            // **前缀匹配直接断掉，缓存命中率是 0**。
-            //
-            // 改成原样追加之后，整条对话变成严格递增：
-            //     [system][user1][assistant1][user2][assistant2]...
-            // 前缀永不变动，缓存才能一直命中。
-            history.add(ChatTurn(ChatTurn.USER, userText))
-
-            // ---- 问模型 ----
-            listener.onEvent(EventKind.THOUGHT, "正在请求模型 ...", "第 $step 步")
-            val callStart = System.currentTimeMillis()
-            OverlayBus.setPhase(AgentPhase.UPLOADING)
-            // 注意：userText 在这之前已经追加进 history 了，
-            // 这里只多传一张图 —— history 就是实际发出去的内容。
-            val result = withContext(Dispatchers.IO) {
-                llm.chat(system, history, shot) {
-                    // 请求体传完了，接下来是等服务端算
-                    OverlayBus.setPhase(AgentPhase.WAITING_MODEL)
-                }
-            }
-            val elapsed = System.currentTimeMillis() - callStart
-
-            when (result) {
-                is LlmResult.Fail -> {
-                    logger?.error("模型调用失败：${result.message}", "模型")
-                    fail(result.message, "模型出错")
+            ask@ while (true) {
+                if (isStopped()) {
+                    finish(false, "你停止了任务（第 $step 步，模型调用前）")
                     return
                 }
 
-                is LlmResult.Ok -> {
-                    promptTokens += result.promptTokens
-                    completionTokens += result.completionTokens
-                    cacheHitTokens += result.cacheHitTokens
-                    cacheMissTokens += result.cacheMissTokens
+                val userText = AgentPrompt.stepMessage(
+                    step = step,
+                    maxSteps = maxSteps,
+                    task = task,
+                    screenWidth = w,
+                    screenHeight = h,
+                    foregroundPackage = foreground,
+                    uiTree = tree,
+                    interruption = interruptions.ifBlank { null },
+                    lastResult = lastResult,
+                    imageNote = imageNote,
+                )
 
-                    // ---- 上下文长度兜底 ----
-                    // 上下文不裁剪了，所以得防着撑爆模型窗口。
-                    // 用服务端返回的真实 prompt_tokens，比本地估算准。
-                    if (result.promptTokens >= CONTEXT_STOP_TOKENS) {
-                        val msg = "上下文已经 ${result.promptTokens} token，接近模型上限，" +
-                            "为避免请求被拒先停下。开个新任务继续吧。"
-                        logger?.error(msg, "上下文")
-                        listener.onEvent(EventKind.ERROR, msg, "上下文过长")
-                        finish(false, msg)
+                // ⚠️ 必须把**实际发出去的这条文本**原样追加进 history。
+                // 发一套记另一套会让前缀从那一轮断开，缓存命中率恒为 0。
+                history.add(ChatTurn(ChatTurn.USER, userText))
+
+                listener.onEvent(EventKind.THOUGHT, "正在请求模型 ...", "第 $step 步")
+                val callStart = System.currentTimeMillis()
+                OverlayBus.setPhase(AgentPhase.UPLOADING)
+                val result = withContext(Dispatchers.IO) {
+                    llm.chat(system, history, pendingImage) {
+                        // 请求体传完了，接下来是等服务端算
+                        OverlayBus.setPhase(AgentPhase.WAITING_MODEL)
+                    }
+                }
+                val elapsed = System.currentTimeMillis() - callStart
+
+                when (result) {
+                    is LlmResult.Fail -> {
+                        logger?.error("模型调用失败：${result.message}", "模型")
+                        fail(result.message, "模型出错")
                         return
                     }
-                    if (result.promptTokens >= CONTEXT_WARN_TOKENS) {
-                        logger?.warn(
-                            "上下文已到 ${result.promptTokens} token，快满了",
-                            "上下文",
+
+                    is LlmResult.Ok -> {
+                        promptTokens += result.promptTokens
+                        completionTokens += result.completionTokens
+                        cacheHitTokens += result.cacheHitTokens
+                        cacheMissTokens += result.cacheMissTokens
+
+                        // ---- 上下文长度兜底 ----
+                        // 上下文不裁剪（缓存按前缀匹配），所以得防着撑爆模型窗口。
+                        // 用服务端返回的真实 prompt_tokens，比本地估算准。
+                        if (result.promptTokens >= CONTEXT_STOP_TOKENS) {
+                            val msg = "上下文已经 ${result.promptTokens} token，接近模型上限，" +
+                                "为避免请求被拒先停下。开个新任务继续吧。"
+                            logger?.error(msg, "上下文")
+                            listener.onEvent(EventKind.ERROR, msg, "上下文过长")
+                            finish(false, msg)
+                            return
+                        }
+                        if (result.promptTokens >= CONTEXT_WARN_TOKENS) {
+                            logger?.warn("上下文已到 ${result.promptTokens} token，快满了", "上下文")
+                        }
+                        logger?.line(
+                            "模型返回 ${elapsed}ms，token：输入 ${result.promptTokens} / " +
+                                "输出 ${result.completionTokens}" +
+                                "（缓存命中 ${result.cacheHitTokens} / " +
+                                "未命中 ${result.cacheMissTokens}）" +
+                                if (pendingImage != null) "（本轮带图）" else "",
+                            "模型",
                         )
-                    }
-                    logger?.line(
-                        "模型返回 ${elapsed}ms，token：输入 ${result.promptTokens} / " +
-                            "输出 ${result.completionTokens}" +
-                            "（缓存命中 ${result.cacheHitTokens} / " +
-                            "未命中 ${result.cacheMissTokens}）",
-                        "模型",
-                    )
-                    logger?.section("模型原始输出")
-                    result.text.lines().forEach { logger?.line("  $it") }
+                        logger?.section("模型原始输出")
+                        result.text.lines().forEach { logger?.line("  $it") }
 
-                    val parsed = ActionParser.parse(result.text, w, h)
-                    parsed.thought?.let {
-                        logger?.line("思考：$it", "模型")
-                        listener.onEvent(EventKind.THOUGHT, it, "第 $step 步 · 思考")
-                    }
+                        val p = ActionParser.parse(result.text, w, h)
+                        p.thought?.let {
+                            logger?.line("思考：$it", "模型")
+                            listener.onEvent(EventKind.THOUGHT, it, "第 $step 步 · 思考")
+                        }
 
-                    // ---- 任务完成？ ----
-                    if (parsed.finished) {
-                        val summary = parsed.summary.ifBlank { "模型判断任务已完成" }
-                        logger?.line("任务结束：$summary", "任务")
-                        listener.onEvent(EventKind.RESULT, summary, "完成")
-                        finish(true, summary)
+                        // ---- 任务完成？ ----
+                        if (p.finished) {
+                            val summary = p.summary.ifBlank { "模型判断任务已完成" }
+                            logger?.line("任务结束：$summary", "任务")
+                            listener.onEvent(EventKind.RESULT, summary, "完成")
+                            finish(true, summary)
+                            return
+                        }
+
+                        // ---- 模型要截图 ----
+                        if (p.needImage && imageRequests < MAX_IMAGE_REQUESTS) {
+                            history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
+                            imageRequests++
+                            logger?.line("模型要求看截图（第 $imageRequests 次）", "截图")
+
+                            OverlayBus.setPhase(AgentPhase.SCREENSHOT)
+                            OverlayBus.hide()
+                            delay(OVERLAY_SETTLE_MS)
+                            val shot = withContext(Dispatchers.IO) { controller.captureFrame() }
+                            OverlayBus.show()
+
+                            if (shot == null || shot.isEmpty()) {
+                                logger?.error("截图失败，只能靠控件树继续", "截图")
+                                imageNote = "截图取不到（可能是安全页面、或者系统限流），只能靠界面元素判断。"
+                            } else {
+                                pendingImage = shot
+                                logger?.line("截图：${w}x$h，${shot.size} 字节（本次发送）", "截图")
+                                logger?.saveScreenshot(step, shot)
+                                imageNote = "这是你要的截图。"
+                            }
+                            // 重新问一次：这次带上图，不算新的一步
+                            continue@ask
+                        }
+                        if (p.needImage) {
+                            logger?.warn(
+                                "模型又要截图，但这一轮已经给过 $MAX_IMAGE_REQUESTS 次了，先按它给的动作走",
+                                "截图",
+                            )
+                        }
+
+                        parsed = p
+                        modelOutput = result.text
+                        break@ask
+                    }
+                }
+            }
+
+            // 循环里的每条出口要么已经 return，要么就是带着 parsed 跳出 ——
+            // 所以这里实际上一定不是 null，兜底只是为了不写 !!
+            val p = parsed ?: run {
+                fail("内部错误：没有拿到可用的模型输出。", "模型")
+                return
+            }
+
+            // ---- 一批动作都没有 ----
+            if (p.actions.isEmpty()) {
+                val warning = p.warning ?: "没能解析出动作。"
+                logger?.warn("解析失败：$warning", "解析")
+                listener.onEvent(EventKind.ERROR, warning, "解析失败")
+                // 失败原因回灌给模型，让它重出 —— 但**不单独发一条消息**，
+                // 而是记进 lastResult，拼到下一条 user 消息里。
+                history.add(ChatTurn(ChatTurn.ASSISTANT, modelOutput))
+                lastResult = "上一个输出有问题：$warning" +
+                    "请重新输出一个 JSON 对象，actions 里放上要执行的动作。"
+                continue
+            }
+
+            p.warning?.let { logger?.warn("解析提示：$it", "解析") }
+
+            // ---- 防死循环：整批动作的签名 ----
+            val sig = p.actions.joinToString(";") { actionSignature(it) }
+            if (sig == lastSig) repeatAction++ else repeatAction = 0
+            lastSig = sig
+
+            // ---- 显示这一批要干什么 ----
+            val desc = AgentPrompt.describeSequence(p.actions)
+            logger?.line("动作（${p.actions.size} 个）：$desc", "执行")
+            listener.onEvent(EventKind.ACTION, desc, "第 $step 步 · 动作")
+            if (p.nextHint.isNotBlank()) {
+                logger?.line("下一步预告：${p.nextHint}", "模型")
+            }
+            // 状态卡放不下 12 个动作，只显示第一个 + 总数
+            OverlayBus.update(step, maxSteps, overlayText(p.actions), p.nextHint)
+
+            // ---- 逐个执行 ----
+            val results = ArrayList<String>(p.actions.size)
+            for ((i, action) in p.actions.withIndex()) {
+                if (isStopped()) {
+                    finish(false, "你停止了任务（执行第 $step 步第 ${i + 1} 个动作之前）")
+                    return
+                }
+
+                val single = AgentPrompt.describe(action)
+                OverlayBus.update(step, maxSteps, overlayText(listOf(action)), p.nextHint)
+
+                // sleep 由这里自己做（用协程 delay，可以中途响应急停），
+                // 不走通道 —— 通道里的 Thread.sleep 会把整个线程按住。
+                if (action.kind == TouchKind.WAIT) {
+                    OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                    logger?.line("  $single", "执行")
+                    val completed = awaitWithStop(action.durationMs.toLong())
+                    results.add(if (completed) "$single → 已执行" else "$single → 被中断")
+                    if (!completed) {
+                        finish(false, "你停止了任务（等待中被叫停）")
                         return
                     }
-
-                    // ---- 没解析出动作 ----
-                    val action = parsed.action
-                    if (action == null) {
-                        val warning = parsed.warning ?: "没能解析出动作。"
-                        logger?.warn("解析失败：$warning", "解析")
-                        listener.onEvent(EventKind.ERROR, warning, "解析失败")
-                        // 失败原因回灌给模型，让它重出 —— 但**不单独发一条消息**，
-                        // 而是记进 lastResult，拼到下一条 user 消息里。
-                        // 单独发消息会让对话结构每轮都不一样，把缓存前缀打断。
-                        history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
-                        lastResult = "上一个输出有问题：$warning" +
-                            "请重新输出一个只包含 JSON 对象的动作，不要任何其他文字。"
-                        continue
-                    }
-
-                    // ---- 防死循环：动作签名 ----
-                    val sig = actionSignature(action.kind, action.targetIndex, action.x, action.y)
-                    if (sig == lastActionSig) repeatAction++ else repeatAction = 0
-                    lastActionSig = sig
-
-                    // ---- 执行 ----
-                    val desc = AgentPrompt.describeAction(
-                        kind = action.kind,
-                        index = action.targetIndex,
-                        x = action.x, y = action.y, x2 = action.x2, y2 = action.y2,
-                        direction = action.direction,
-                        text = action.text,
-                        pkg = action.packageName,
-                        durationMs = action.durationMs,
-                    )
-                    logger?.line("动作：$desc", "执行")
-                    listener.onEvent(EventKind.ACTION, desc, "第 $step 步 · 动作")
-
-                    // 关键的一步：把"我正要做什么"和"我打算接着做什么"
-                    // 显示在悬浮窗上。用户看到下一步不对，可以立刻按急停 ——
-                    // 这正是"人在环路"的意义。
-                    if (parsed.nextHint.isNotBlank()) {
-                        logger?.line("下一步预告：${parsed.nextHint}", "模型")
-                    }
-                    OverlayBus.update(step, maxSteps, desc, parsed.nextHint)
-
-                    // 执行前再检查一次停止 —— 把急停的响应窗口从"一步"
-                    // 缩短到"一次模型调用"
-                    if (isStopped()) {
-                        finish(false, "你停止了任务（执行第 $step 步动作之前）")
-                        return
-                    }
-
+                } else {
                     // 注入前**只在真会撞上急停按钮时**才藏。
-                    //
-                    // 之前的做法是无条件藏，代价是用户永远看不到
-                    // "正在操作手机"这个状态 —— 而那恰恰是他最想看的。
-                    // 现在改成按坐标判断：只有点击/滑动的路径真压在按钮上，
-                    // 才把悬浮窗让开。
-                    //
                     // 状态卡本身是 FLAG_NOT_TOUCHABLE，永远不会吃点击，
                     // 所以只需要担心按钮那一小块。
                     OverlayBus.setPhase(AgentPhase.ACTING)
@@ -343,39 +377,55 @@ class Agent(
                     if (mustHide) {
                         OverlayBus.show()
                     }
-                    val ok = execResult == null
-                    val resultText = if (ok) "已执行" else execResult!!
 
-                    if (ok) {
-                        logger?.line("结果：$resultText", "执行")
-                        listener.onEvent(EventKind.RESULT, resultText, "第 $step 步 · 结果")
+                    if (execResult == null) {
+                        logger?.line("  $single → 已执行", "执行")
+                        results.add("$single → 已执行")
                     } else {
-                        logger?.error("执行失败：$resultText", "执行")
-                        listener.onEvent(EventKind.ERROR, resultText, "第 $step 步 · 失败")
+                        logger?.error("  $single → $execResult", "执行")
+                        listener.onEvent(EventKind.ERROR, execResult, "第 $step 步 · 失败")
+                        results.add("$single → 失败：$execResult")
                     }
+                }
 
-                    logger?.recordStep(
-                        step = step,
-                        thought = parsed.thought,
-                        action = desc,
-                        result = resultText,
-                        rawModelOutput = result.text,
-                        shot = null,
-                    )
-
-                    // ---- 回灌给模型 ----
-                    history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
-                    lastResult = resultText
-
-                    // 动作后等页面反应。滚动/点击后通常要一点时间，
-                    // 太快截下一张会拍到过渡动画。
-                    val settle = waitAfter(action.kind)
-                    if (settle > 0) {
-                        OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                        delay(settle)
+                // ---- 和下一个动作之间的间隔 ----
+                val gap = gapBetween(action, p.actions.getOrNull(i + 1))
+                if (gap > 0) {
+                    OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                    if (!awaitWithStop(gap.toLong())) {
+                        finish(false, "你停止了任务（等待中被叫停）")
+                        return
                     }
                 }
             }
+
+            // 一批做完，进入下一轮之前再等一次（模型显式 sleep 结尾就不用等）
+            val last = p.actions.last()
+            if (last.kind != TouchKind.WAIT) {
+                OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                if (!awaitWithStop(gapForKind(last.kind).toLong())) {
+                    finish(false, "你停止了任务（等待中被叫停）")
+                    return
+                }
+            }
+
+            val resultText = when (results.size) {
+                0 -> "没有动作被执行"
+                1 -> results[0]
+                else -> "共 ${results.size} 个动作：" + results.joinToString("；")
+            }
+            logger?.recordStep(
+                step = step,
+                thought = p.thought,
+                action = desc,
+                result = resultText,
+                rawModelOutput = modelOutput,
+                shot = null,
+            )
+
+            // ---- 回灌给模型 ----
+            history.add(ChatTurn(ChatTurn.ASSISTANT, modelOutput))
+            lastResult = resultText
         }
 
         finish(false, "到了最大步数 $maxSteps 还没做完。可以加大步数，或者把任务拆小一点。")
@@ -388,9 +438,8 @@ class Agent(
     /**
      * 让开前台。
      *
-     * 无障碍截图抓的是整块物理屏，如果纸盒自己在前台，
+     * 无障碍读的是当前活动窗口，如果纸盒自己在前台，
      * 模型看到的就是纸盒的界面 —— 它会开始点自己的按钮。
-     * 这在真机上必然发生，不是理论问题。
      */
     private suspend fun ensureNotSelfForeground() {
         val pkg = withContext(Dispatchers.IO) { controller.currentPackage() } ?: return
@@ -398,6 +447,44 @@ class Agent(
         logger?.warn("控制应用自己在前台，先把界面让出来（回桌面）", "通道")
         withContext(Dispatchers.IO) { controller.execute(TAP_HOME) }
         delay(800)
+    }
+
+    /**
+     * 等待，但可以中途响应急停。
+     *
+     * 一次 `delay(10000)` 会让"按了急停却还要等十秒"变成常态，
+     * 所以拆成小段轮询。@return false 表示被叫停
+     */
+    private suspend fun awaitWithStop(ms: Long): Boolean {
+        var left = ms
+        while (left > 0) {
+            if (isStopped()) return false
+            val chunk = minOf(left, STOP_POLL_MS)
+            delay(chunk)
+            left -= chunk
+        }
+        return !isStopped()
+    }
+
+    /** 两个动作之间补多久 */
+    private fun gapBetween(current: TouchAction, next: TouchAction?): Int {
+        // 一批的最后一个动作由循环外的收尾等待负责 —— 这里再补一次就成了等两遍
+        if (next == null) return 0
+        // 刚等过 / 下一个就是显式 sleep —— 都不再补默认间隔
+        if (current.kind == TouchKind.WAIT) return 0
+        if (next.kind == TouchKind.WAIT) return 0
+        return gapForKind(current.kind)
+    }
+
+    /**
+     * 默认间隔。
+     *
+     * 只有"打开应用"特殊：冷启动明显比界面切换慢，1.5 秒经常不够，
+     * 而模型很难预判这一点。其余一律 1.5 秒，不够就让模型自己写 sleep。
+     */
+    private fun gapForKind(kind: TouchKind): Int = when (kind) {
+        TouchKind.OPEN_APP -> AgentPrompt.OPEN_APP_GAP_MS
+        else -> AgentPrompt.DEFAULT_GAP_MS
     }
 
     private fun fail(message: String, label: String) {
@@ -428,13 +515,20 @@ class Agent(
         listener.onFinished(success, message)
     }
 
+    /** 状态卡上显示的一行：单个动作直接写，一批就写第一个 + 总数 */
+    private fun overlayText(actions: List<TouchAction>): String = when (actions.size) {
+        0 -> "准备中 ..."
+        1 -> AgentPrompt.describe(actions[0])
+        else -> "${AgentPrompt.describe(actions[0])} 等 ${actions.size} 个动作"
+    }
+
     /**
      * 这个动作的路径会不会压到底部急停按钮上。
      *
      * 按钮只占底部中间一小块，绝大多数点击都碰不到它 ——
      * 所以大多数步骤里悬浮窗可以一直留着，用户能看见"正在操作手机"。
      */
-    private fun touchesStopButton(action: com.aiphone.assistant.touch.TouchAction): Boolean {
+    private fun touchesStopButton(action: TouchAction): Boolean {
         if (OverlayBus.overlapsStopButton(action.x, action.y)) return true
         // 滑动/拖拽/甩动要连终点一起看，路径可能横穿按钮
         return when (action.kind) {
@@ -449,32 +543,14 @@ class Agent(
         stopRequested || listener.isStopRequested() || OverlayBus.stopRequested
 
     /** 动作签名，用来识别"反复做同一件事" */
-    private fun actionSignature(kind: TouchKind, index: Int, x: Int, y: Int): String =
-        "$kind|$index|$x|$y"
-
-
-    /**
-     * 动作后等多久。
-     *
-     * 不是固定值：点击通常几百毫秒界面就更新了，打开应用要更久，
-     * 等待动作本身已经等过了就不再等。
-     */
-    private fun waitAfter(kind: TouchKind): Long = when (kind) {
-        TouchKind.WAIT -> 0L
-        TouchKind.OPEN_APP -> 2500L
-        TouchKind.KEY_HOME, TouchKind.KEY_BACK, TouchKind.KEY_RECENTS -> 900L
-        TouchKind.SCROLL, TouchKind.SWIPE, TouchKind.FLICK -> 1200L
-        TouchKind.INPUT_TEXT -> 900L
-        else -> 900L
-    }
+    private fun actionSignature(a: TouchAction): String =
+        "${a.kind}|${a.targetIndex}|${a.x},${a.y}|${a.x2},${a.y2}|${a.durationMs}|${a.direction}"
 
     private fun md5(bytes: ByteArray): Int =
         MessageDigest.getInstance("MD5").digest(bytes).contentHashCode()
 
     private companion object {
-        val TAP_HOME = com.aiphone.assistant.touch.TouchAction(
-            kind = TouchKind.KEY_HOME,
-        )
+        val TAP_HOME = TouchAction(kind = TouchKind.KEY_HOME)
 
         /**
          * 藏完悬浮窗后等一小会儿再截图/注入。
@@ -485,14 +561,24 @@ class Agent(
          */
         const val OVERLAY_SETTLE_MS = 100L
 
+        /** 等待时检查急停的间隔 */
+        const val STOP_POLL_MS = 100L
+
+        /**
+         * 同一轮里最多给几次截图。
+         *
+         * 截图很贵，而且模型可能陷入"我要看图 → 还是不确定 → 再要图"。
+         * 给两次机会，之后就必须按现有信息做决定。
+         */
+        const val MAX_IMAGE_REQUESTS = 2
+
         /**
          * 上下文预算。
          *
          * 上下文**不做裁剪**（缓存按前缀匹配，一裁前缀就断，反而更贵），
          * 所以这里给个上限兜底，避免请求被服务端直接拒掉。
          *
-         * 这两个数是保守值，按所用模型的窗口大小调整：
-         * 窗口比它大就调大，比它小就调小。
+         * 这两个数是保守值，按所用模型的窗口大小调整。
          */
         const val CONTEXT_WARN_TOKENS = 100_000
         const val CONTEXT_STOP_TOKENS = 120_000
