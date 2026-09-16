@@ -175,9 +175,23 @@ class AutoService : AccessibilityService() {
         null
     }
 
+    /**
+     * 我们自己的包名。控件树里要**剪掉**这一支 ——
+     * 悬浮面板上的「急停」也长得像个按钮，混进列表里模型真会去点，
+     * 而点下去就是把用户的任务停了。
+     *
+     * 放在这里而不是让调用方传：少一个参数就少一处"忘了传"的机会，
+     * 而忘了传的后果（模型点自己的急停）非常难查。
+     */
+    private val ownPackage: String? get() = try {
+        packageName
+    } catch (t: Throwable) {
+        null
+    }
+
     /** 解析成精简后的节点列表 */
     fun parseTree(screenWidth: Int, screenHeight: Int, limit: Int = 60): List<UiNode> =
-        UiTreeParser.parse(readTree(), screenWidth, screenHeight, limit)
+        UiTreeParser.parse(readTree(), screenWidth, screenHeight, limit, ownPackage)
 
     /**
      * 当前有输入焦点的节点。
@@ -191,54 +205,28 @@ class AutoService : AccessibilityService() {
         null
     }
 
-    /** 按编号找节点。编号是 parseTree 给的 */
+    /**
+     * 按编号找节点。编号是 [parseTree] 给的。
+     *
+     * 必须重新解析一遍（节点对象不能跨帧缓存，界面一变就失效），
+     * 而且**必须和 parseTree 用同一套遍历** —— 过滤规则只要差一点，
+     * 编号就整体错位，模型说点 3 号结果点到 5 号，且完全查不出来。
+     * 所以这里直接复用 [UiTreeParser.keepNodes]。
+     */
     fun findNodeByIndex(
         index: Int,
         screenWidth: Int,
         screenHeight: Int,
     ): AccessibilityNodeInfo? {
-        // 重新解析一遍拿到同样的顺序，再定位到第 index 个
-        // （节点对象不能跨帧缓存，界面一变就失效）
-        var i = 1
-        var found: AccessibilityNodeInfo? = null
-
-        val stack = ArrayDeque<AccessibilityNodeInfo>()
-        readTree()?.let { stack.addLast(it) }
-
-        val out = ArrayList<AccessibilityNodeInfo>()
-        val seen = HashSet<String>()
-        val rect = Rect()
-
-        while (stack.isNotEmpty()) {
-            val node = stack.removeLast()
-            val text = node.text?.toString()?.trim().orEmpty()
-            val desc = node.contentDescription?.toString()?.trim().orEmpty()
-            val interactive = node.isClickable || node.isLongClickable ||
-                node.isScrollable || node.isEditable
-
-            if (node.isVisibleToUser &&
-                (interactive || text.isNotEmpty() || desc.isNotEmpty())
-            ) {
-                node.getBoundsInScreen(rect)
-                if (rect.width() * rect.height() >= 24 * 24 &&
-                    rect.right > 0 && rect.bottom > 0 &&
-                    rect.left < screenWidth && rect.top < screenHeight
-                ) {
-                    val key = "$text|$desc|${rect.left},${rect.top},${rect.right},${rect.bottom}"
-                    if (seen.add(key)) {
-                        if (i == index) {
-                            found = node
-                            break
-                        }
-                        i++
-                    }
-                }
-            }
-            for (c in 0 until node.childCount) {
-                node.getChild(c)?.let { stack.addLast(it) }
-            }
-        }
-        return found
+        if (index <= 0) return null
+        val nodes = UiTreeParser.keepNodes(
+            root = readTree(),
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            limit = index,
+            excludePackage = ownPackage,
+        )
+        return nodes.getOrNull(index - 1)
     }
 
     // ------------------------------------------------------------------

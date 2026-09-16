@@ -85,19 +85,59 @@ object UiTreeParser {
      * @param screenWidth 屏幕宽，用于过滤屏幕外节点
      * @param screenHeight 屏幕高
      * @param limit 最多返回多少个，防止极端界面撑爆提示词
+     * @param excludePackage 整个子树都跳过的包名。传控制应用自己的包名 ——
+     *        悬浮面板上的「急停」也长得像个按钮，混进列表里模型真会去点，
+     *        而按下去就是把用户自己的任务停了。
      */
     fun parse(
         root: AccessibilityNodeInfo?,
         screenWidth: Int,
         screenHeight: Int,
         limit: Int = 60,
+        excludePackage: String? = null,
     ): List<UiNode> {
+        val rect = Rect()
+        return keepNodes(root, screenWidth, screenHeight, limit, excludePackage)
+            .mapIndexed { i, node ->
+                node.getBoundsInScreen(rect)
+                UiNode(
+                    index = i + 1,
+                    className = simplifyClass(node.className?.toString().orEmpty()),
+                    text = node.text?.toString().orEmpty().trim(),
+                    contentDesc = node.contentDescription?.toString().orEmpty().trim(),
+                    viewId = node.viewIdResourceName.orEmpty(),
+                    bounds = Rect(rect),
+                    clickable = node.isClickable,
+                    longClickable = node.isLongClickable,
+                    scrollable = node.isScrollable,
+                    editable = node.isEditable,
+                    enabled = node.isEnabled,
+                    checked = node.isChecked,
+                )
+            }
+    }
+
+    /**
+     * 只做遍历和过滤，返回**原始节点**，顺序和 [parse] 的编号一一对应。
+     *
+     * 为什么必须共用这一份：编号是模型定位的唯一依据，而"按编号点"的时候
+     * 要重新解析一遍树（节点对象不能跨帧复用）。如果两处各写一套过滤规则，
+     * 编号就会错位 —— 模型说点 3 号，实际点到了 5 号，而且完全看不出来。
+     *
+     * @return 保留下来的节点，第 n 个对应编号 n+1
+     */
+    fun keepNodes(
+        root: AccessibilityNodeInfo?,
+        screenWidth: Int,
+        screenHeight: Int,
+        limit: Int = 60,
+        excludePackage: String? = null,
+    ): List<AccessibilityNodeInfo> {
         if (root == null) return emptyList()
 
-        val out = ArrayList<UiNode>(limit)
+        val out = ArrayList<AccessibilityNodeInfo>(limit)
         val seen = HashSet<String>()
         val rect = Rect()
-        var index = 1
 
         // 深度优先遍历。用显式栈避免深层界面把递归栈打爆
         val stack = ArrayDeque<AccessibilityNodeInfo>()
@@ -106,31 +146,19 @@ object UiTreeParser {
         while (stack.isNotEmpty() && out.size < limit) {
             val node = stack.removeLast()
 
+            // 整个子树跳过：自己家的悬浮面板不该出现在给模型的列表里。
+            // continue 之后不会再把子节点入栈，等于剪掉整棵子树。
+            if (excludePackage != null && node.packageName?.toString() == excludePackage) {
+                continue
+            }
+
             if (isWorthKeeping(node, rect, screenWidth, screenHeight)) {
                 val text = node.text?.toString().orEmpty().trim()
                 val desc = node.contentDescription?.toString().orEmpty().trim()
-                val id = node.viewIdResourceName.orEmpty()
 
                 // 同样的位置 + 同样的文字，通常是重复节点，只留一个
                 val key = "${text}|${desc}|${rect.left},${rect.top},${rect.right},${rect.bottom}"
-                if (seen.add(key)) {
-                    out.add(
-                        UiNode(
-                            index = index++,
-                            className = simplifyClass(node.className?.toString().orEmpty()),
-                            text = text,
-                            contentDesc = desc,
-                            viewId = id,
-                            bounds = Rect(rect),
-                            clickable = node.isClickable,
-                            longClickable = node.isLongClickable,
-                            scrollable = node.isScrollable,
-                            editable = node.isEditable,
-                            enabled = node.isEnabled,
-                            checked = node.isChecked,
-                        )
-                    )
-                }
+                if (seen.add(key)) out.add(node)
             }
 
             // 子节点入栈。注意回收中间节点的做法这里没做，
