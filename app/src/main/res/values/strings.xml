@@ -10,7 +10,7 @@
     <!-- 侧边栏 -->
     <string name="drawer_open">打开侧边栏</string>
     <string name="drawer_control_phone">操作手机</string>
-    <string name="drawer_coming_soon">敬请期待</string>
+    <string name="drawer_recording">操作记录</string>
     <string name="drawer_settings">设置</string>
 
     <!-- 顶栏 -->
@@ -30,6 +30,30 @@
 
     <!-- 设置页 -->
     <string name="settings_title">设置</string>
+
+    <!-- 操作记录 -->
+    <string name="recording_title">操作记录</string>
+    <string name="recording_intro">有些操作很固定（发朋友圈、每日打卡）。与其让 AI 每次现想，不如你手动做一遍，录下来交给 AI 学成技能 —— 以后一句话就能重放，速度快很多。</string>
+    <string name="recording_start">开始录制</string>
+    <string name="recording_stop">停止录制</string>
+    <string name="recording_discard">丢弃</string>
+    <string name="recording_in_progress">录制中 · 已记录 %1$d 步</string>
+    <string name="recording_in_progress_desc">现在去别的应用里正常操作。左上角悬浮窗会显示进度，点它的按钮或回到这里都能结束。</string>
+    <string name="recording_steps_title">录到了这 %1$d 步</string>
+    <string name="recording_name_hint">给这个技能起个名字（可留空，AI 会起）</string>
+    <string name="recording_learn">发给 AI 学习</string>
+    <string name="recording_learning">正在学习 ...</string>
+    <string name="recording_learn_desc">AI 会给它起名、写说明，并去掉你多点、点错的那些步骤，然后存成技能。以后 AI 就能直接调用它。</string>
+    <string name="recording_macros_title">已经学会的技能</string>
+    <string name="recording_macros_empty">还没有。录一段操作、点「发给 AI 学习」就会出现在这里。</string>
+    <string name="recording_macro_steps">%1$d 步</string>
+    <string name="recording_macro_delete">删除这个技能</string>
+    <string name="recording_toast_started">开始录制。去别的应用里操作吧。</string>
+    <string name="recording_toast_stopped">录制结束，共 %1$d 步。</string>
+    <string name="recording_toast_learned">学会了技能「%1$s」</string>
+    <string name="recording_toast_learn_failed">学习失败：%1$s</string>
+    <string name="recording_toast_deleted">已删除技能</string>
+    <string name="recording_need_api_key">还没填 API Key。到「设置 → 模型」里填一个再试。</string>
     <string name="settings_back">返回</string>
 
     <!-- 设置 · 模型 -->

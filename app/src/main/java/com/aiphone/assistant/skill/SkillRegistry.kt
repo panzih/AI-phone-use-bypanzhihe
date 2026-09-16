@@ -25,8 +25,19 @@ import org.json.JSONObject
  */
 class SkillRegistry(
     private val ctx: SkillContext,
+    /** 内置技能 */
     private val skills: List<Skill> = DEFAULT_SKILLS,
+    /**
+     * 运行时加载的技能（比如「操作记录」学来的宏）。
+     *
+     * 和内置技能分开传：内置的是代码里写死的，这些是从文件读的，
+     * 用户随时可能新增/删除。
+     */
+    private val extra: List<Skill> = emptyList(),
 ) {
+
+    /** 内置 + 动态 */
+    private val all: List<Skill> get() = skills + extra
 
     /** 模型可以用来"查文档"的特殊 id */
     private val docRequestIds = setOf("list_skills", "skills", "help", "docs")
@@ -37,16 +48,16 @@ class SkillRegistry(
      * 没有注册任何技能时返回空串，提示词那边会整段省略。
      */
     fun catalog(): String =
-        if (skills.isEmpty()) "" else skills.joinToString("\n") { "- ${it.id} —— ${it.summary}" }
+        if (all.isEmpty()) "" else all.joinToString("\n") { "- ${it.id} —— ${it.summary}" }
 
     /** 已注册技能的 id，给日志和报错用 */
-    fun ids(): List<String> = skills.map { it.id }
+    fun ids(): List<String> = all.map { it.id }
 
     /** 完整说明文档；[id] 不认识时返回 null */
     fun doc(id: String): String? {
         val key = id.trim().lowercase()
         if (key in docRequestIds) return fullDoc()
-        return skills.firstOrNull { it.id == key }?.doc
+        return all.firstOrNull { it.id == key }?.doc
     }
 
     /**
@@ -64,11 +75,11 @@ class SkillRegistry(
             return SkillOutcome(ok = true, text = fullDoc())
         }
 
-        val skill = skills.firstOrNull { it.id == key }
+        val skill = all.firstOrNull { it.id == key }
             ?: return SkillOutcome(
                 ok = false,
                 text = "没有叫「$id」的技能。可用的技能：" +
-                    skills.joinToString("、") { it.id } +
+                    all.joinToString("、") { it.id } +
                     "。想看某个技能的完整说明，用 use_skill: \"list_skills\"。",
             )
 
@@ -87,12 +98,12 @@ class SkillRegistry(
 
     /** 目录 + 每个技能的完整说明 */
     private fun fullDoc(): String = buildString {
-        appendLine("当前可用的技能（共 ${skills.size} 个）：")
+        appendLine("当前可用的技能（共 ${all.size} 个）：")
         appendLine()
-        if (skills.isEmpty()) {
+        if (all.isEmpty()) {
             appendLine("（还没有注册任何技能）")
         } else {
-            for (s in skills) {
+            for (s in all) {
                 appendLine(s.doc)
                 appendLine()
             }

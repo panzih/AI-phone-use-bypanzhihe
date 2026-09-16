@@ -72,6 +72,9 @@ class OverlayService : Service() {
      */
     private var rippleView: RippleView? = null
 
+    /** 底部按钮上的文字。录制模式下要把它从「急停」改成「停止」 */
+    private var stopLabel: TextView? = null
+
     /**
      * 状态卡的窗口参数。
      *
@@ -98,7 +101,12 @@ class OverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                OverlayBus.requestStop()
+                // 录制时这个按钮是"停止录制"，别去动 Agent 的停止标志
+                if (OverlayBus.recordingMode) {
+                    OverlayBus.requestRecordingStop()
+                } else {
+                    OverlayBus.requestStop()
+                }
                 // 不立刻移除 —— 让 Agent 走到检查点、把日志收尾。
                 // 悬浮窗在任务结束时由 stopSelf 那条路移除。
             }
@@ -352,6 +360,7 @@ class OverlayService : Service() {
             gravity = Gravity.CENTER
             setPadding(dp(28), dp(12), dp(28), dp(12))
         }
+        stopLabel = label
 
         return LinearLayout(this).apply {
             background = GradientDrawable().apply {
@@ -363,8 +372,15 @@ class OverlayService : Service() {
             addView(label)
             isClickable = true
             setOnClickListener {
-                OverlayBus.requestStop()
-                label.text = "停止中 ..."
+                // 录制时这个按钮是"结束录制"，不是"急停 AI"——
+                // 不区分的话按下去只会置一个没人看的标志
+                if (OverlayBus.recordingMode) {
+                    OverlayBus.requestRecordingStop()
+                    label.text = "正在结束 ..."
+                } else {
+                    OverlayBus.requestStop()
+                    label.text = "停止中 ..."
+                }
                 // 按钮自己先变灰，给一个"已经收到了"的即时反馈 ——
                 // 否则用户会以为没点上，反复戳
                 background = GradientDrawable().apply {
@@ -420,6 +436,24 @@ class OverlayService : Service() {
             // 藏起来的时候不画 —— 那是正在截图，画了就等于污染画面
             if (v.visibility != View.VISIBLE) return@post
             v.pulseScreen(x, y)
+        }
+    }
+
+    /**
+     * 录制模式的状态卡。
+     *
+     * 复用同一个卡片，但字段含义变了：不是"第几步"，而是"录到第几步了"。
+     * 按钮文案也要跟着改成"停止" —— 这一步不能省，否则用户不知道
+     * 那个红按钮现在是干什么的。
+     */
+    fun updateRecording(count: Int) {
+        main.post {
+            phaseText.text = "录制中"
+            (phaseDot.background as? GradientDrawable)?.setColor(RECORDING_COLOR)
+            stepText.text = "已记录 $count 步"
+            currentText.text = "正在：手动操作手机"
+            nextText.text = "下一步：点下面的按钮结束录制"
+            stopLabel?.text = "停止"
         }
     }
 
@@ -503,6 +537,9 @@ class OverlayService : Service() {
          * FLAG_NOT_TOUCHABLE 是关键 —— 它保证这块永远不会吃掉
          * AI 注入的点击，用户可以放心把它盖在界面任何位置。
          */
+        /** 录制态的圆点颜色（橙色，和 Agent 的各个阶段区分开） */
+        val RECORDING_COLOR = 0xFFFF7043.toInt()
+
         private const val FLAGS_PASSIVE =
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or

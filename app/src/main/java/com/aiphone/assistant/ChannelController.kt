@@ -52,6 +52,15 @@ class ChannelController(private val context: Context) {
         withContext(Dispatchers.IO) { ensureChannel().dumpUiTree() }
 
     /**
+     * 结构化节点列表（带 viewId / bounds）。
+     *
+     * 给宏技能回放用 —— 它需要按 viewId 或文字在当前界面上找回
+     * 录制时点的那个控件。
+     */
+    suspend fun parseNodes(): List<com.aiphone.assistant.a11y.UiNode> =
+        withContext(Dispatchers.IO) { ensureChannel().currentNodes() }
+
+    /**
      * 截一帧，返回 PNG 字节。
      *
      * 用途变了：不是给用户看预览，而是

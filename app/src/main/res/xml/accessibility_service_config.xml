@@ -5,8 +5,10 @@
   几个关键项的解释：
 
   accessibilityEventTypes
-      订阅哪些事件。本项目是"轮询截图"模式，不靠事件驱动，
-      但还是订阅了窗口变化 —— 以后要做"等界面稳定"的自适应等待会用到。
+      订阅哪些事件。AI 主动操作时是"轮询截图"模式，不靠事件驱动；
+      但「操作记录」要靠事件知道**用户点了哪个控件**（typeViewClicked /
+      typeViewLongClicked），以及输入了什么（typeViewTextChanged）。
+      窗口变化那两个是给"等界面稳定"留的。
 
   accessibilityFlags
       flagReportViewIds   带上控件 id，调试和精确定位都要
@@ -27,7 +29,7 @@
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/a11y_service_description"
     android:summary="@string/a11y_service_summary"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewLongClicked|typeViewTextChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:canPerformGestures="true"

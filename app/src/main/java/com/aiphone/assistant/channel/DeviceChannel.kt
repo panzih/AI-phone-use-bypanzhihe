@@ -40,6 +40,15 @@ interface DeviceChannel {
     suspend fun dumpUiTree(): String?
 
     /**
+     * 当前的控件节点列表（带 viewId / bounds）。
+     *
+     * 和 [dumpUiTree] 的区别：那个是**给模型看的文本**，这个是**给程序用的
+     * 结构化节点**。宏技能回放要靠 viewId / 文字在界面上找回同一个控件，
+     * 文本列表里没有这些字段。
+     */
+    suspend fun currentNodes(): List<com.aiphone.assistant.a11y.UiNode>
+
+    /**
      * 执行一个触控动作。返回 null 表示成功。
      *
      * @param onPoint 上报这次动作**真正落在**的屏幕坐标（按编号点击时

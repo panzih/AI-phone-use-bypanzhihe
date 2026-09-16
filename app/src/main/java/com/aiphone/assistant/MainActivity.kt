@@ -38,6 +38,9 @@ import com.aiphone.assistant.memory.InsightStore
 import com.aiphone.assistant.memory.LlmDistiller
 import com.aiphone.assistant.memory.RawDistiller
 import com.aiphone.assistant.memory.Turn
+import com.aiphone.assistant.record.MacroLearner
+import com.aiphone.assistant.record.MacroStore
+import com.aiphone.assistant.record.Recorder
 import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.overlay.OverlayService
 import com.aiphone.assistant.skill.SkillContext
@@ -45,10 +48,13 @@ import com.aiphone.assistant.skill.SkillRegistry
 import com.aiphone.assistant.ui.LogEntry
 import com.aiphone.assistant.ui.LogKind
 import com.aiphone.assistant.ui.MainScreen
+import com.aiphone.assistant.ui.MacroSummary
 import com.aiphone.assistant.ui.MainUiState
+import com.aiphone.assistant.ui.RecordingScreen
 import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -155,6 +161,12 @@ private fun AppRoot(
     var progress by remember { mutableStateOf("") }
     var toast by remember { mutableStateOf<String?>(null) }
 
+    // ---- 操作记录 ----
+    var recordingActive by remember { mutableStateOf(Recorder.isRecording) }
+    var recordedSteps by remember { mutableStateOf<List<String>>(emptyList()) }
+    var macros by remember { mutableStateOf(loadMacroSummaries(context)) }
+    var learning by remember { mutableStateOf(false) }
+
     val logs = remember { mutableStateListOf<LogEntry>() }
     val conversation = remember { Conversation() }
 
@@ -174,6 +186,93 @@ private fun AppRoot(
         val total = runs.sumOf { run -> run.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
         logStats = context.getString(R.string.settings_log_stats, runs.size, formatBytes(total))
         insightCount = InsightStore.list(context).size
+        macros = loadMacroSummaries(context)
+    }
+
+    fun stopRecording() {
+        if (!Recorder.isRecording) return
+        val rec = Recorder.stop()
+        OverlayBus.exitRecording()
+        recordingActive = false
+        recordedSteps = Recorder.labels()
+        toast = context.getString(R.string.recording_toast_stopped, rec.steps.size)
+        if (settings.saveLogs) AppLog.i("录制结束，共 ${rec.steps.size} 步", "操作记录")
+    }
+
+    /**
+     * 开始录制。
+     *
+     * 录制期间用户会切到别的应用，这个 Activity 会进入 stopped 状态 ——
+     * 所以进度**不能靠界面回调推**，而是起一个协程轮询 Recorder。
+     * 它同时也负责读悬浮窗上的"停止"按钮（录制时没有 Agent 在跑，
+     * 那个按钮的请求没人处理）。
+     *
+     * 注意 [stopRecording] 必须声明在上面：Kotlin 的局部函数不能先用后定义。
+     */
+    fun startRecording() {
+        Recorder.start()
+        OverlayBus.enterRecording()
+        recordingActive = true
+        recordedSteps = emptyList()
+        toast = context.getString(R.string.recording_toast_started)
+
+        scope.launch {
+            while (Recorder.isRecording) {
+                delay(400)
+                recordedSteps = Recorder.labels()
+                OverlayBus.updateRecording(Recorder.count)
+                if (OverlayBus.recordingStopRequested) {
+                    stopRecording()
+                    break
+                }
+            }
+        }
+    }
+
+    fun discardRecording() {
+        Recorder.clear()
+        recordedSteps = emptyList()
+        OverlayBus.exitRecording()
+        recordingActive = false
+    }
+
+    /** 交给 AI 学成技能 */
+    fun learnRecording(nameHint: String) {
+        val rec = Recorder.snapshot()
+        if (rec.isEmpty) return
+        if (settings.apiKey.isBlank()) {
+            toast = context.getString(R.string.recording_need_api_key)
+            return
+        }
+        learning = true
+        scope.launch {
+            val llm = LlmClient(
+                LlmConfig(
+                    baseUrl = settings.baseUrl,
+                    apiKey = settings.apiKey,
+                    model = settings.modelName,
+                    thinking = settings.thinking,
+                )
+            )
+            val macro = runCatching { MacroLearner(llm).learn(rec, nameHint) }.getOrNull()
+            if (macro != null) {
+                MacroStore.save(context, macro)
+                macros = loadMacroSummaries(context)
+                Recorder.clear()
+                recordedSteps = emptyList()
+                toast = context.getString(R.string.recording_toast_learned, macro.title)
+                if (settings.saveLogs) AppLog.i("学会技能：${macro.title}（${macro.steps.size} 步）", "操作记录")
+            } else {
+                toast = context.getString(R.string.recording_toast_learn_failed, "模型没返回可用的结果")
+            }
+            learning = false
+        }
+    }
+
+    fun deleteMacro(id: String) {
+        MacroStore.delete(context, id)
+        macros = loadMacroSummaries(context)
+        toast = context.getString(R.string.recording_toast_deleted)
     }
 
     // 每次回到前台重新判断授权状态，并处理"闲置超时自动清空上下文"
@@ -267,7 +366,9 @@ private fun AppRoot(
             // 技能注册表：模型用 use_skill 主动要"屏幕上没有的信息"。
             // 传 applicationContext —— 它会活到任务结束，不能攥着 Activity
             skills = SkillRegistry(
-                SkillContext(context.applicationContext, controller),
+                ctx = SkillContext(context.applicationContext, controller),
+                // 每次任务重新从文件加载：用户可能刚在「操作记录」里学会一个
+                extra = MacroStore.loadAll(context),
             ),
             logger = logger,
             listener = object : Agent.Listener {
@@ -421,6 +522,10 @@ private fun AppRoot(
                 appVersion = appVersion,
                 progress = progress,
                 toast = toast,
+                recordingActive = recordingActive,
+                recordedSteps = recordedSteps,
+                macros = macros,
+                learning = learning,
             ),
             onSettingsClick = { screen = Screen.SETTINGS },
             onInputChange = { input = it },
@@ -432,6 +537,23 @@ private fun AppRoot(
                 addLog(LogKind.ERROR, "已请求停止，等当前这一步走完", "停止")
             },
             onControlPhone = { screen = Screen.CONTROL },
+            onRecording = { screen = Screen.RECORDING },
+        )
+
+        Screen.RECORDING -> RecordingScreen(
+            state = MainUiState(
+                toast = toast,
+                recordingActive = recordingActive,
+                recordedSteps = recordedSteps,
+                macros = macros,
+                learning = learning,
+            ),
+            onBack = { screen = Screen.CONTROL },
+            onStart = { startRecording() },
+            onStop = { stopRecording() },
+            onDiscard = { discardRecording() },
+            onLearn = { nameHint -> learnRecording(nameHint) },
+            onDeleteMacro = { id -> deleteMacro(id) },
         )
 
         Screen.SETTINGS -> SettingsScreen(
@@ -522,6 +644,10 @@ private fun memorizeAfterTask(
         onDone()
     }
 }
+
+/** 已学会技能的摘要，给界面用（界面不需要知道步骤细节） */
+private fun loadMacroSummaries(context: android.content.Context): List<MacroSummary> =
+    MacroStore.loadAll(context).map { MacroSummary(it.id, it.title, it.steps.size) }
 
 /** 字节数转可读文本 */
 private fun formatBytes(bytes: Long): String = when {

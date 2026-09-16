@@ -67,6 +67,20 @@ data class MainUiState(
     /** 应用版本号，给设置页的「关于」显示 */
     val appVersion: String = "",
 
+    // ---------- 操作记录 ----------
+
+    /** 正在录制 */
+    val recordingActive: Boolean = false,
+
+    /** 已录到的步骤（一行一步，给人看的） */
+    val recordedSteps: List<String> = emptyList(),
+
+    /** 已经学会的技能 */
+    val macros: List<MacroSummary> = emptyList(),
+
+    /** 正在让 AI 学习（学习要调模型，可能几秒） */
+    val learning: Boolean = false,
+
     /** 一次性提示（导出结果之类），显示完由界面清掉 */
     val toast: String? = null,
 )

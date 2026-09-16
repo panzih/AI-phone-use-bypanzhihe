@@ -223,6 +223,10 @@ object AppLog {
     fun insightDir(context: Context): File =
         File(context.filesDir, "$ROOT_DIR/insights").apply { mkdirs() }
 
+    /** 「操作记录」学成的技能（宏）存在这 */
+    fun macroDir(context: Context): File =
+        File(context.filesDir, "$ROOT_DIR/macros").apply { mkdirs() }
+
     fun current(): RunLogger? = current
 
     /**

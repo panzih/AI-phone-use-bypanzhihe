@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.aiphone.assistant.record.Recorder
 import com.aiphone.assistant.touch.GestureSpec
 import com.aiphone.assistant.touch.ScrollDirection
 import java.util.concurrent.CountDownLatch
@@ -53,14 +54,19 @@ class AutoService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+        // 录制的第一件事是不录自己：用户在纸盒界面里点「停止录制」
+        // 也是一次 TYPE_VIEW_CLICKED，不排掉就会录进去
+        Recorder.selfPackage = packageName
         super.onServiceConnected()
         instance = this
         Log.i(TAG, "无障碍服务已连接")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // 这个项目是"轮询截图"模式，不依赖事件驱动。
-        // 事件流留着以后做"等界面稳定"的自适应等待用。
+        // AI 主动操作时是"轮询截图"模式，不依赖事件驱动。
+        // 但「操作记录」要靠事件知道用户点了什么 —— 录制没开始时
+        // Recorder 第一件事就是 return，所以这里的开销可以忽略。
+        event?.let { Recorder.onEvent(it) }
     }
 
     override fun onInterrupt() {

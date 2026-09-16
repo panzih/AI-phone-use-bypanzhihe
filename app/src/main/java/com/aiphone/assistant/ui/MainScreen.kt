@@ -26,7 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
@@ -97,6 +97,7 @@ fun MainScreen(
     onSubmit: () -> Unit,
     onStop: () -> Unit,
     onControlPhone: () -> Unit,
+    onRecording: () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -113,6 +114,10 @@ fun MainScreen(
             AppDrawer(
                 onControlPhone = {
                     onControlPhone()
+                    scope.launch { drawerState.close() }
+                },
+                onRecording = {
+                    onRecording()
                     scope.launch { drawerState.close() }
                 },
                 onSettings = {
@@ -218,12 +223,13 @@ private fun BrandCenter() {
  *
  * 三项：
  *   1. 操作手机   ← 主功能
- *   2. 敬请期待   ← 占位，还没想好是什么
+ *   2. 操作记录   ← 手动录一段操作，交给 AI 学成技能
  *   3. 设置       ← 置底
  */
 @Composable
 private fun AppDrawer(
     onControlPhone: () -> Unit,
+    onRecording: () -> Unit,
     onSettings: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
@@ -263,10 +269,9 @@ private fun AppDrawer(
                 onClick = onControlPhone,
             )
             DrawerItem(
-                icon = Icons.Filled.HourglassEmpty,
-                title = stringResource(R.string.drawer_coming_soon),
-                onClick = { /* 还没想好放什么，先占位 */ },
-                enabled = false,
+                icon = Icons.Filled.FiberManualRecord,
+                title = stringResource(R.string.drawer_recording),
+                onClick = onRecording,
             )
 
             Spacer(Modifier.weight(1f))

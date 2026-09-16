@@ -140,6 +140,18 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
         UiTreeParser.render(nodes)
     }
 
+    /**
+     * 结构化节点列表，给宏技能回放用。
+     *
+     * 为什么不用 [dumpUiTree] 的文本：回放要比对 viewId 和精确的文字，
+     * 而那个格式是给模型读的（截断过、带装饰），用来做匹配不可靠。
+     */
+    override suspend fun currentNodes(): List<UiNode> = withContext(Dispatchers.IO) {
+        val svc = service ?: return@withContext emptyList()
+        val (w, h) = screenSize() ?: (1080 to 1920)
+        svc.parseTree(w, h, limit = 60).also { lastNodes = it }
+    }
+
     /** 上一帧的节点列表，界面可以拿来显示 */
     fun lastParsedNodes(): List<UiNode> = lastNodes
 

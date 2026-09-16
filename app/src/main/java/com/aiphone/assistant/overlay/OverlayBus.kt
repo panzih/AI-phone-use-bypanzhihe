@@ -48,6 +48,41 @@ object OverlayBus {
         stopRequested = true
     }
 
+    /**
+     * 正在录制「操作记录」。
+     *
+     * 录制期间没有 Agent 在跑，悬浮窗上那个按钮的含义变成了"停止录制"，
+     * 所以要把两件事分开 —— 否则按下去会去置 Agent 的停止标志，
+     * 而 Agent 根本没在跑，用户会觉得按钮坏了。
+     */
+    @Volatile
+    var recordingMode: Boolean = false
+        private set
+
+    /** 录制模式下按了悬浮窗按钮 */
+    @Volatile
+    var recordingStopRequested: Boolean = false
+        private set
+
+    fun enterRecording() {
+        recordingMode = true
+        recordingStopRequested = false
+    }
+
+    fun exitRecording() {
+        recordingMode = false
+        recordingStopRequested = false
+    }
+
+    fun requestRecordingStop() {
+        recordingStopRequested = true
+    }
+
+    /** 录制进度：显示"录制中 · 已记录 N 步" */
+    fun updateRecording(count: Int) {
+        service?.updateRecording(count)
+    }
+
     val isShowing: Boolean get() = service != null
 
     /** 切换阶段，左上角那行状态会跟着变 */
