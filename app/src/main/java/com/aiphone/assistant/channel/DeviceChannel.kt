@@ -39,8 +39,15 @@ interface DeviceChannel {
      */
     suspend fun dumpUiTree(): String?
 
-    /** 执行一个触控动作。返回 null 表示成功 */
-    suspend fun perform(action: TouchAction): String?
+    /**
+     * 执行一个触控动作。返回 null 表示成功。
+     *
+     * @param onPoint 上报这次动作**真正落在**的屏幕坐标（按编号点击时
+     *                取节点的中心）。用来在屏幕上闪一圈水波给用户看，
+     *                所以只有通道层知道这个值 —— 模型给的编号在解析成
+     *                坐标之前是看不出落点的
+     */
+    suspend fun perform(action: TouchAction, onPoint: ((Int, Int) -> Unit)? = null): String?
 
     /** 释放资源 */
     fun release()

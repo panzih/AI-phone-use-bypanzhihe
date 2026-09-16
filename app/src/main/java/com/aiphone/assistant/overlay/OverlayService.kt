@@ -66,6 +66,13 @@ class OverlayService : Service() {
     private var buttonView: View? = null
 
     /**
+     * 点击水波层。全屏、不可触摸、只在有脉冲时绘制。
+     *
+     * 单独一个窗口而不是画在状态卡里 —— 点击可能发生在屏幕任何位置。
+     */
+    private var rippleView: RippleView? = null
+
+    /**
      * 状态卡的窗口参数。
      *
      * 必须留一份引用 —— 见 [updateStatus] 里那个 Android 的坑。
@@ -189,6 +196,7 @@ class OverlayService : Service() {
 
         val card = buildStatusCard()
         val button = buildStopButton()
+        val ripple = RippleView(this)
 
         // 状态卡用**固定尺寸**，不用 WRAP_CONTENT。
         //
@@ -221,13 +229,30 @@ class OverlayService : Service() {
         runCatching { wm.addView(button, buttonParams); buttonView = button }
             .onSuccess { android.util.Log.i(TAG, "急停按钮已添加") }
             .onFailure { android.util.Log.e(TAG, "急停按钮添加失败：$it") }
+
+        // 水波层铺满整屏。加在最后 = 盖在状态卡和按钮之上，
+        // 而它们是 FLAG_NOT_TOUCHABLE 的，不吃点击，互不影响
+        val rippleParams = baseParams(
+            gravity = Gravity.TOP or Gravity.START,
+            x = 0,
+            y = 0,
+            flags = FLAGS_PASSIVE,
+        ).also {
+            it.width = WindowManager.LayoutParams.MATCH_PARENT
+            it.height = WindowManager.LayoutParams.MATCH_PARENT
+        }
+        runCatching { wm.addView(ripple, rippleParams); rippleView = ripple }
+            .onSuccess { android.util.Log.i(TAG, "水波层已添加") }
+            .onFailure { android.util.Log.e(TAG, "水波层添加失败：$it") }
     }
 
     private fun removeOverlay() {
         statusView?.let { runCatching { wm.removeView(it) } }
         buttonView?.let { runCatching { wm.removeView(it) } }
+        rippleView?.let { runCatching { wm.removeView(it) } }
         statusView = null
         buttonView = null
+        rippleView = null
     }
 
     private fun baseParams(
@@ -376,6 +401,25 @@ class OverlayService : Service() {
             val v = if (visible) View.VISIBLE else View.INVISIBLE
             statusView?.visibility = v
             buttonView?.visibility = v
+            rippleView?.visibility = v
+            // 藏起来之前把没画完的水波清掉：否则再显示时，
+            // 会看到半截圈从旧位置继续扩散，像是点在了别的地方
+            if (!visible) rippleView?.clear()
+        }
+    }
+
+    /**
+     * 在指定坐标闪一圈水波。
+     *
+     * 坐标是**屏幕坐标**（和窗口同一套），由通道层在执行动作时上报 ——
+     * 那里才知道按编号点击最终落在了哪个元素的中心。
+     */
+    fun pulse(x: Int, y: Int) {
+        main.post {
+            val v = rippleView ?: return@post
+            // 藏起来的时候不画 —— 那是正在截图，画了就等于污染画面
+            if (v.visibility != View.VISIBLE) return@post
+            v.pulseScreen(x, y)
         }
     }
 

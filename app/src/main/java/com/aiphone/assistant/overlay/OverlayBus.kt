@@ -85,6 +85,15 @@ object OverlayBus {
      *   2. 底部那个按钮是可触摸窗口。不藏的话，注入的点击如果
      *      正好落在它上面，会被它吃掉 —— 甚至点到"急停"把自己停掉
      */
+    /**
+     * 在某个屏幕坐标闪一圈水波，让用户看见 AI 点在哪。
+     *
+     * 没有悬浮窗时就什么也不做 —— 这是纯视觉反馈，不该影响任务本身。
+     */
+    fun pulse(x: Int, y: Int) {
+        service?.pulse(x, y)
+    }
+
     fun hide() {
         service?.setVisible(false)
     }

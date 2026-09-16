@@ -464,7 +464,11 @@ class Agent(
                         OverlayBus.hide()
                         delay(OVERLAY_SETTLE_MS)
                     }
-                    val execResult = withContext(Dispatchers.IO) { controller.execute(action) }
+                    // 上报真实落点，屏幕上闪一圈水波 ——
+                    // 用户能看见 AI 点在哪，是"点错了"还是"点了没反应"一眼可辨
+                    val execResult = withContext(Dispatchers.IO) {
+                        controller.execute(action) { px, py -> OverlayBus.pulse(px, py) }
+                    }
                     if (mustHide) {
                         OverlayBus.show()
                     }
@@ -539,7 +543,9 @@ class Agent(
         val pkg = withContext(Dispatchers.IO) { controller.currentPackage() } ?: return
         if (pkg != selfPackage) return
         logger?.warn("控制应用自己在前台，先把界面让出来（回桌面）", "通道")
-        withContext(Dispatchers.IO) { controller.execute(TAP_HOME) }
+        withContext(Dispatchers.IO) {
+            controller.execute(TAP_HOME) { px, py -> OverlayBus.pulse(px, py) }
+        }
         delay(800)
     }
 

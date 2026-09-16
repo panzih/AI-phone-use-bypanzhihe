@@ -149,7 +149,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
      * 这是**比坐标点击更可靠**的一条路：坐标直接来自系统给的 bounds，
      * 不存在模型算偏的问题。
      */
-    suspend fun tapByIndex(index: Int): String? = withContext(Dispatchers.IO) {
+    suspend fun tapByIndex(
+        index: Int,
+        onPoint: ((Int, Int) -> Unit)? = null,
+    ): String? = withContext(Dispatchers.IO) {
         val svc = service ?: return@withContext "无障碍服务未连接"
 
         // 每次操作都要重新解析 —— 节点对象不能跨帧复用，界面一变就失效
@@ -162,6 +165,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
 
         val target = svc.findNodeByIndex(index, w, h)
             ?: return@withContext "编号 $index 的元素已经失效，界面可能变了"
+
+        // 先报落点再动手：用户看到的水波位置，就是这一下真正点下去的地方。
+        // 按编号点击时坐标来自系统的 bounds，所以这个圈比坐标式点击更可信
+        onPoint?.invoke(node.centerX, node.centerY)
 
         // 先尝试节点级点击（最准）
         if (svc.clickNode(target)) return@withContext null
@@ -185,7 +192,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
     // 触控
     // ------------------------------------------------------------------
 
-    override suspend fun perform(action: TouchAction): String? = withContext(Dispatchers.IO) {
+    override suspend fun perform(
+        action: TouchAction,
+        onPoint: ((Int, Int) -> Unit)?,
+    ): String? = withContext(Dispatchers.IO) {
         val svc = service ?: return@withContext "无障碍服务未连接"
 
         try {
@@ -193,8 +203,9 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 TouchKind.TAP -> {
                     if (action.targetIndex > 0) {
                         // 按编号走 —— 更准，优先
-                        tapByIndex(action.targetIndex)
+                        tapByIndex(action.targetIndex, onPoint)
                     } else {
+                        onPoint?.invoke(action.x, action.y)
                         val ok = doGesture { cb -> svc.tapAt(action.x.toFloat(), action.y.toFloat(), cb) }
                         if (ok) null else "点击失败"
                     }
@@ -205,6 +216,13 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                     val node = if (action.targetIndex > 0) {
                         sceneIndex(action.targetIndex)
                     } else null
+
+                    // 落点：按编号时用节点中心，否则用给的坐标
+                    node?.let { n ->
+                        val r = android.graphics.Rect()
+                        n.getBoundsInScreen(r)
+                        onPoint?.invoke(r.centerX(), r.centerY())
+                    } ?: onPoint?.invoke(action.x, action.y)
 
                     if (node != null && svc.longClickNode(node)) {
                         null
@@ -220,9 +238,20 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 }
 
                 TouchKind.DOUBLE_TAP -> {
-                    val ok = doGesture { cb ->
-                        svc.doubleTapAt(action.x.toFloat(), action.y.toFloat(), cb)
-                    }
+                    // ⚠️ 这里原来直接用 action.x / action.y，**完全忽略了 index**。
+                    // 而提示词告诉模型双击可以只给编号 —— 那样坐标是 (0,0)，
+                    // 双击就打在屏幕左上角。下面按点击的同一套逻辑先解析编号。
+                    val node = if (action.targetIndex > 0) {
+                        sceneIndex(action.targetIndex)
+                    } else null
+                    val rect = android.graphics.Rect()
+                    node?.getBoundsInScreen(rect)
+                    val cx = if (node != null) rect.centerX() else action.x
+                    val cy = if (node != null) rect.centerY() else action.y
+                    if (node != null && (cx <= 0 || cy <= 0)) return@withContext "双击目标无效"
+
+                    onPoint?.invoke(cx, cy)
+                    val ok = doGesture { cb -> svc.doubleTapAt(cx.toFloat(), cy.toFloat(), cb) }
                     if (ok) null else "双击失败"
                 }
 
@@ -238,6 +267,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 // 用于移动图标、调滑块、排序这类
                 TouchKind.DRAG -> {
                     val moveMs = action.durationMs.coerceIn(200, 10_000)
+                    // 起终点各闪一下：用户看到"从哪划到哪"，
+                    // 而不是只有一个孤零零的圈
+                    onPoint?.invoke(action.x, action.y)
+                    onPoint?.invoke(action.x2, action.y2)
                     val ok = doGesture { cb ->
                         svc.dragAt(
                             action.x.toFloat(), action.y.toFloat(),
@@ -251,6 +284,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 // 滑动：松手前有停顿，不触发惯性
                 TouchKind.SWIPE -> {
                     val d = action.durationMs.coerceIn(200, 10_000)
+                    // 起终点各闪一下：用户看到"从哪划到哪"，
+                    // 而不是只有一个孤零零的圈
+                    onPoint?.invoke(action.x, action.y)
+                    onPoint?.invoke(action.x2, action.y2)
                     val ok = doGesture { cb ->
                         svc.swipeAt(
                             action.x.toFloat(), action.y.toFloat(),
@@ -265,6 +302,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 // 和滑动的唯一区别就在这里，见 GestureSpec
                 TouchKind.FLICK -> {
                     val d = action.durationMs.coerceIn(50, 200)
+                    // 起终点各闪一下：用户看到"从哪划到哪"，
+                    // 而不是只有一个孤零零的圈
+                    onPoint?.invoke(action.x, action.y)
+                    onPoint?.invoke(action.x2, action.y2)
                     val ok = doGesture { cb ->
                         svc.flickAt(
                             action.x.toFloat(), action.y.toFloat(),
@@ -275,7 +316,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                     if (ok) null else "甩动失败"
                 }
 
-                TouchKind.PINCH_OUT, TouchKind.PINCH_IN -> pinch(svc, action)
+                TouchKind.PINCH_OUT, TouchKind.PINCH_IN -> {
+                    onPoint?.invoke(action.x, action.y)
+                    pinch(svc, action)
+                }
 
                 TouchKind.MULTI_FINGER ->
                     "多指手势需要具体的手指路径，当前接口还没支持自定义路径"

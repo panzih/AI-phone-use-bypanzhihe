@@ -69,8 +69,10 @@ class ChannelController(private val context: Context) {
      *
      * @return null 表示成功，否则是给用户看的中文失败原因
      */
-    suspend fun execute(action: com.aiphone.assistant.touch.TouchAction): String? =
-        withContext(Dispatchers.IO) { ensureChannel().perform(action) }
+    suspend fun execute(
+        action: com.aiphone.assistant.touch.TouchAction,
+        onPoint: ((Int, Int) -> Unit)? = null,
+    ): String? = withContext(Dispatchers.IO) { ensureChannel().perform(action, onPoint) }
 
     /**
      * 当前前台应用的包名。
