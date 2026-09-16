@@ -50,8 +50,11 @@ object AgentPrompt {
      * 所以对缓存没有影响。
      *
      * @param skillCatalog 技能目录，一行一个。空串表示没有技能，整段省略
+     * @param memory 用户的记忆全文。**只在上下文是新开的时候传** ——
+     *        往一段正在进行的对话里插东西会把缓存前缀打断，代价比省下的
+     *        token 大得多。详见 ContextPolicy 的说明
      */
-    fun system(skillCatalog: String = ""): String = """
+    fun system(skillCatalog: String = "", memory: String? = null): String = """
 你是一个安卓手机操作助手。
 
 每一轮你会拿到：当前屏幕的「界面元素」编号列表（来自系统的控件树），以及屏幕分辨率和前台应用名。
@@ -172,7 +175,31 @@ fail 时在 summary 里写清楚三件事：**卡在哪一步、试过什么、�
    然后设 finished=true。
 4. **不要凭记忆编包名。** 要用 open_app 打开应用之前，先调 list_apps 技能
    拿到真实包名 —— 编错了系统只会说"没找到这个包"，你看不出是名字记错了。
-""".trimIndent() + skillSection(skillCatalog)
+""".trimIndent() + skillSection(skillCatalog) + memorySection(memory)
+
+    /**
+     * 记忆那一节。
+     *
+     * **只在上下文是新开的时候才会有内容**（调用方决定传不传）。
+     * 之所以不做成"每轮都带上"，是因为那会把缓存前缀打断 ——
+     * 详见 ContextPolicy 里的说明。
+     *
+     * 没有记忆时整段不出现，省 token。
+     */
+    private fun memorySection(memory: String?): String {
+        if (memory.isNullOrBlank()) return ""
+        return """
+
+# 关于这个用户（记忆）
+下面是之前任务里沉淀下来的记忆。它是**过去的认知，可能已经过时** ——
+和当前界面冲突时，一律以当前界面为准。
+
+如果这里的记忆不够用（比如用户说"按我平时的习惯"，但你看不出是什么习惯），
+可以调 recall_memory 技能拿完整版。
+
+$memory
+""".trimIndent().let { "\n\n$it" }
+    }
 
     /**
      * 技能那一节。没有技能时整段不出现，省 token。

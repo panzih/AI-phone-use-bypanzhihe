@@ -118,18 +118,60 @@ enum class ThinkingMode(
     }
 }
 
-/** 自动清空上下文的档位。0 表示从不自动清空。 */
-enum class AutoClear(val minutes: Int, val label: String) {
-    NEVER(0, "不自动清空"),
-    M30(30, "超过 30 分钟"),
-    H1(60, "超过 1 小时"),
-    H3(180, "超过 3 小时"),
-    H12(720, "超过 12 小时"),
-    D1(1440, "超过 1 天");
+/**
+ * 上下文什么时候重开。
+ *
+ * ## 三档，从最左拉到最右
+ *
+ *   每次都重置  →  每发一条新任务就开全新的上下文。最干净，但每步都要重新
+ *                  读界面、重新理解任务，也最贵
+ *   超过 24 小时 →  24 小时没动静才清。日常最常用的档
+ *   不限        →  永远不清空
+ *
+ * ## 它和记忆的关系（这层关系是这个功能的核心）
+ *
+ * **只有新开上下文时，才会把记忆塞进系统提示词。**
+ *
+ * 因为服务端的缓存按前缀匹配：往正在进行的对话中间插记忆，等于把前缀
+ * 整段作废，下一次请求全部按未命中计价 —— 那比省下的记忆 token 贵得多。
+ *
+ * 所以"每次都重置"看起来最费，但记忆每次都能带上；
+ * "不限"最省往返，但一条长对话里模型看不到记忆，得靠它自己调技能。
+ */
+enum class ContextPolicy(
+    val id: String,
+    val label: String,
+    val note: String,
+) {
+    RESET_EACH_TIME(
+        id = "reset",
+        label = "每次重置",
+        note = "每发一条新任务就开一个全新的上下文。每次都带着最新记忆、不会越跑越糊涂，代价是每步都要重新理解界面",
+    ),
+
+    H24(
+        id = "h24",
+        label = "超过 24 小时",
+        note = "24 小时没发消息就清空上下文。日常用这一档：短期内的连续操作能接上，隔天又是干净的",
+    ),
+
+    UNLIMITED(
+        id = "never",
+        label = "不限",
+        note = "永远不清空，上下文一直累积。最省事也最省往返，但一条对话里模型看不到记忆（要靠它自己调技能），而且迟早会顶到模型窗口上限",
+    );
+
+    /** 闲置多久算过期（分钟）。0 表示不按时间判断 */
+    val idleMinutes: Int
+        get() = when (this) {
+            RESET_EACH_TIME -> 0
+            H24 -> 24 * 60
+            UNLIMITED -> 0
+        }
 
     companion object {
-        fun fromMinutes(m: Int): AutoClear =
-            entries.firstOrNull { it.minutes == m } ?: H1
+        fun fromId(id: String?): ContextPolicy =
+            entries.firstOrNull { it.id == id } ?: H24
     }
 }
 
@@ -166,23 +208,17 @@ data class AppSettings(
      */
     val maxSteps: Int = 30,
 
+    /** 上下文什么时候重开。见 [ContextPolicy] */
+    val contextPolicy: ContextPolicy = ContextPolicy.H24,
+
     /**
-     * 多久没发消息就清空上下文。0 = 不清空（**默认**）。
+     * 记忆开关。
      *
-     * 默认改成不清空，因为服务端的上下文缓存**按前缀匹配**：
-     * 上下文留着不用重算，命中缓存的那部分便宜很多；
-     * 一清掉，下次请求就是全新前缀，全部按未命中计价。
-     *
-     * 所以"清空"现在只是给用户的一个手动开关，
-     * 不该是默认行为。
+     * 开了就**每次任务结束后让 AI 归纳一条洞察，追加到记忆文件末尾**，
+     * 关掉就完全不写。只有一个开关 —— 用户不需要理解"归纳"和"不丢"
+     * 的区别，那是实现细节。
      */
-    val autoClearMinutes: Int = 0,
-
-    /** 开启记忆：让 AI 有机会把上下文沉淀成洞察 */
     val memoryEnabled: Boolean = false,
-
-    /** 保存记忆：清空上下文时把内容转成 md 存下来，而不是直接丢 */
-    val keepMemory: Boolean = true,
 
     /** 每次任务写 run.log */
     val saveLogs: Boolean = true,
@@ -198,7 +234,6 @@ data class AppSettings(
             else -> apiKey.take(4) + "****" + apiKey.takeLast(4)
         }
 
-    val autoClear: AutoClear get() = AutoClear.fromMinutes(autoClearMinutes)
 }
 
 /**

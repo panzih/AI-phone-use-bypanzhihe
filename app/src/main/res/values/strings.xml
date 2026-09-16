@@ -117,12 +117,9 @@
     <string name="settings_about_license">开源协议</string>
     <string name="settings_about_repo">项目主页</string>
     <string name="settings_a11y_label">无障碍服务</string>
-    <string name="settings_auto_clear">自动清空上下文</string>
-    <string name="settings_auto_clear_desc">这么久没发消息，就自动把上下文清掉</string>
+    <string name="settings_context_policy">上下文</string>
     <string name="settings_memory_enabled">开启记忆</string>
-    <string name="settings_memory_enabled_desc">每次任务结束后，让 AI 把这一趟归纳成一条「用户洞察」存下来（多花一次纯文字的模型调用）。AI 在需要时会自己取回来</string>
-    <string name="settings_keep_memory">保存记忆，防止上下文被清空</string>
-    <string name="settings_keep_memory_desc">没开「开启记忆」时，清空上下文之前把内容原样存成文件，而不是直接丢掉</string>
+    <string name="settings_memory_enabled_desc">开了就每次任务结束后让 AI 归纳一条记忆，追加到记忆文件末尾（只增不减，多花一次纯文字的模型调用）。新开上下文时会自动带上；上下文没重开时，AI 可以自己调 recall_memory 技能查看</string>
     <string name="settings_save_logs">保存日志</string>
     <string name="settings_save_logs_desc">每次执行写一份 run.log，出问题才有得查</string>
     <string name="settings_save_screenshots">保存截图到本地</string>
@@ -134,7 +131,7 @@
     <string name="settings_export_all">导出全部</string>
     <string name="settings_export_latest">导出最近一次</string>
     <string name="settings_log_stats">共 %1$d 次记录 · %2$s</string>
-    <string name="settings_insight_stats">用户洞察 %1$d 份</string>
+    <string name="settings_memory_stats">记忆：%1$d 条 · %2$s</string>
     <string name="settings_export_none">还没有日志可导出</string>
     <string name="settings_export_done">已生成：%1$s</string>
 </resources>

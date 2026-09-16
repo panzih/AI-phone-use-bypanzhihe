@@ -67,7 +67,7 @@ import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
-import com.aiphone.assistant.data.AutoClear
+import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.OperationMode
 import com.aiphone.assistant.data.ThinkingMode
 
@@ -196,13 +196,9 @@ fun SettingsScreen(
             }
 
             item {
-                DropdownRow(
-                    title = stringResource(R.string.settings_auto_clear),
-                    subtitle = stringResource(R.string.settings_auto_clear_desc),
-                    current = s.autoClear,
-                    options = AutoClear.entries.toList(),
-                    optionLabel = { it.label },
-                    onSelect = { onSettingsChange(s.copy(autoClearMinutes = it.minutes)) },
+                ContextPolicySlider(
+                    policy = s.contextPolicy,
+                    onChange = { onSettingsChange(s.copy(contextPolicy = it)) },
                 )
             }
 
@@ -212,15 +208,6 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_memory_enabled_desc),
                     checked = s.memoryEnabled,
                     onCheckedChange = { onSettingsChange(s.copy(memoryEnabled = it)) },
-                )
-            }
-
-            item {
-                SwitchRow(
-                    title = stringResource(R.string.settings_keep_memory),
-                    subtitle = stringResource(R.string.settings_keep_memory_desc),
-                    checked = s.keepMemory,
-                    onCheckedChange = { onSettingsChange(s.copy(keepMemory = it)) },
                 )
             }
 
@@ -525,6 +512,60 @@ private fun AboutRow(label: String, value: String) {
 }
 
 // ----------------------------------------------------------------------
+// 上下文策略
+// ----------------------------------------------------------------------
+
+/**
+ * 上下文策略的三档滑块。
+ *
+ * 只有三个位置，从左到右：每次重置 / 超过 24 小时 / 不限。
+ * 用滑块而不是下拉，是为了让"这是一个从严格到宽松的连续选择"这件事
+ * 一眼可见 —— 下拉框里三个平级的选项看不出这种关系。
+ */
+@Composable
+private fun ContextPolicySlider(
+    policy: ContextPolicy,
+    onChange: (ContextPolicy) -> Unit,
+) {
+    val options = ContextPolicy.entries
+    val current = options.indexOf(policy).coerceAtLeast(0)
+    var draft by remember(current) { mutableFloatStateOf(current.toFloat()) }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.settings_context_policy),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+
+        Slider(
+            value = draft,
+            onValueChange = { draft = it },
+            onValueChangeFinished = {
+                onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
+            },
+            valueRange = 0f..options.lastIndex.toFloat(),
+            // 三档之间只有两个间隔点
+            steps = (options.size - 2).coerceAtLeast(0),
+        )
+
+        Text(
+            text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+// ----------------------------------------------------------------------
 // 最大步数
 // ----------------------------------------------------------------------
 
@@ -637,10 +678,10 @@ private fun LogSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (state.insightCount > 0) {
+                if (state.memoryStats.isNotBlank()) {
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = stringResource(R.string.settings_insight_stats, state.insightCount),
+                        text = state.memoryStats,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

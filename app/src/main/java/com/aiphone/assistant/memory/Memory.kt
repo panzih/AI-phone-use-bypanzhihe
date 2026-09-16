@@ -1,7 +1,12 @@
 package com.aiphone.assistant.memory
 
 import android.content.Context
+import com.aiphone.assistant.llm.ChatTurn
+import com.aiphone.assistant.llm.LlmClient
+import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.AppLog
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -13,29 +18,24 @@ import java.util.Locale
  * ## 这里解决的是什么问题
  *
  * 每次任务都从零开始，AI 就永远不认识你 —— 不知道你常用哪几个 App、
- * 不知道你上次说过"消息发完要确认一下"。
+ * 不知道你上次说过"消息发完要确认一下"、不知道这台机器上哪个页面要等两秒。
  *
- * 所以要把上下文**沉淀**下来：
+ * 所以要有记忆。而记忆的关键在于**它怎么进出上下文**：
  *
  * ```
- * 一轮对话结束（或闲置超时）
- *   → 把上下文交给 AI 分析
- *   → AI 写成一份 md（"用户洞察"）
- *   → 下次执行任务前，把相关的 md 喂回去
+ *   任务结束   →  AI 归纳出一条洞察  →  追加到记忆文件末尾（只增不减）
+ *
+ *   新开上下文 →  把记忆塞进系统提示词（只在这一个时机）
+ *   上下文进行中 → 不塞，模型需要就调 recall_memory 技能
  * ```
  *
- * ## 为什么是 md 而不是数据库
+ * ## 为什么只在"新开上下文"时注入
  *
- * 这些洞察是给 **AI 读**的，不是给程序查的。md 有两个别的好处：
- *   1. 用户自己能用任何编辑器看、改、删 —— 记忆不该是黑盒
- *   2. 可以整个目录丢进任何支持"知识库"的工具里
+ * 服务端的上下文缓存是**按前缀匹配**的。往一段正在进行的对话的系统提示词里
+ * 塞东西，等于把前缀整段作废 —— 下一次请求全部按未命中计价，
+ * 那比省下的这点记忆 token 贵得多。
  *
- * ## 两层记忆
- *
- *   [LlmDistiller]  模型归纳：任务结束后让 AI 提炼"以后还用得上的"
- *   [RawDistiller]  原样转存：不调模型，只是别把内容丢了
- *
- * 前者是"学习"，后者是"不丢"，两个开关各管一件事。
+ * 而"新开上下文"时本来就没有可复用的前缀，这时注入是免费的。
  */
 
 /** 一轮对话。 */
@@ -69,13 +69,6 @@ class Conversation {
 
     fun snapshot(): List<Turn> = synchronized(turns) { turns.toList() }
 
-    /**
-     * 清空。
-     *
-     * 注意 [clear] 之前应该先让 [InsightStore] 把内容沉淀掉 ——
-     * 直接清就是把记忆丢了。这个顺序由调用方保证
-     * （MainActivity 里每次都是 persist 之后才 clear）。
-     */
     fun clear() {
         synchronized(turns) { turns.clear() }
         lastActivityAt = System.currentTimeMillis()
@@ -90,158 +83,139 @@ class Conversation {
      *
      * @param minutes 0 表示从不判超时
      *
-     * 注意这里**只判断时间**，不决定"清掉还是存下来" ——
-     * 那取决于"保存记忆"开关和有没有值得沉淀的内容，
-     * 由调用方决定。判断和动作分开，是为了不让一个函数承担两件事。
+     * 这里**只判断时间**，不决定"清掉还是保留" —— 那取决于上下文策略，
+     * 由调用方决定。判断和动作分开，一个函数只做一件事。
      */
     fun isIdleBeyond(minutes: Int): Boolean =
         minutes > 0 && size > 0 && idleMinutes() >= minutes
 }
 
 /**
- * 一份"用户洞察"。
+ * 一条要写进记忆的洞察。
  *
- * @param title 一句话概括，同时用作文件名
- * @param markdown 正文
+ * @param title 一句话标题，写进二级标题里
+ * @param body markdown 正文
  */
-data class Insight(
+data class MemoryEntry(
     val title: String,
-    val markdown: String,
-    val createdAt: Long = System.currentTimeMillis(),
-) {
-    val fileName: String
-        get() = InsightStore.sanitize(title) + ".md"
-}
+    val body: String,
+    val at: Long = System.currentTimeMillis(),
+)
 
 /**
- * 洞察的落盘与读取。
+ * 记忆的落盘与读取。
  *
- * 文件放在 `<应用私有目录>/纸盒/insights/`，一份一个 md，
- * 文件名带日期，方便按时间排。
+ * ## 一个文件，只增不减
+ *
+ * 所有洞察追加到同一个 `memory.md` 的**末尾**，新的在最下面。
+ * 不删、不改、不重排 —— 三条理由：
+ *
+ *   1. **安全**：记忆是 AI 写的。让它有机会"改写"历史，就可能把用户
+ *      纠正过的错误认知又改回去。追加式没有这个风险
+ *   2. **便宜**：追加是纯文本 append，不需要重写整个文件
+ *   3. **可审**：用户打开文件能看到完整的来龙去脉，而不是一份被
+ *      反复覆盖的摘要
+ *
+ * 代价是文件会越来越长，所以注入系统提示词时有 [INJECT_CHARS_LIMIT]，
+ * 超了只取**最新的**那一段（最新的认知通常最有用）。
  */
-object InsightStore {
+object MemoryStore {
 
-    private val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+    private const val FILE_NAME = "memory.md"
 
-    fun dir(context: Context): File = AppLog.insightDir(context)
+    private val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
 
     /**
-     * 写一份洞察。
+     * 注入系统提示词时的字数上限。
      *
-     * 文件头带上时间和来源，因为将来 AI 读回来时要能判断"这是什么时候的认知"——
-     * 半年前的偏好不一定还成立。
+     * 记忆是纯文本，一直涨下去迟早会把系统提示词撑爆。约 6000 字
+     * 大致是 3~4k token，对一次任务可以接受 —— 而且只在**新开上下文**
+     * 时付这一次。
      */
-    fun save(context: Context, insight: Insight): File? = runCatching {
-        val f = File(dir(context), "${stamp.format(Date(insight.createdAt))}_${insight.fileName}")
-        f.writeText(
-            buildString {
-                appendLine("# ${insight.title}")
-                appendLine()
-                appendLine("> 生成时间：${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(insight.createdAt))}")
-                appendLine("> 来源：纸盒 · AI 操作手机")
-                appendLine()
-                appendLine(insight.markdown)
-            }
-        )
-        AppLog.i("已保存用户洞察：${f.name}", "InsightStore")
-        f
-    }.getOrNull()
+    const val INJECT_CHARS_LIMIT = 6000
 
-    /** 全部洞察，最新的在前 */
-    fun list(context: Context): List<File> =
-        dir(context).listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".md") }
-            ?.sortedByDescending { it.name }
-            ?: emptyList()
+    fun file(context: Context): File = File(AppLog.rootDir(context), FILE_NAME)
 
-    fun readAll(context: Context): String =
-        list(context).joinToString("\n\n---\n\n") { runCatching { it.readText() }.getOrDefault("") }
+    fun exists(context: Context): Boolean =
+        file(context).let { it.exists() && it.length() > 0 }
 
-    fun deleteAll(context: Context): Int {
-        val files = list(context)
-        files.forEach { it.delete() }
-        return files.size
+    /** 全量读取。技能要用完整内容 */
+    fun read(context: Context): String =
+        runCatching { if (file(context).exists()) file(context).readText() else "" }
+            .getOrDefault("")
+
+    /** 给系统提示词用的版本：超长就只保留**末尾**那一段 */
+    fun readForPrompt(context: Context): String {
+        val all = read(context).trim()
+        if (all.length <= INJECT_CHARS_LIMIT) return all
+        return "（前面省略了较早的记忆）\n\n" + all.takeLast(INJECT_CHARS_LIMIT)
     }
 
     /**
-     * 文件名清理。
+     * 追加一条。**这是唯一的写入方式**。
      *
-     * 洞察的标题是 AI 生成的，里面可能有斜杠、冒号、问号这些
-     * 在文件名里非法的字符，直接用会导致创建失败。
+     * 每次都写到文件末尾，之前的内容一个字节都不会被碰。
      */
-    fun sanitize(raw: String): String {
-        val cleaned = raw.trim()
-            .replace(Regex("[\\s/\\\\:*?\"<>|\\n\\r\\t]+"), "_")
-            .take(32)
-            .trim('_')
-        return cleaned.ifBlank { "洞察" }
-    }
-}
-
-/**
- * 把上下文分析成洞察。
- *
- * 两个实现：调模型的 [LlmDistiller] 和原样转存的 [RawDistiller]。
- * 留在接口后面是因为"什么时候该存""存到哪""怎么读回来"跟怎么归纳无关。
- */
-interface InsightDistiller {
-    /**
-     * @return 分析出的洞察；返回 null 表示这次没有值得沉淀的内容
-     */
-    suspend fun distill(turns: List<Turn>): Insight?
-}
-
-/**
- * 占位实现：不调模型，只把原始上下文原样存成 md。
- *
- * 这样即使模型还没接上，"保存记忆"这个开关也是**真的在工作**——
- * 内容不会丢，只是还没被分析过。比做一个点了没反应的按钮诚实。
- */
-class RawDistiller : InsightDistiller {
-    override suspend fun distill(turns: List<Turn>): Insight? {
-        if (turns.isEmpty()) return null
-        val body = buildString {
-            appendLine("（以下为原始上下文，尚未经 AI 归纳）")
-            appendLine()
-            turns.forEach { t ->
-                val who = when (t.role) {
-                    Turn.Role.USER -> "用户"
-                    Turn.Role.AI -> "AI"
-                    Turn.Role.ACTION -> "动作"
+    fun append(context: Context, entry: MemoryEntry): Boolean = runCatching {
+        val f = file(context)
+        if (!f.exists()) {
+            f.writeText(
+                buildString {
+                    appendLine("# 记忆")
+                    appendLine()
+                    appendLine("> 纸盒在每次任务结束后自动沉淀的「用户洞察」，只增不减。")
+                    appendLine("> AI 在新开上下文时会读到这里的内容，也可以随时调 recall_memory 技能查看。")
+                    appendLine()
                 }
-                appendLine("- **$who**：${t.text}")
-            }
+            )
         }
-        return Insight(title = "上下文快照", markdown = body)
+        f.appendText(formatEntry(entry))
+        AppLog.i("记忆 +1：${entry.title}", "记忆")
+        true
+    }.getOrElse {
+        AppLog.w("写记忆失败：${it.message}", "记忆")
+        false
+    }
+
+    private fun formatEntry(entry: MemoryEntry): String = buildString {
+        appendLine()
+        appendLine("## ${stamp.format(Date(entry.at))} · ${entry.title}")
+        appendLine()
+        appendLine(entry.body.trim())
+        appendLine()
+    }
+
+    /** 条数 + 字符数，给设置页显示 */
+    fun stats(context: Context): Pair<Int, Int> {
+        val text = read(context)
+        if (text.isBlank()) return 0 to 0
+        val count = text.lineSequence().count { it.startsWith("## ") }
+        return count to text.length
     }
 }
 
-
 /**
- * 让模型把操作记录归纳成一份「用户洞察」。
+ * 让模型把一次任务的记录归纳成一条洞察。
  *
  * ## 为什么值得多花一次模型调用
  *
- * 上下文里的东西 99% 是这一次任务的细节（"点了 3 号按钮""界面没变化"），
+ * 上下文里 99% 是这一次任务的细节（"点了 3 号按钮""界面没变化"），
  * 下次一点用都没有。真正该留下的是**跨任务成立的东西**：
  * 你常用什么 App、你有哪些固定要求、这台机器上哪些页面有坑。
- * 这需要判断力，不是 `grep` 能干的。
+ * 这需要判断力，不是 grep 能干的。
  *
  * ## 两个刻意的设计
  *
- * **入参截断。** 一次任务可能有几十轮、上万字符。全喂进去归纳一次要花不少钱，
- * 而"最近的几轮"通常信息量最大（前面大多是重复的界面操作）。所以按
- * [MAX_INPUT_CHARS] 从**尾部**往前截。
+ * **入参从尾部截断。** 一次任务可能几十轮、上万字符，全喂进去要花不少钱，
+ * 而最近的几轮信息量最大（前面大多是重复的界面操作）。
  *
- * **明确允许"没东西可记"。** 提示词里直接要求"没什么值得记的就只输出「无」"，
- * 否则模型会为了交差硬编点什么出来 —— 那比没有记忆更糟，因为它会被当成事实
- * 在以后的任务里使用。
+ * **明确允许"没东西可记"。** 提示词里直接要求"没什么值得记的就只输出「无」"。
+ * 否则模型会为了交差硬编点什么出来 —— 那比没有记忆更糟，
+ * 因为它会被当成事实用在以后的任务里。
  */
-class LlmDistiller(
-    private val llm: com.aiphone.assistant.llm.LlmClient,
-) : InsightDistiller {
+class LlmDistiller(private val llm: LlmClient) {
 
-    override suspend fun distill(turns: List<Turn>): Insight? {
+    suspend fun distill(turns: List<Turn>): MemoryEntry? {
         if (turns.isEmpty()) return null
 
         val transcript = buildString {
@@ -264,20 +238,17 @@ class LlmDistiller(
         val result = llm.chat(
             system = SYSTEM,
             history = listOf(
-                com.aiphone.assistant.llm.ChatTurn(
-                    com.aiphone.assistant.llm.ChatTurn.USER,
-                    "下面是一次任务的操作记录：\n\n$clipped",
-                )
+                ChatTurn(ChatTurn.USER, "下面是一次任务的操作记录：\n\n$clipped")
             ),
             imagePng = null,
         )
 
         val text = when (result) {
-            is com.aiphone.assistant.llm.LlmResult.Fail -> {
+            is LlmResult.Fail -> {
                 AppLog.w("归纳记忆失败：${result.message}", "记忆")
                 return null
             }
-            is com.aiphone.assistant.llm.LlmResult.Ok -> result.text.trim()
+            is LlmResult.Ok -> result.text.trim()
         }
 
         // 模型判断没有值得记的
@@ -294,7 +265,7 @@ class LlmDistiller(
             ?: "用户洞察"
         val body = lines.drop(1).joinToString("\n").trim().ifBlank { text }
 
-        return Insight(title = title, markdown = body)
+        return MemoryEntry(title = title, body = body)
     }
 
     private companion object {
@@ -321,5 +292,45 @@ class LlmDistiller(
 
 输出格式：第一行是一句话标题（不超过 15 字），第二行开始是正文。
 """.trimIndent()
+    }
+}
+
+/**
+ * 记忆的写入队列。
+ *
+ * ## 为什么需要排队
+ *
+ * 写记忆要调一次模型，几秒钟。这期间用户完全可能又发了一条任务，
+ * 而那条任务结束时也要写记忆 —— 两个写入同时进行会有两种坏结果：
+ * **两条记录交错插进文件**（markdown 结构乱掉），或者**后写的盖掉先写的**。
+ *
+ * 用一个互斥锁把它们排成一队：谁先到谁先写，后来的等着。
+ * 只增不减的追加式文件最怕并发写，这里是唯一的入口。
+ */
+object MemoryWriter {
+
+    private val lock = Mutex()
+
+    /** 有没有正在排队/写入的 */
+    @Volatile
+    var busy: Boolean = false
+        private set
+
+    /**
+     * 排队写一条。
+     *
+     * @return 写进去的标题；模型判断没什么可记、或调用失败时返回 null
+     */
+    suspend fun write(context: Context, llm: LlmClient, turns: List<Turn>): String? {
+        if (turns.isEmpty()) return null
+        busy = true
+        return try {
+            lock.withLock {
+                val entry = LlmDistiller(llm).distill(turns) ?: return@withLock null
+                if (MemoryStore.append(context, entry)) entry.title else null
+            }
+        } finally {
+            busy = false
+        }
     }
 }

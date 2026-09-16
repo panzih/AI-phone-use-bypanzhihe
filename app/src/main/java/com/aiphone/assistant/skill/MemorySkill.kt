@@ -1,6 +1,6 @@
 package com.aiphone.assistant.skill
 
-import com.aiphone.assistant.memory.InsightStore
+import com.aiphone.assistant.memory.MemoryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -19,25 +19,20 @@ import org.json.JSONObject
  * 做成技能之后，模型在**需要的时候**要一次：任务涉及"我平时怎么做的"
  * 才会去取，取回来的内容进历史，之后靠缓存复用。
  *
- * ## 要不要做成"按相关性检索"
+ * ## 为什么不按相关性挑几条给
  *
- * 现在没有向量检索，只有关键词粗筛（[run] 里的 query）。够用的原因：
- * 记忆条数天然很少（一次任务最多沉淀一条，而且很多次会返回"无可记"），
- * 真实场景下通常就几十条以内。真多到几百条再考虑换检索方式。
+ * 没有向量检索，就只能按关键词粗筛 —— 而用户的说法和记忆文件里的用词
+ * 经常对不上（"照老规矩" vs "发送前确认一下"），粗筛很容易把最该给的
+ * 那几条筛掉。记忆本来就是纯文本，条数也不多（一次任务最多沉淀一条），
+ * 所以**直接给全文**最稳。真涨到几百条再谈检索。
  */
 object MemorySkill : Skill {
-
-    /** 最多返回几份，从最新的往回取 */
-    private const val MAX_INSIGHTS = 5
-
-    /** 每份最多给多少字符，超了截断 */
-    private const val MAX_CHARS_PER_INSIGHT = 1500
 
     override val id: String = "recall_memory"
 
     override val summary: String =
-        "取回之前存下来的记忆（用户的偏好、常用应用、这台机器上踩过的坑）。" +
-            "任务需要「按我平时的习惯来」时用"
+        "查看用户的全部记忆（偏好、常用应用、这台机器上踩过的坑）。" +
+            "想知道用户是什么样的人、以前是怎么操作的，就用它"
 
     override val doc: String = """
 # 技能：recall_memory —— 取回记忆
@@ -56,16 +51,14 @@ object MemorySkill : Skill {
 - 任务跟用户偏好完全无关（比如"打开设置"）
 
 ## 参数
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| query | 否 | 关键词，用来挑相关的记忆。不给就返回最近几条 |
+无。
 
 ## 返回
-按时间倒序的若干份记忆（正文是 markdown）。一份都没有时明确说明"还没有记忆"。
+记忆文件的**全文**（markdown，按时间从早到晚，最新的在最后）。
+一条都没有时明确说明"还没有记忆"。
 
 ## 示例
 {"use_skill": "recall_memory"}
-{"use_skill": "recall_memory", "skill_args": {"query": "微信"}}
 
 ## 注意
 - 记忆是**过去**的认知，可能过时。跟当前界面冲突时以当前界面为准。
@@ -74,47 +67,22 @@ object MemorySkill : Skill {
 
     override suspend fun run(ctx: SkillContext, args: JSONObject?): String =
         withContext(Dispatchers.IO) {
-            val files = InsightStore.list(ctx.context)
-            if (files.isEmpty()) {
-                return@withContext "还没有存下任何记忆。用户可能刚装好这个应用，" +
-                    "或者「开启记忆」是关着的。"
+            if (!MemoryStore.exists(ctx.context)) {
+                return@withContext "还没有存下任何记忆。可能是「开启记忆」还没打开，" +
+                    "或者你还没完成过任务。"
             }
 
-            val query = args?.optString("query", "")?.trim().orEmpty()
-
-            // 读了才能筛，所以这里先把内容读出来（记忆条数很少，成本可忽略）
-            val loaded = files.take(40).mapNotNull { f ->
-                val text = runCatching { f.readText() }.getOrNull() ?: return@mapNotNull null
-                f.name to text
-            }
-
-            val picked = if (query.isBlank()) {
-                loaded
-            } else {
-                val keywords = query.split(Regex("[\\s,，、]+")).filter { it.length >= 2 }
-                val hit = loaded.filter { (_, text) ->
-                    keywords.any { k -> text.contains(k, ignoreCase = true) }
-                }
-                // 关键词一条都没命中就退回最近几条 —— 什么都不给比给不相关的更糟
-                hit.ifEmpty { loaded }
-            }.take(MAX_INSIGHTS)
+            // 记忆是**只增不减**的一个文件，所以这里直接把全文给它。
+            // 不做检索、不分段挑：现在没有向量检索，而按关键词粗筛
+            // 反而可能把最相关的那几条筛掉（用户的口语表达和文件里的
+            // 用词经常对不上）。条数真有几百条再考虑换方式。
+            val text = MemoryStore.read(ctx.context).trim()
+            val (count, chars) = MemoryStore.stats(ctx.context)
 
             buildString {
-                appendLine(
-                    "共 ${files.size} 份记忆，下面是" +
-                        (if (query.isBlank()) "最近的" else "和「$query」相关的") +
-                        " ${picked.size} 份（新的在前）："
-                )
-                picked.forEach { (name, text) ->
-                    appendLine()
-                    appendLine("──────── $name ────────")
-                    if (text.length > MAX_CHARS_PER_INSIGHT) {
-                        appendLine(text.take(MAX_CHARS_PER_INSIGHT))
-                        appendLine("……（这份共 ${text.length} 字符，已截断）")
-                    } else {
-                        appendLine(text)
-                    }
-                }
+                appendLine("用户的记忆（共 $count 条，$chars 字符，最新的在最后）：")
+                appendLine()
+                appendLine(text)
                 appendLine()
                 append("记忆是过去的认知，可能已经过时；和当前界面对不上时以当前界面为准。")
             }

@@ -25,9 +25,8 @@ class SettingsStore(context: Context) {
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
         mode = OperationMode.fromId(sp.getString(KEY_MODE, null)),
         maxSteps = sp.getInt(KEY_MAX_STEPS, DEFAULT.maxSteps),
-        autoClearMinutes = sp.getInt(KEY_AUTO_CLEAR, DEFAULT.autoClearMinutes),
+        contextPolicy = ContextPolicy.fromId(sp.getString(KEY_CONTEXT_POLICY, null)),
         memoryEnabled = sp.getBoolean(KEY_MEMORY, DEFAULT.memoryEnabled),
-        keepMemory = sp.getBoolean(KEY_KEEP_MEMORY, DEFAULT.keepMemory),
         saveLogs = sp.getBoolean(KEY_SAVE_LOGS, DEFAULT.saveLogs),
         saveScreenshots = sp.getBoolean(KEY_SAVE_SHOTS, DEFAULT.saveScreenshots),
     )
@@ -40,9 +39,8 @@ class SettingsStore(context: Context) {
             .putString(KEY_THINKING, s.thinking.id)
             .putString(KEY_MODE, s.mode.id)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
-            .putInt(KEY_AUTO_CLEAR, s.autoClearMinutes)
+            .putString(KEY_CONTEXT_POLICY, s.contextPolicy.id)
             .putBoolean(KEY_MEMORY, s.memoryEnabled)
-            .putBoolean(KEY_KEEP_MEMORY, s.keepMemory)
             .putBoolean(KEY_SAVE_LOGS, s.saveLogs)
             .putBoolean(KEY_SAVE_SHOTS, s.saveScreenshots)
             .apply()
@@ -61,9 +59,8 @@ class SettingsStore(context: Context) {
         const val KEY_THINKING = "thinking_mode"
         const val KEY_MODE = "operation_mode"
         const val KEY_MAX_STEPS = "max_steps"
-        const val KEY_AUTO_CLEAR = "auto_clear_minutes"
+        const val KEY_CONTEXT_POLICY = "context_policy"
         const val KEY_MEMORY = "memory_enabled"
-        const val KEY_KEEP_MEMORY = "keep_memory"
         const val KEY_SAVE_LOGS = "save_logs"
         const val KEY_SAVE_SHOTS = "save_screenshots"
     }

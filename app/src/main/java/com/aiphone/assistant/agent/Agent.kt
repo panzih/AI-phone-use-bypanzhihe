@@ -61,6 +61,13 @@ class Agent(
     private val selfPackage: String,
     /** 技能注册表 —— 模型用 use_skill 主动要"屏幕上没有的信息" */
     private val skills: SkillRegistry,
+    /**
+     * 用户的记忆。**只在上下文是新开的时候非空**。
+     *
+     * 由调用方决定传不传：往一段正在进行的对话里插记忆会把缓存前缀
+     * 打断，代价比省下的 token 大得多（见 ContextPolicy）。
+     */
+    private val memorySnapshot: String? = null,
     private val logger: RunLogger?,
     private val listener: Listener,
 ) {
@@ -126,7 +133,15 @@ class Agent(
         ensureNotSelfForeground()
 
         // ---- 3. 开跑 ----
-        val system = AgentPrompt.system(skills.catalog())
+        val system = AgentPrompt.system(skills.catalog(), memorySnapshot)
+        logger?.line(
+            if (memorySnapshot.isNullOrBlank()) {
+                "本次不注入记忆（上下文是接着上一段的，模型可调 recall_memory 技能）"
+            } else {
+                "已注入记忆 ${memorySnapshot.length} 字符（本次是新开的上下文）"
+            },
+            "记忆",
+        )
         val history = mutableListOf<ChatTurn>()
 
         var lastTreeHash = 0

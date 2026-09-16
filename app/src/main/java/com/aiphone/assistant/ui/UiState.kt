@@ -61,8 +61,13 @@ data class MainUiState(
     /** 设置页显示的日志统计，例如 "共 3 次记录 · 1.2 MB" */
     val logStats: String = "",
 
-    /** 已沉淀的用户洞察份数 */
-    val insightCount: Int = 0,
+    /**
+     * 记忆的规模，例如「记忆：7 条 · 4.1 KB」。
+     *
+     * 显示成一行文本而不是两个数字：界面不需要分别用它们做判断，
+     * 拼好再传反而少一处格式化的地方。
+     */
+    val memoryStats: String = "",
 
     /** 应用版本号，给设置页的「关于」显示 */
     val appVersion: String = "",

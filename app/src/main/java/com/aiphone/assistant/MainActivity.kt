@@ -27,6 +27,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.aiphone.assistant.agent.Agent
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
+import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.SettingsStore
 import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.llm.LlmClient
@@ -34,9 +35,8 @@ import com.aiphone.assistant.llm.LlmConfig
 import com.aiphone.assistant.log.AppLog
 import com.aiphone.assistant.log.LogExporter
 import com.aiphone.assistant.memory.Conversation
-import com.aiphone.assistant.memory.InsightStore
-import com.aiphone.assistant.memory.LlmDistiller
-import com.aiphone.assistant.memory.RawDistiller
+import com.aiphone.assistant.memory.MemoryStore
+import com.aiphone.assistant.memory.MemoryWriter
 import com.aiphone.assistant.memory.Turn
 import com.aiphone.assistant.record.MacroLearner
 import com.aiphone.assistant.record.MacroStore
@@ -225,7 +225,16 @@ private fun AppRoot(
     var authorized by remember { mutableStateOf(AutoService.isConnected) }
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var logStats by remember { mutableStateOf("") }
-    var insightCount by remember { mutableIntStateOf(0) }
+    var memoryStats by remember { mutableStateOf("") }
+
+    /**
+     * 本次任务是从上下文里的第几轮开始的。
+     *
+     * 写记忆时只归纳**这一段任务自己产生**的轮次。不记这个的话，
+     * "不限"档下一条长对话会被反复整体归纳 —— 又贵，又会把前面任务的
+     * 内容重新总结一遍塞进记忆里。
+     */
+    var taskTurnStart by remember { mutableIntStateOf(0) }
     var progress by remember { mutableStateOf("") }
     var toast by remember { mutableStateOf<String?>(null) }
 
@@ -257,7 +266,12 @@ private fun AppRoot(
         val runs = AppLog.listRuns(context)
         val total = runs.sumOf { run -> run.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
         logStats = context.getString(R.string.settings_log_stats, runs.size, formatBytes(total))
-        insightCount = InsightStore.list(context).size
+        val (memCount, memChars) = MemoryStore.stats(context)
+        memoryStats = if (memCount > 0) {
+            context.getString(R.string.settings_memory_stats, memCount, formatBytes(memChars.toLong()))
+        } else {
+            ""
+        }
         macros = loadMacroSummaries(context)
         schedules = ScheduleStore.loadAll(context)
         exactAlarmGranted = Scheduler.canScheduleExact(context)
@@ -405,12 +419,6 @@ private fun AppRoot(
         // 用户可能刚从系统设置里开完悬浮窗回来，每次前台都重查
         overlayGranted = Settings.canDrawOverlays(context)
         refreshStats()
-
-        if (conversation.isIdleBeyond(settings.autoClearMinutes)) {
-            persistConversationIfNeeded(conversation, settings, context)
-            conversation.clear()
-            if (settings.saveLogs) AppLog.i("上下文闲置超时，已清空", "记忆")
-        }
     }
 
     /**
@@ -422,7 +430,7 @@ private fun AppRoot(
      * 真正的循环逻辑在 [Agent] 里，包括防死循环、历史裁剪、
      * 自己在前台时让位这些防护。
      */
-    suspend fun runTask(task: String) {
+    suspend fun runTask(task: String, memorySnapshot: String? = null) {
         val logger = if (settings.saveLogs) {
             AppLog.start(
                 context = context,
@@ -468,6 +476,7 @@ private fun AppRoot(
             settings = settings,
             maxSteps = settings.maxSteps,
             selfPackage = context.packageName,
+            memorySnapshot = memorySnapshot,
             // 技能注册表：模型用 use_skill 主动要"屏幕上没有的信息"。
             // 传 applicationContext —— 它会活到任务结束，不能攥着 Activity
             skills = SkillRegistry(
@@ -508,6 +517,7 @@ private fun AppRoot(
                         context = context.applicationContext,
                         settings = settings,
                         conversation = conversation,
+                        sinceTurn = taskTurnStart,
                         llm = llm,
                         onDone = { refreshStats() },
                     )
@@ -537,6 +547,30 @@ private fun AppRoot(
         input = ""
         stopRequested = false
         OverlayBus.clearStop()
+
+        // ---- 上下文策略 ----
+        // 判断"这一段上下文还算不算数"：按策略决定是接着用还是重开。
+        // 重开的时机很关键 —— 记忆**只在这个时机**注入提示词，
+        // 因为往正在进行的一段对话中间插东西会把缓存前缀打断。
+        val policy = settings.contextPolicy
+        val expired = when (policy) {
+            ContextPolicy.RESET_EACH_TIME -> conversation.size > 0
+            ContextPolicy.H24 -> conversation.isIdleBeyond(24 * 60)
+            ContextPolicy.UNLIMITED -> false
+        }
+        if (expired) {
+            if (settings.saveLogs) {
+                AppLog.i("按上下文策略重开（原有 ${conversation.size} 轮，策略=${policy.label}）", "上下文")
+            }
+            conversation.clear()
+        }
+
+        // 这一段是不是"新开的"：刚清过、或者本来就是空的
+        val freshContext = conversation.size == 0
+        val memory = if (freshContext) MemoryStore.readForPrompt(context) else null
+
+        // 记住起点，任务结束时只归纳从这里往后的轮次
+        taskTurnStart = conversation.size
         conversation.add(Turn(Turn.Role.USER, task))
 
         scope.launch {
@@ -565,7 +599,7 @@ private fun AppRoot(
             hostActivity?.moveTaskToBack(true)
 
             try {
-                runTask(task)
+                runTask(task, memory)
             } catch (t: Throwable) {
                 addLog(LogKind.ERROR, "执行出错：${t.message}", "错误")
                 if (settings.saveLogs) AppLog.e("执行出错：$t", "任务")
@@ -578,18 +612,18 @@ private fun AppRoot(
         }
     }
 
-    /** 清空上下文。开了"保存记忆"就先把内容沉淀成 md，再清 */
+    /**
+     * 手动清空上下文。
+     *
+     * 这里**不需要先沉淀** —— 记忆在每次任务结束时就写过了，
+     * 上下文里剩下的只是这一次的界面往返记录，丢了不可惜。
+     */
     fun clearContext() {
         val had = conversation.size
-        // 沉淀是挂起操作（将来要调模型），所以必须进协程 ——
-        // 直接在点击回调里调 suspend 函数是编译不过的。
-        scope.launch {
-            persistConversationIfNeeded(conversation, settings, context)
-            conversation.clear()
-            if (settings.saveLogs) AppLog.i("手动清空上下文（原有 $had 轮）", "记忆")
-            refreshStats()
-        }
+        conversation.clear()
+        if (settings.saveLogs) AppLog.i("手动清空上下文（原有 $had 轮）", "记忆")
         toast = context.getString(R.string.settings_clear_context_done)
+        refreshStats()
     }
 
     fun exportLatest() {
@@ -638,7 +672,7 @@ private fun AppRoot(
                 authorized = authorized,
                 overlayGranted = overlayGranted,
                 logStats = logStats,
-                insightCount = insightCount,
+                memoryStats = memoryStats,
                 appVersion = appVersion,
                 progress = progress,
                 toast = toast,
@@ -698,7 +732,7 @@ private fun AppRoot(
                 authorized = authorized,
                 overlayGranted = overlayGranted,
                 logStats = logStats,
-                insightCount = insightCount,
+                memoryStats = memoryStats,
                 appVersion = appVersion,
                 toast = toast,
             ),
@@ -709,7 +743,7 @@ private fun AppRoot(
                     AppLog.i(
                         "设置变更：通道=${next.mode.label} 模型=${next.modelName} " +
                             "最大步数=${next.maxSteps} " +
-                            "记忆=${next.memoryEnabled} 自动清空=${next.autoClear.label}",
+                            "记忆=${next.memoryEnabled} 上下文=${next.contextPolicy.label}",
                         "设置",
                     )
                 }
@@ -725,57 +759,40 @@ private fun AppRoot(
 }
 
 /**
- * 清空上下文之前，把内容沉淀成 md。
+ * 任务结束时写一条记忆。
  *
- * **只在「开启记忆」关着的时候才走这条路。** 开着的时候内容在任务结束时
- * 就已经被 AI 归纳过了，这里再原样存一份只是重复的噪声。
+ * ## 为什么放在任务结束，而不是等上下文被清空
  *
- * 两个开关的分工：
- *   开启记忆  任务结束后让 AI 归纳一次（真正会"学到东西"的那条路）
- *   保存记忆  没开记忆时，清空之前原样转存一份，免得内容直接丢掉
- */
-private suspend fun persistConversationIfNeeded(
-    conversation: Conversation,
-    settings: AppSettings,
-    context: android.content.Context,
-) {
-    if (!settings.keepMemory) return
-    // 开记忆时任务结束已经归纳过了，不再重复
-    if (settings.memoryEnabled) return
-    val turns = conversation.snapshot()
-    if (turns.isEmpty()) return
-    runCatching {
-        val insight = RawDistiller().distill(turns)
-        if (insight != null) InsightStore.save(context, insight)
-    }
-}
-
-/**
- * 任务结束时让 AI 归纳一次记忆。
+ * 这时候记录最新鲜（界面细节、用户的原话都还在）。而且上下文什么时候
+ * 重开由策略决定 —— "不限"那一档可能几天都不清一次，等它就永远学不到东西。
  *
- * 为什么放在**任务结束**而不是等上下文被清空：这时候记录最新鲜，
- * 而且用户可能几个月都不手动清一次上下文 —— 那样就永远学不到东西。
+ * ## 为什么要排队
  *
- * 成本是一次纯文字的模型调用（不带图）。所以只在「开启记忆」打开时才做。
+ * 写记忆要调一次模型，几秒钟。这期间用户完全可能又发了一条任务，
+ * 那条结束时也会写 —— 两个写入同时进行会让**两条记录交错插进同一个
+ * 文件**，markdown 结构就乱了。所以交给 [MemoryWriter] 排队。
+ *
+ * 成本是一次纯文字调用（不带图）。只在「开启记忆」打开时才做。
  */
 private fun memorizeAfterTask(
     scope: kotlinx.coroutines.CoroutineScope,
     context: android.content.Context,
     settings: AppSettings,
     conversation: Conversation,
+    sinceTurn: Int,
     llm: LlmClient,
     onDone: () -> Unit,
 ) {
     if (!settings.memoryEnabled) return
-    val turns = conversation.snapshot()
+    // 只归纳这一段任务自己产生的轮次。把整段上下文都喂进去的话，
+    // 之前任务的内容会被反复重新归纳 —— 既贵，又会让同一条认知
+    // 在记忆文件里越滚越多份
+    val turns = conversation.snapshot().drop(sinceTurn.coerceAtLeast(0))
     if (turns.isEmpty()) return
     scope.launch {
         runCatching {
-            val insight = LlmDistiller(llm).distill(turns)
-            if (insight != null) {
-                InsightStore.save(context, insight)
-                if (settings.saveLogs) AppLog.i("已沉淀记忆：${insight.title}", "记忆")
-            }
+            val title = MemoryWriter.write(context, llm, turns)
+            if (title != null && settings.saveLogs) AppLog.i("记忆已更新：$title", "记忆")
         }
         onDone()
     }

@@ -227,6 +227,15 @@ object AppLog {
     fun macroDir(context: Context): File =
         File(context.filesDir, "$ROOT_DIR/macros").apply { mkdirs() }
 
+    /**
+     * 应用私有目录下的数据根目录（`<filesDir>/纸盒`）。
+     *
+     * 记忆文件直接放在这一层 —— 它不是"一类文件里的一个"，
+     * 而是整个应用唯一的一份长期记忆，放在根上更显眼。
+     */
+    fun rootDir(context: Context): File =
+        File(context.filesDir, ROOT_DIR).apply { mkdirs() }
+
     fun current(): RunLogger? = current
 
     /**
