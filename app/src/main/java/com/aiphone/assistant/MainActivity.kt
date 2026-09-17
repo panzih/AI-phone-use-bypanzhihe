@@ -30,6 +30,7 @@ import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.ContextStore
 import com.aiphone.assistant.display.MirrorActivity
+import com.aiphone.assistant.display.VirtualDisplayManager
 import com.aiphone.assistant.data.SettingsStore
 import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.llm.LlmClient
@@ -691,9 +692,46 @@ private fun AppRoot(
                 )
             }
 
-            // 把主界面让开，否则 Agent 第一步要额外按一次 Home，
-            // 而且中间那一下用户会看到纸盒自己的界面被当成操作对象。
-            hostActivity?.moveTaskToBack(true)
+            // ---- 副屏模式：先建屏、切通道 ----
+            // 用户开了「在副屏上操作」之后，AI 的截图和触控都落到那块虚拟屏上，
+            // 手机主屏留给用户自己用。
+            var vdCreated = false
+            if (settings.useVirtualDisplay) {
+                addLog(LogKind.SYSTEM, "正在创建副屏 ...", "副屏")
+                val st = runCatching { VirtualDisplayManager.create(context) }
+                    .getOrElse {
+                        VirtualDisplayManager.State(message = "创建失败：${it.message}")
+                    }
+                val id = st.displayId
+                if (id == null) {
+                    // 明确中止而不是偷偷退回主屏 —— 用户选的是副屏模式，
+                    // 悄悄在主屏上操作会让他以为 AI 在别处动手
+                    addLog(
+                        LogKind.ERROR,
+                        "副屏没能创建：${st.message}",
+                        "副屏",
+                    )
+                    isRunning = false
+                    progress = ""
+                    OverlayService.stop(context)
+                    return@launch
+                }
+                vdCreated = true
+                controller.enterVirtualDisplay(
+                    displayId = id,
+                    size = VirtualDisplayManager.DEFAULT_WIDTH to VirtualDisplayManager.DEFAULT_HEIGHT,
+                )
+                addLog(LogKind.SYSTEM, "副屏已就绪（id=$id），AI 将在这块屏上操作", "副屏")
+
+                // 自动把镜像窗口弹出来，让用户看着 AI 在副屏里干活。
+                // 注意：这里是 Composable 作用域，够不到 Activity 的成员，
+                // 必须走 context（本项目已经在这里踩过三次了）
+                runCatching { context.startActivity(MirrorActivity.intent(context, id)) }
+            } else {
+                // 主屏模式：把界面让开，否则 Agent 第一步要额外按一次 Home，
+                // 而且中间那一下用户会看到纸盒自己的界面被当成操作对象。
+                hostActivity?.moveTaskToBack(true)
+            }
 
             // 自动截图：任务期间每 5 秒一张，**故意不隐藏任何 UI** ——
             // 这张图是给人排查用的，要的就是所见即所得（悬浮窗、状态栏、
@@ -723,6 +761,12 @@ private fun AppRoot(
                 if (settings.saveLogs) AppLog.e("执行出错：$t", "任务")
             } finally {
                 capJob?.cancel()
+                // 副屏是我们建的，收尾时撤掉 —— 不然会一直挂在系统里，
+                // 用户下次打开"开发者选项 → 模拟副屏"会看到一块莫名其妙的屏
+                if (vdCreated) {
+                    controller.exitVirtualDisplay()
+                    runCatching { VirtualDisplayManager.remove(context) }
+                }
                 isRunning = false
                 progress = ""
                 OverlayService.stop(context)

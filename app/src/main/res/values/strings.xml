@@ -13,6 +13,8 @@
     <string name="drawer_recording">操作记录</string>
     <string name="drawer_schedules">定时任务</string>
     <string name="drawer_virtual_display">副屏</string>
+    <string name="settings_use_vd">在副屏上操作</string>
+    <string name="settings_use_vd_desc">任务开始时用 Shizuku 开一块虚拟屏，AI 只在那块屏上操作，手机主屏留给你自己用；任务结束自动撤屏。\n需要 Shizuku。副屏读不到控件树，定位精度不如主屏——简单流程用它，复杂界面还是用主屏。</string>
     <string name="drawer_settings">设置</string>
 
     <!-- 顶栏 -->

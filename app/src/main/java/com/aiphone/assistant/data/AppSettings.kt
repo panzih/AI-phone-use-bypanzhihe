@@ -194,6 +194,19 @@ data class AppSettings(
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,
 
+    /**
+     * 在副屏上操作。
+     *
+     * 开了之后：任务开始时用 Shizuku 建一块虚拟屏，AI 的截图和触控
+     * 全部落到那块屏上，手机主屏留给你自己用。任务结束自动撤屏。
+     *
+     * **需要 Shizuku**（副屏的触控只能走 shell 的 input -d，
+     * 无障碍的手势注入没有"指定屏幕"的参数）。
+     *
+     * 默认关：它比主屏模式弱 —— 副屏**读不到控件树**，模型只能看截图猜坐标。
+     */
+    val useVirtualDisplay: Boolean = false,
+
     // ---------- 开发者设置 ----------
     /**
      * 一次任务最多走多少步。

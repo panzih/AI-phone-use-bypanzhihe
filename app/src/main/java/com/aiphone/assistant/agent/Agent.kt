@@ -224,7 +224,31 @@ class Agent(
             var modelOutput = ""
             var imageRequests = 0
             var skillCalls = 0
-            var pendingImage: ByteArray? = null
+
+            /**
+             * 读不到控件树时（副屏模式就是这种），**截图是模型唯一的信息来源**。
+             *
+             * 主屏模式下控件树已经能说清界面，图是按需要才给；但副屏上
+             * 一条控件树都读不到 —— 这时如果还等模型主动要图，第一轮
+             * 它就是在完全瞎的情况下做判断（而且它连"现在是什么界面"
+             * 都不知道，甚至不知道要不要图）。所以这种情况直接带上图。
+             *
+             * 代价是每一步都多一张图的 token。但这是副屏模式必然的成本，
+             * 不是可以优化掉的东西。
+             */
+            val autoImage: ByteArray? = if (tree == null) {
+                withContext(Dispatchers.IO) { controller.captureFrame() }
+            } else {
+                null
+            }
+            if (autoImage != null) {
+                logger?.line(
+                    "读不到控件树，本轮自动带上截图（${autoImage.size} 字节）",
+                    "截图",
+                )
+            }
+
+            var pendingImage: ByteArray? = autoImage
             var imageNote: String? = null
             var skillNote: String? = null
 

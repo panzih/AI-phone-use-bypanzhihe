@@ -3,6 +3,8 @@ package com.aiphone.assistant
 import android.content.Context
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.channel.AccessibilityChannel
+import com.aiphone.assistant.channel.DeviceChannel
+import com.aiphone.assistant.channel.DisplayChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -25,11 +27,58 @@ import kotlinx.coroutines.withContext
  */
 class ChannelController(private val context: Context) {
 
-    private var channel: AccessibilityChannel? = null
+    /**
+     * 操作目标在哪块屏上。
+     *
+     *   ACCESSIBILITY   主屏，走无障碍（默认，能力最全）
+     *   VIRTUAL_DISPLAY 副屏，走 Shizuku 的 shell 命令（没有控件树）
+     *
+     * 上层（Agent、技能）不需要知道用的是哪条 —— 它们只调
+     * [probe]/[screenSize]/[readUiTree]/[captureFrame]/[execute]，
+     * 由这里决定命令发到哪儿。
+     */
+    enum class Mode { ACCESSIBILITY, VIRTUAL_DISPLAY }
 
-    /** 拿到通道实例（懒建），给需要执行动作的上层用 */
-    fun ensureChannel(): AccessibilityChannel =
-        channel ?: AccessibilityChannel(context).also { channel = it }
+    private var accessibility: AccessibilityChannel? = null
+    private var display: DisplayChannel? = null
+
+    @Volatile
+    private var mode: Mode = Mode.ACCESSIBILITY
+
+    val isVirtualDisplay: Boolean get() = mode == Mode.VIRTUAL_DISPLAY && display != null
+
+    /**
+     * 切到副屏模式。
+     *
+     * @param displayId 由 VirtualDisplayManager 建屏后推断出来的 id
+     */
+    fun enterVirtualDisplay(displayId: Int, size: Pair<Int, Int>) {
+        display?.release()
+        display = DisplayChannel(context, displayId, size)
+        mode = Mode.VIRTUAL_DISPLAY
+        android.util.Log.i("ChannelController", "切到副屏模式：id=$displayId 分辨率=$size")
+    }
+
+    /** 切回主屏 */
+    fun exitVirtualDisplay() {
+        display?.release()
+        display = null
+        mode = Mode.ACCESSIBILITY
+        android.util.Log.i("ChannelController", "切回主屏模式")
+    }
+
+    /**
+     * 拿到当前通道。
+     *
+     * 副屏没设置好时**回退到无障碍**而不是抛异常 —— 宁可走错通道让用户
+     * 看见主屏在被操作，也不要因为一处状态不同步就整个崩掉。
+     */
+    fun ensureChannel(): DeviceChannel =
+        if (isVirtualDisplay) {
+            display!!
+        } else {
+            accessibility ?: AccessibilityChannel(context).also { accessibility = it }
+        }
 
     /**
      * 探测能不能用。
@@ -71,7 +120,18 @@ class ChannelController(private val context: Context) {
         withContext(Dispatchers.IO) { ensureChannel().screenshot() }
 
     /** 当前能否操作（服务是否真的连着，不是"设置里开着"） */
-    val isReady: Boolean get() = AutoService.isConnected
+    /**
+     * 当前通道能不能真的用。
+     *
+     * 主屏看无障碍是否连着；副屏看 Shizuku 那边 —— 两者的"就绪"
+     * 根本不是一回事，所以必须按模式分开判断。
+     */
+    val isReady: Boolean
+        get() = if (isVirtualDisplay) {
+            com.aiphone.assistant.shell.ShizukuBridge.hasPermission()
+        } else {
+            AutoService.isConnected
+        }
 
     /**
      * 执行一个动作。
@@ -89,11 +149,17 @@ class ChannelController(private val context: Context) {
      * 用来判断"我们是不是自己在前台" —— 那种情况下截图拍到的是
      * 纸盒自己的界面，发给模型会误导它去点我们自己的按钮。
      */
-    suspend fun currentPackage(): String? =
-        withContext(Dispatchers.IO) { AutoService.get()?.currentPackage() }
+    suspend fun currentPackage(): String? = withContext(Dispatchers.IO) {
+        // 副屏上的前台应用读不到（那要靠无障碍树），返回 null 让上层
+        // 跳过"自己在前台就让位"那个判断 —— 副屏上本来也不会有我们自己
+        if (isVirtualDisplay) null else AutoService.get()?.currentPackage()
+    }
 
     fun release() {
-        channel?.release()
-        channel = null
+        accessibility?.release()
+        accessibility = null
+        display?.release()
+        display = null
+        mode = Mode.ACCESSIBILITY
     }
 }

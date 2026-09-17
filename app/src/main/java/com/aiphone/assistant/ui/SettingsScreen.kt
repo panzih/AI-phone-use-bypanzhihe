@@ -165,6 +165,15 @@ fun SettingsScreen(
                 )
             }
             item {
+                SwitchRow(
+                    title = stringResource(R.string.settings_use_vd),
+                    subtitle = stringResource(R.string.settings_use_vd_desc),
+                    checked = s.useVirtualDisplay,
+                    onCheckedChange = { onSettingsChange(s.copy(useVirtualDisplay = it)) },
+                )
+            }
+
+            item {
                 PermissionRow(
                     title = stringResource(R.string.settings_overlay_label),
                     desc = stringResource(R.string.settings_overlay_desc),

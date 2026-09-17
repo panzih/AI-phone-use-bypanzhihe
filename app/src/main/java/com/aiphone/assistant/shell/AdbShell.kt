@@ -120,8 +120,16 @@ object AdbShell {
         packageName: String,
         component: String? = null,
     ): String {
-        val target = component ?: packageName
-        return ShizukuBridge.run(context, "am start --display $displayId -n $target")
+        // 只知道包名时用 MAIN/LAUNCHER 隐式启动：不需要知道 Activity 名，
+        // 系统自己找启动入口。给组件名则点名启动（更精确）
+        val cmd = if (component != null) {
+            "am start --display $displayId -n $component"
+        } else {
+            "am start --display $displayId " +
+                "-a android.intent.action.MAIN " +
+                "-c android.intent.category.LAUNCHER -p $packageName"
+        }
+        return ShizukuBridge.run(context, cmd)
     }
 
     // ------------------------------------------------------------------
