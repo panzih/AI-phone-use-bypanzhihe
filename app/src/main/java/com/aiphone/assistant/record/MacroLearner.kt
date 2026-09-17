@@ -48,7 +48,6 @@ class MacroLearner(private val llm: LlmClient) {
         val result = llm.chat(
             system = SYSTEM,
             history = listOf(ChatTurn(ChatTurn.USER, userText)),
-            imagePng = null,
         )
 
         val text = when (result) {

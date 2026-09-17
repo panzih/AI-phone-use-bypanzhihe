@@ -43,8 +43,35 @@ data class LlmConfig(
     val timeoutMs: Int = 120_000,
 )
 
-/** 一条对话消息（纯文本；图片单独传） */
-data class ChatTurn(val role: String, val text: String) {
+/**
+ * 一条对话消息。
+ *
+ * ## 图片为什么必须挂在消息自己身上
+ *
+ * 原来是"图片单独传、只挂在最后一条 user 消息上"，历史里的图片一律丢掉。
+ * 那个设计**会把上下文缓存彻底打废**：
+ *
+ *   第 1 次请求： [system][user1 + 图]
+ *   第 2 次请求： [system][user1 无图][assistant1][user2 + 图]
+ *
+ * 两次请求的 **user1 不是同一个东西**（一次带图一次不带），token 序列
+ * 从 user1 就分叉了 —— 服务端的缓存按**最长公共前缀**匹配，于是能复用的
+ * 只剩 system 那一段。也就是说历史越长、步数越多，命中的越少，
+ * 每一步都在按全价重算前面所有内容。
+ *
+ * 正确做法是让消息**逐字不变地**重复出现：图片跟着它所属的那条消息，
+ * 之后每次请求都原样再发一遍。这样前缀才是真正只增不改的。
+ *
+ * 代价是每次请求的请求体里会带上之前用过的图片（一张 60~90KB 的 PNG，
+ * base64 之后约 120KB）。但命中缓存的那部分便宜很多，
+ * 而且图片是按需才要的（见 Agent 的 need_image），数量很少。
+ */
+data class ChatTurn(
+    val role: String,
+    val text: String,
+    /** 这条消息附带的截图。之后每次请求都会原样重发 —— 这是缓存命中的前提 */
+    val imagePng: ByteArray? = null,
+) {
     companion object {
         const val USER = "user"
         const val ASSISTANT = "assistant"
@@ -67,6 +94,19 @@ sealed class LlmResult {
          */
         val cacheHitTokens: Int = 0,
         val cacheMissTokens: Int = 0,
+        /**
+         * 上一次请求的消息，有多少条被原样复用了。
+         *
+         * 分母是**上一次的条数** —— 这个指标要回答的是"上一次请求是不是
+         * 被完整复用了"。等于 [prefixTotal] 就是完整复用（正常情况），
+         * 小于就说明历史中途被改动过，那之后的缓存全都用不上。
+         *
+         * [prefixTotal] 为 0 表示这是本次任务的第一次请求，无前缀可谈。
+         *
+         * 之所以要单独统计：服务端只报 token 数，不会告诉你前缀断在哪一条。
+         */
+        val prefixReused: Int = 0,
+        val prefixTotal: Int = 0,
     ) : LlmResult()
 
     /** message 是可以直接显示给用户的中文原因 */
@@ -91,30 +131,38 @@ sealed class LlmResult {
 class LlmClient(private val cfg: LlmConfig) {
 
     /**
+     * 上一次请求的消息指纹。
+     *
+     * LlmClient 的生命周期就是一次任务，所以它天然记录的正是
+     * "同一段对话里前缀有没有维持住"。
+     */
+    private var lastFingerprints: List<Int> = emptyList()
+
+    /**
      * 发一次请求。
      *
      * 阻塞式，调用方必须放到 IO 线程（Agent 里用 withContext 包了）。
      *
      * ## history 就是实际发出去的内容
      *
-     * 这一点是刻意设计的：调用方把本轮 user 消息**追加进 history** 之后
-     * 直接传进来，图片挂在**最后一条 user 消息**上。也就是说
-     * `history` 和真正发出去的 messages 是同一份东西，不存在"发一套、
-     * 记另一套"的可能。
+     * 这一点是刻意设计的：调用方把本轮 user 消息（连同它的截图）**追加进
+     * history** 之后直接传进来。`history` 和真正发出去的 messages 是同一份
+     * 东西，不存在"发一套、记另一套"的可能。
      *
      * 为什么重要：服务端的上下文缓存是**按前缀匹配**的。只要有一轮
      * 记录和实际发送的内容不一致，前缀就从那里断开，**之后所有轮次
-     * 全部缓存未命中**。之前的实现正是在这里出的问题 ——
-     * 发出去的消息带着控件树，历史里记的却是一句"已执行"。
+     * 全部缓存未命中**。
      *
-     * @param imagePng 本轮截图，挂在最后一条 user 消息上。
-     *                 **只有这一张**，历史轮次的图不带 ——
-     *                 否则每次请求都要重传几十张图，上传体积和 token 都爆炸。
+     * 这里踩过两次同一个坑，值得记下来：
+     *   1. 发出去的消息带着控件树，历史里记的却是一句"已执行"
+     *   2. 图片只挂在最后一条 user 上 —— 同一条消息在两次请求里
+     *      一次带图一次不带，前缀从第一条 user 就分叉了
+     *
+     * 两次的教训是同一个：**发出去的东西必须逐字不变地留在历史里。**
      */
     fun chat(
         system: String,
         history: List<ChatTurn>,
-        imagePng: ByteArray?,
         /**
          * 请求体写完之后回调一次 —— 也就是"传完了，开始等模型"。
          *
@@ -130,7 +178,14 @@ class LlmClient(private val cfg: LlmConfig) {
             return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个。")
         }
 
-        val body = buildBody(system, history, imagePng)
+        // 和上一次请求比对前缀。这一步很便宜（只比指纹），
+        // 但它是"缓存为什么没命中"这个问题唯一能自己回答的部分
+        val fingerprints = fingerprint(system, history)
+        val previous = lastFingerprints
+        val reused = commonPrefixLength(previous, fingerprints)
+        lastFingerprints = fingerprints
+
+        val body = buildBody(system, history)
 
         return try {
             val conn = (URL(endpoint()).openConnection() as HttpURLConnection).apply {
@@ -160,7 +215,9 @@ class LlmClient(private val cfg: LlmConfig) {
                 return LlmResult.Fail(explainHttpError(code, text))
             }
 
-            parseResponse(text)
+            // 分母用**上一次**的消息条数：这个指标要回答的是
+            // "上一次请求是不是被完整复用了"，而不是"新请求多长"
+            parseResponse(text, reused, previous.size)
         } catch (t: Throwable) {
             LlmResult.Fail(explainThrowable(t))
         }
@@ -190,7 +247,6 @@ class LlmClient(private val cfg: LlmConfig) {
     private fun buildBody(
         system: String,
         history: List<ChatTurn>,
-        imagePng: ByteArray?,
     ): JSONObject {
         val messages = JSONArray()
 
@@ -201,14 +257,14 @@ class LlmClient(private val cfg: LlmConfig) {
             }
         )
 
-        val lastUserIndex = history.indexOfLast { it.role == ChatTurn.USER }
-
-        history.forEachIndexed { i, turn ->
+        history.forEach { turn ->
             messages.put(
                 JSONObject().apply {
                     put("role", turn.role)
-                    // 只有最后一条 user 消息挂图片，其余一律纯文本
-                    if (i == lastUserIndex && imagePng != null && imagePng.isNotEmpty()) {
+                    val image = turn.imagePng
+                    // 图片跟着它所属的那条消息，每次请求都原样重发。
+                    // 这是前缀能被缓存命中的前提（见 ChatTurn 的说明）
+                    if (image != null && image.isNotEmpty()) {
                         val parts = JSONArray()
                         parts.put(
                             JSONObject().apply {
@@ -222,7 +278,7 @@ class LlmClient(private val cfg: LlmConfig) {
                                 put(
                                     "image_url",
                                     JSONObject().apply {
-                                        put("url", "data:image/png;base64,${b64(imagePng)}")
+                                        put("url", "data:image/png;base64,${b64(image)}")
                                         put("detail", cfg.detail)
                                     },
                                 )
@@ -252,6 +308,32 @@ class LlmClient(private val cfg: LlmConfig) {
         }
     }
 
+    /**
+     * 每条消息的指纹：角色 + 文本 + **有没有图（以及哪张图）**。
+     *
+     * 用 identityHashCode 而不是对整个 ByteArray 求哈希：图片是几百 KB，
+     * 每一步都全量哈希没意义 —— 同一个 ByteArray 实例被反复重发，
+     * 身份不变就足够说明"还是那张图"。
+     */
+    private fun fingerprint(system: String, history: List<ChatTurn>): List<Int> =
+        buildList {
+            add("system".hashCode() * 31 + system.hashCode())
+            history.forEach { t ->
+                add(
+                    t.role.hashCode() * 31 +
+                        t.text.hashCode() * 7 +
+                        (t.imagePng?.let { System.identityHashCode(it) * 13 + it.size } ?: 0)
+                )
+            }
+        }
+
+    /** 两个指纹序列从头开始有多少个相同 */
+    private fun commonPrefixLength(a: List<Int>, b: List<Int>): Int {
+        var i = 0
+        while (i < a.size && i < b.size && a[i] == b[i]) i++
+        return i
+    }
+
     private fun b64(bytes: ByteArray): String =
         android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
 
@@ -259,7 +341,7 @@ class LlmClient(private val cfg: LlmConfig) {
     // 响应解析与报错翻译
     // ------------------------------------------------------------------
 
-    private fun parseResponse(raw: String): LlmResult {
+    private fun parseResponse(raw: String, prefixReused: Int, prefixTotal: Int): LlmResult {
         return try {
             val root = JSONObject(raw)
             val choices = root.optJSONArray("choices")
@@ -285,6 +367,8 @@ class LlmClient(private val cfg: LlmConfig) {
                 completionTokens = usage?.optInt("completion_tokens", 0) ?: 0,
                 cacheHitTokens = usage?.optInt("prompt_cache_hit_tokens", 0) ?: 0,
                 cacheMissTokens = usage?.optInt("prompt_cache_miss_tokens", 0) ?: 0,
+                prefixReused = prefixReused,
+                prefixTotal = prefixTotal,
             )
         } catch (t: Throwable) {
             LlmResult.Fail("响应不是合法 JSON：${t.message}\n原始内容：${raw.take(300)}")

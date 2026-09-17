@@ -248,15 +248,20 @@ class Agent(
                     skillNote = skillNote,
                 )
 
-                // ⚠️ 必须把**实际发出去的这条文本**原样追加进 history。
-                // 发一套记另一套会让前缀从那一轮断开，缓存命中率恒为 0。
-                history.add(ChatTurn(ChatTurn.USER, userText))
+                // ⚠️ 必须把**实际发出去的这条消息**原样追加进 history ——
+                // 包括它带的那张图。图片如果只挂在"最后一条 user"上，
+                // 同一条消息在两次请求里会一次带图一次不带，
+                // 前缀从第一条 user 就分叉，缓存等于没有。
+                //
+                // 现在整条对话严格递增、每个字节都可复现：
+                //     [system][user1(+图)][assistant1][user2(+图)]...
+                history.add(ChatTurn(ChatTurn.USER, userText, pendingImage))
 
                 listener.onEvent(EventKind.THOUGHT, "正在请求模型 ...", "第 $step 步")
                 val callStart = System.currentTimeMillis()
                 OverlayBus.setPhase(AgentPhase.UPLOADING)
                 val result = withContext(Dispatchers.IO) {
-                    llm.chat(system, history, pendingImage) {
+                    llm.chat(system, history) {
                         // 请求体传完了，接下来是等服务端算
                         OverlayBus.setPhase(AgentPhase.WAITING_MODEL)
                     }
@@ -298,6 +303,22 @@ class Agent(
                                 if (pendingImage != null) "（本轮带图）" else "",
                             "模型",
                         )
+                        // 前缀复用率是"我们这一侧有没有把前缀维持住"的答案。
+                        // 它高、而服务端命中率低 → 前缀没问题，是服务端缓存的事；
+                        // 它本身就低 → 我们的请求构造有问题，历史被改动了
+                        if (result.prefixTotal > 0) {
+                            logger?.line(
+                                "前缀复用：${result.prefixReused} / ${result.prefixTotal} 条" +
+                                    if (result.prefixReused == result.prefixTotal) {
+                                        "（完整）"
+                                    } else {
+                                        "（⚠️ 从第 ${result.prefixReused + 1} 条起分叉，" +
+                                            "这之后的缓存都用不上）"
+                                    },
+                                "缓存",
+                            )
+                        }
+
                         logger?.section("模型原始输出")
                         result.text.lines().forEach { logger?.line("  $it") }
 

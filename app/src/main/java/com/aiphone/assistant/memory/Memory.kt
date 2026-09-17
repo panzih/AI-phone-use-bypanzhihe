@@ -240,7 +240,6 @@ class LlmDistiller(private val llm: LlmClient) {
             history = listOf(
                 ChatTurn(ChatTurn.USER, "下面是一次任务的操作记录：\n\n$clipped")
             ),
-            imagePng = null,
         )
 
         val text = when (result) {
