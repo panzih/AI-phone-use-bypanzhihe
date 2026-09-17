@@ -50,9 +50,10 @@ object AgentPrompt {
      * 所以对缓存没有影响。
      *
      * @param skillCatalog 技能目录，一行一个。空串表示没有技能，整段省略
-     * @param memory 用户的记忆全文。**只在上下文是新开的时候传** ——
-     *        往一段正在进行的对话里插东西会把缓存前缀打断，代价比省下的
-     *        token 大得多。详见 ContextPolicy 的说明
+     * @param memory 用户的记忆全文。**只在上下文是新开的时候传入**，
+     *        之后整段上下文里一直沿用同一份（由调用方固定下来）。
+     *        它必须逐字不变：系统提示词是前缀的第 0 个 token，
+     *        一变，整段上下文的缓存全废。详见 ContextPolicy 与 CarriedContext
      */
     fun system(skillCatalog: String = "", memory: String? = null): String = """
 你是一个安卓手机操作助手。

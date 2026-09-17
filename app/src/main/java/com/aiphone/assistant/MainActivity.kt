@@ -27,12 +27,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.aiphone.assistant.agent.Agent
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
+import com.aiphone.assistant.data.CarriedContext
 import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.ContextStore
 import com.aiphone.assistant.display.MirrorActivity
 import com.aiphone.assistant.display.VirtualDisplayManager
 import com.aiphone.assistant.data.SettingsStore
 import com.aiphone.assistant.data.stepsLabel
+import com.aiphone.assistant.llm.ChatTurn
 import com.aiphone.assistant.llm.LlmClient
 import com.aiphone.assistant.llm.LlmConfig
 import com.aiphone.assistant.log.AppLog
@@ -273,6 +275,32 @@ private fun AppRoot(
         }
     }
 
+    /**
+     * **模型那一侧的历史**，和 [logs] 的作用域一样长。
+     *
+     * 它只在两处变：任务结束（接住 Agent 攒下的）、清空上下文（归零）。
+     * 落盘和 [logs] 走同一个 `ContextStore.save` —— 分成两次写的话，
+     * 那个防抖保存会用旧值把新历史盖掉。
+     */
+    var modelHistory by remember { mutableStateOf(savedContext?.history ?: emptyList()) }
+
+    /**
+     * 上一个请求的指纹链，跨任务维持"前缀复用"自查。
+     *
+     * 和 [modelHistory] 同生共死：少了它，这次任务的第一次请求就没有
+     * "上一次"可比，日志里永远是 0/0，前缀有没有被打断看不出来。
+     */
+    var modelFingerprints by remember { mutableStateOf(savedContext?.fingerprints ?: emptyList()) }
+
+    /**
+     * 这段上下文**开头**注入进系统提示词的那份记忆。
+     *
+     * 系统提示词是前缀的第 0 个 token，它一旦变化，整段上下文的缓存全废。
+     * 所以记忆文件即使后来变长了，这段上下文里也只能继续用当初那一份 ——
+     * 想用新的，就清空上下文重开一段。
+     */
+    var contextMemory by remember { mutableStateOf(savedContext?.memorySnapshot ?: "") }
+
     fun addLog(kind: LogKind, text: String, label: String? = null) {
         logs.add(
             LogEntry(
@@ -286,10 +314,21 @@ private fun AppRoot(
 
     // 对话变化之后落盘。600ms 防抖：一次任务会连续加十几条消息，
     // 每条都写一次文件没必要（而且这文件在"不限"档下会越来越大）
-    LaunchedEffect(logs.size, conversation.size) {
-        if (logs.isEmpty() && conversation.size == 0) return@LaunchedEffect
+    //
+    // 模型历史一起存：它和界面消息必须是**同一次**写入，否则两边会不一致
+    // （见 modelHistory 的说明）
+    LaunchedEffect(logs.size, conversation.size, modelHistory, modelFingerprints, contextMemory) {
+        if (logs.isEmpty() && conversation.size == 0 && modelHistory.isEmpty()) return@LaunchedEffect
         delay(600)
-        ContextStore.save(context, logs.toList(), conversation.snapshot(), conversation.lastActivityAt)
+        ContextStore.save(
+            context = context,
+            entries = logs.toList(),
+            turns = conversation.snapshot(),
+            lastActivityAt = conversation.lastActivityAt,
+            history = modelHistory,
+            fingerprints = modelFingerprints,
+            memorySnapshot = contextMemory,
+        )
     }
 
     fun refreshStats() {
@@ -327,6 +366,10 @@ private fun AppRoot(
         val had = conversation.size
         conversation.clear()
         logs.clear()
+        // 模型那一侧也要归零，否则"新开一段上下文"只是界面上新开了
+        modelHistory = emptyList()
+        modelFingerprints = emptyList()
+        contextMemory = ""
         ContextStore.clear(context)
         addLog(LogKind.SYSTEM, reason, context.getString(R.string.context_label))
         if (settings.saveLogs) AppLog.i("清空上下文（原有 $had 轮）：$reason", "上下文")
@@ -496,7 +539,7 @@ private fun AppRoot(
      * 真正的循环逻辑在 [Agent] 里，包括防死循环、历史裁剪、
      * 自己在前台时让位这些防护。
      */
-    suspend fun runTask(task: String, memorySnapshot: String? = null) {
+    suspend fun runTask(task: String, carried: CarriedContext = CarriedContext()) {
         val logger = if (settings.saveLogs) {
             AppLog.start(
                 context = context,
@@ -545,6 +588,12 @@ private fun AppRoot(
                 thinking = settings.thinking,
             )
         )
+        // 接着上一段上下文时，把上一个任务的指纹链也接上 ——
+        // 否则这次任务的第一次请求没有可比的"上一次"，前缀复用率永远是 0/0
+        if (carried.fingerprints.isNotEmpty()) llm.seedFingerprints(carried.fingerprints)
+        if (carried.history.isNotEmpty()) {
+            AppLog.i("接着上一段上下文：复原 ${carried.history.size} 条模型历史", "上下文")
+        }
 
         val agent = Agent(
             controller = controller,
@@ -552,7 +601,8 @@ private fun AppRoot(
             settings = settings,
             maxSteps = settings.maxSteps,
             selfPackage = context.packageName,
-            memorySnapshot = memorySnapshot,
+            memorySnapshot = carried.memorySnapshot.takeIf { it.isNotBlank() },
+            seedHistory = carried.history,
             // 技能注册表：模型用 use_skill 主动要"屏幕上没有的信息"。
             // 传 applicationContext —— 它会活到任务结束，不能攥着 Activity
             skills = SkillRegistry(
@@ -626,12 +676,29 @@ private fun AppRoot(
             },
         )
 
-        try {
+        val finalHistory = try {
             agent.run(task)
+            // 把模型这一侧的历史接住，随对话一起落盘 —— 下一次任务
+            // 就是靠这一份才"记得"上一轮说过什么。
+            // 带图的消息在图被剥掉后无法逐字复原，所以只留文本
+            agent.finalHistory
         } finally {
             // 兜底：Agent 万一提前抛了，也要收口，否则 run.log 停在半截
             logger?.close()
         }
+        // 写回共享状态：**不能只在这里存一次** —— 上面那个 600ms 防抖的
+        // 自动保存读的也是这个变量，不同步的话它会把旧值（空的）盖回来
+        modelHistory = finalHistory
+        modelFingerprints = llm.fingerprintChain()
+        addLog(
+            LogKind.SYSTEM,
+            if (finalHistory.isEmpty()) {
+                "这段上下文是空的（任务没走到需要记住的步骤）"
+            } else {
+                "这段上下文已保存 ${finalHistory.size} 条模型历史，下一次任务会接着它继续。"
+            },
+            "上下文",
+        )
     }
 
     fun submit() {
@@ -665,7 +732,28 @@ private fun AppRoot(
 
         // 这一段是不是"新开的"：刚清过、或者本来就是空的
         val freshContext = conversation.size == 0
-        val memory = if (freshContext) MemoryStore.readForPrompt(context) else null
+
+        // 系统提示词里的记忆快照。
+        //   - 新开一段上下文：从记忆文件里读**当前**内容，并把它固定下来
+        //   - 接着上一段：沿用当初那一份，**不重新读**
+        // 理由见 contextMemory 的注释：系统提示词是前缀的开头，它必须逐字不变
+        val memory = if (freshContext) MemoryStore.readForPrompt(context) else contextMemory
+        if (freshContext) contextMemory = memory
+
+        // 模型那一侧要和界面那一侧同步：记忆换了，前面攒的历史也就没意义了
+        // （历史本身就是用旧记忆那段对话攒出来的）
+        // 整段上下文一起接着走，或者整段一起重开 —— 不存在只换一半
+        val carried = if (freshContext) {
+            modelHistory = emptyList()
+            modelFingerprints = emptyList()
+            CarriedContext(memorySnapshot = memory)
+        } else {
+            CarriedContext(
+                history = modelHistory,
+                fingerprints = modelFingerprints,
+                memorySnapshot = memory,
+            )
+        }
 
         // 记住起点，任务结束时只归纳从这里往后的轮次
         taskTurnStart = conversation.size
@@ -755,7 +843,7 @@ private fun AppRoot(
             }
 
             try {
-                runTask(task, memory)
+                runTask(task, carried)
             } catch (t: Throwable) {
                 addLog(LogKind.ERROR, "执行出错：${t.message}", "错误")
                 if (settings.saveLogs) AppLog.e("执行出错：$t", "任务")

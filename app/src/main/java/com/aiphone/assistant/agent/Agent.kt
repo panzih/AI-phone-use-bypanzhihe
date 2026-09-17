@@ -68,6 +68,14 @@ class Agent(
      * 打断，代价比省下的 token 大得多（见 ContextPolicy）。
      */
     private val memorySnapshot: String? = null,
+    /**
+     * 上一段上下文里模型自己的历史。**空表示这是一段全新的上下文**。
+     *
+     * 有它模型才真的"记得上一轮说了什么"。因为每次都把同一份前缀原样
+     * 重发，重复的部分会命中服务端的硬盘缓存 —— 官方定价里命中的输入
+     * 只有未命中的 1/50，所以带上历史不但不贵，反而是最省的走法。
+     */
+    private val seedHistory: List<ChatTurn> = emptyList(),
     private val logger: RunLogger?,
     private val listener: Listener,
 ) {
@@ -91,6 +99,23 @@ class Agent(
     /** 用户中途叫停 */
     @Volatile
     var stopRequested: Boolean = false
+
+    /**
+     * 这次任务结束时，模型那一侧攒下的完整历史。
+     *
+     * 调用方在 [run] 返回后读它、存进 [com.aiphone.assistant.data.ContextStore]，
+     * 下一次任务再原样喂回来 —— 这样"上下文"才真的是同一段上下文。
+     *
+     * 名字不叫 history，是因为 [run] 里有一个同名的局部变量（那才是
+     * 真正发给模型的那一份），这里只是它结束时的快照。
+     */
+    private val allHistory = mutableListOf<ChatTurn>()
+
+    /** 只读快照。带图的消息把图去掉：下一次任务没法原样重发它 */
+    val finalHistory: List<ChatTurn>
+        get() = synchronized(allHistory) {
+            allHistory.map { ChatTurn(role = it.role, text = it.text) }
+        }
 
     /** 累计 token，用来算这次花了多少 */
     private var promptTokens = 0
@@ -133,17 +158,36 @@ class Agent(
         ensureNotSelfForeground()
 
         // ---- 3. 开跑 ----
+        // 系统提示词**必须逐字稳定**：它是前缀的第 0 个 token，一变整段
+        // 上下文的缓存全废。所以记忆用的是调用方固定下来的那一份快照
+        // （见 CarriedContext.memorySnapshot），这里不重新去读记忆文件。
         val system = AgentPrompt.system(skills.catalog(), memorySnapshot)
+        val memoryChars = memorySnapshot?.length ?: 0
         logger?.line(
-            if (memorySnapshot.isNullOrBlank()) {
-                "本次不注入记忆（上下文是接着上一段的，模型可调 recall_memory 技能）"
-            } else {
-                "已注入记忆 ${memorySnapshot.length} 字符（本次是新开的上下文）"
+            when {
+                seedHistory.isEmpty() && memoryChars == 0 ->
+                    "新开一段上下文，没有记忆可注入"
+                seedHistory.isEmpty() ->
+                    "新开一段上下文，已注入记忆 $memoryChars 字符"
+                memoryChars == 0 ->
+                    "接着上一段上下文（${seedHistory.size} 条历史），这段里没有记忆"
+                else ->
+                    "接着上一段上下文（${seedHistory.size} 条历史），" +
+                        "沿用开头注入的同一份记忆 $memoryChars 字符"
             },
-            "记忆",
+            "上下文",
         )
-        val history = mutableListOf<ChatTurn>()
-
+        // 模型那一侧的历史。这里**就是** [allHistory] 本身（同一个列表），
+        // 不另建一份 —— 任务中途从任何一条路径返回，攒下的内容都不会丢。
+        val history = allHistory
+        history.clear()
+        // 接着上一段上下文：把发过的历史原样放回去。
+        // **必须逐字原样** —— 差一个字，服务端的最长公共前缀就在那里断开，
+        // 后面全部按未命中计价（这正是之前命中率低的原因）
+        if (seedHistory.isNotEmpty()) {
+            history.addAll(seedHistory)
+            logger?.line("接着上一段上下文：${seedHistory.size} 条历史已复原", "上下文")
+        }
         var lastTreeHash = 0
         var sameTree = 0
         var lastSig = ""

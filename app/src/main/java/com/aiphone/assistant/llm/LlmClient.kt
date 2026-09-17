@@ -133,10 +133,25 @@ class LlmClient(private val cfg: LlmConfig) {
     /**
      * 上一次请求的消息指纹。
      *
-     * LlmClient 的生命周期就是一次任务，所以它天然记录的正是
-     * "同一段对话里前缀有没有维持住"。
+     * 默认是"一次任务内"的比对。但上下文跨任务续接之后，任务的第一次
+     * 请求要和**上一个任务的最后一次请求**比才有意义 —— 所以这个值
+     * 可以外部注入（见 [lastFingerprints]）。
      */
     private var lastFingerprints: List<Int> = emptyList()
+
+    /**
+     * 上一个请求的指纹链。任务结束时读它、存盘，下一次任务注入回来。
+     *
+     * 这样"前缀复用"这行自查日志在跨任务时也成立：复用率低就说明
+     * 我们**自己**把前缀改了（比如系统提示词里的记忆换了内容），
+     * 而不是服务端缓存的问题。
+     */
+    fun fingerprintChain(): List<Int> = lastFingerprints
+
+    /** 注入上一个任务留下的指纹链。空表示这是一段全新上下文 */
+    fun seedFingerprints(chain: List<Int>) {
+        lastFingerprints = chain
+    }
 
     /**
      * 发一次请求。
