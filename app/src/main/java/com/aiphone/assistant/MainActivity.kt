@@ -28,11 +28,13 @@ import com.aiphone.assistant.agent.Agent
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
+import com.aiphone.assistant.data.ContextStore
 import com.aiphone.assistant.data.SettingsStore
 import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.llm.LlmClient
 import com.aiphone.assistant.llm.LlmConfig
 import com.aiphone.assistant.log.AppLog
+import com.aiphone.assistant.log.AutoCapture
 import com.aiphone.assistant.log.LogExporter
 import com.aiphone.assistant.memory.Conversation
 import com.aiphone.assistant.memory.MemoryStore
@@ -60,6 +62,7 @@ import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -226,6 +229,7 @@ private fun AppRoot(
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var logStats by remember { mutableStateOf("") }
     var memoryStats by remember { mutableStateOf("") }
+    var autoCapStats by remember { mutableStateOf("") }
 
     /**
      * 本次任务是从上下文里的第几轮开始的。
@@ -248,8 +252,23 @@ private fun AppRoot(
     var schedules by remember { mutableStateOf(ScheduleStore.loadAll(context)) }
     var exactAlarmGranted by remember { mutableStateOf(Scheduler.canScheduleExact(context)) }
 
-    val logs = remember { mutableStateListOf<LogEntry>() }
-    val conversation = remember { Conversation() }
+    // 对话从磁盘恢复：应用被系统回收、或者用户划掉重开之后，
+    // 只要上下文没被清掉，消息就应该还在 —— 否则用户看到的
+    // 和设置里选的对不上（选了"不限"却一开就空）
+    val savedContext = remember { ContextStore.load(context) }
+    val logs = remember {
+        mutableStateListOf<LogEntry>().apply {
+            addAll(savedContext?.entries ?: emptyList())
+        }
+    }
+    val conversation = remember {
+        Conversation().apply {
+            restore(
+                savedTurns = savedContext?.turns ?: emptyList(),
+                savedActivityAt = savedContext?.lastActivityAt ?: 0L,
+            )
+        }
+    }
 
     fun addLog(kind: LogKind, text: String, label: String? = null) {
         logs.add(
@@ -262,6 +281,14 @@ private fun AppRoot(
         )
     }
 
+    // 对话变化之后落盘。600ms 防抖：一次任务会连续加十几条消息，
+    // 每条都写一次文件没必要（而且这文件在"不限"档下会越来越大）
+    LaunchedEffect(logs.size, conversation.size) {
+        if (logs.isEmpty() && conversation.size == 0) return@LaunchedEffect
+        delay(600)
+        ContextStore.save(context, logs.toList(), conversation.snapshot(), conversation.lastActivityAt)
+    }
+
     fun refreshStats() {
         val runs = AppLog.listRuns(context)
         val total = runs.sumOf { run -> run.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
@@ -272,10 +299,37 @@ private fun AppRoot(
         } else {
             ""
         }
+        val capCount = AutoCapture.count(context)
+        autoCapStats = if (capCount > 0) {
+            context.getString(
+                R.string.log_autocap_stats,
+                capCount,
+                formatBytes(AutoCapture.totalBytes(context)),
+            )
+        } else {
+            ""
+        }
         macros = loadMacroSummaries(context)
         schedules = ScheduleStore.loadAll(context)
         exactAlarmGranted = Scheduler.canScheduleExact(context)
     }
+
+    /**
+     * 清空上下文，并**在对话里留一条说明**。
+     *
+     * 不留说明的话，用户只会看到消息凭空消失 —— 那和"界面出 bug 了"
+     * 没法区分。这条系统消息就是告诉他"是我清的，因为什么"。
+     */
+    fun clearContextWithMarker(reason: String) {
+        val had = conversation.size
+        conversation.clear()
+        logs.clear()
+        ContextStore.clear(context)
+        addLog(LogKind.SYSTEM, reason, context.getString(R.string.context_label))
+        if (settings.saveLogs) AppLog.i("清空上下文（原有 $had 轮）：$reason", "上下文")
+        refreshStats()
+    }
+
 
     fun stopRecording() {
         if (!Recorder.isRecording) return
@@ -419,6 +473,15 @@ private fun AppRoot(
         // 用户可能刚从系统设置里开完悬浮窗回来，每次前台都重查
         overlayGranted = Settings.canDrawOverlays(context)
         refreshStats()
+
+        // 打开应用 / 回到前台时先按策略判断这段上下文还算不算数。
+        // 只在**确实过期**时清，而且会在对话里留一条说明
+        if (conversation.size > 0 &&
+            settings.contextPolicy == ContextPolicy.H24 &&
+            conversation.isIdleBeyond(settings.contextPolicy.idleMinutes)
+        ) {
+            clearContextWithMarker(context.getString(R.string.context_cleared_on_open))
+        }
     }
 
     /**
@@ -442,6 +505,16 @@ private fun AppRoot(
                     modelName = settings.modelName,
                     baseUrl = settings.baseUrl,
                     thinkingLabel = settings.thinking.label,
+                    extra = listOf(
+                        "API Key ：${settings.maskedApiKey}（打码）",
+                        "上下文  ：${settings.contextPolicy.label}",
+                        "最大步数：${if (settings.maxSteps <= 0) "不限" else settings.maxSteps.toString()}",
+                        "开启记忆：${settings.memoryEnabled}",
+                        "保存截图：${settings.saveScreenshots}",
+                        "自动截图：每 ${AutoCapture.INTERVAL_MS / 1000} 秒（不隐藏 UI）",
+                        "记忆规模：${MemoryStore.stats(context).let { "${it.first} 条 / ${it.second} 字符" }}",
+                        "技能    ：${MacroStore.loadAll(context).size} 个录制技能",
+                    ),
                 ),
             )
         } else null
@@ -512,6 +585,12 @@ private fun AppRoot(
                     // 开了记忆就让 AI 把这一趟归纳成一条「用户洞察」。
                     // 放在这里而不是等上下文被清空 —— 任务刚结束时记录最新鲜，
                     // 而且用户可能几个月都不手动清一次上下文。
+                    // 记忆总结也当成对话的一部分显示出来 ——
+                    // 它确实是"助手在做的一件事"，藏起来用户只会觉得
+                    // 软件莫名其妙多花了钱
+                    if (settings.memoryEnabled) {
+                        addLog(LogKind.THOUGHT, "正在整理这次任务的记忆 ...", "助手")
+                    }
                     memorizeAfterTask(
                         scope = scope,
                         context = context.applicationContext,
@@ -519,7 +598,18 @@ private fun AppRoot(
                         conversation = conversation,
                         sinceTurn = taskTurnStart,
                         llm = llm,
-                        onDone = { refreshStats() },
+                        onDone = { title ->
+                            addLog(
+                                if (title != null) LogKind.RESULT else LogKind.SYSTEM,
+                                if (title != null) {
+                                    "已记入记忆：$title"
+                                } else {
+                                    "这次没有值得记进记忆的内容"
+                                },
+                                "助手",
+                            )
+                            refreshStats()
+                        },
                     )
 
                     addLog(
@@ -559,10 +649,15 @@ private fun AppRoot(
             ContextPolicy.UNLIMITED -> false
         }
         if (expired) {
-            if (settings.saveLogs) {
-                AppLog.i("按上下文策略重开（原有 ${conversation.size} 轮，策略=${policy.label}）", "上下文")
-            }
-            conversation.clear()
+            clearContextWithMarker(
+                context.getString(
+                    if (policy == ContextPolicy.RESET_EACH_TIME) {
+                        R.string.context_cleared_policy
+                    } else {
+                        R.string.context_cleared_idle
+                    }
+                )
+            )
         }
 
         // 这一段是不是"新开的"：刚清过、或者本来就是空的
@@ -598,12 +693,34 @@ private fun AppRoot(
             // 而且中间那一下用户会看到纸盒自己的界面被当成操作对象。
             hostActivity?.moveTaskToBack(true)
 
+            // 自动截图：任务期间每 5 秒一张，**故意不隐藏任何 UI** ——
+            // 这张图是给人排查用的，要的就是所见即所得（悬浮窗、状态栏、
+            // 别家应用的弹窗全留在画面里）。Agent 自己那张图是给模型看的，
+            // 才会先藏悬浮窗，两者目的不同。
+            val capJob = if (settings.saveLogs) {
+                launch {
+                    if (settings.saveLogs) AppLog.i(
+                        "自动截图已开启：每 ${AutoCapture.INTERVAL_MS / 1000} 秒一张（不隐藏任何 UI）",
+                        "截图",
+                    )
+                    while (isActive) {
+                        runCatching {
+                            controller.captureFrame()?.let { AutoCapture.save(context, it) }
+                        }
+                        delay(AutoCapture.INTERVAL_MS)
+                    }
+                }
+            } else {
+                null
+            }
+
             try {
                 runTask(task, memory)
             } catch (t: Throwable) {
                 addLog(LogKind.ERROR, "执行出错：${t.message}", "错误")
                 if (settings.saveLogs) AppLog.e("执行出错：$t", "任务")
             } finally {
+                capJob?.cancel()
                 isRunning = false
                 progress = ""
                 OverlayService.stop(context)
@@ -619,31 +736,27 @@ private fun AppRoot(
      * 上下文里剩下的只是这一次的界面往返记录，丢了不可惜。
      */
     fun clearContext() {
-        val had = conversation.size
-        conversation.clear()
-        if (settings.saveLogs) AppLog.i("手动清空上下文（原有 $had 轮）", "记忆")
+        clearContextWithMarker(context.getString(R.string.context_cleared_manual))
         toast = context.getString(R.string.settings_clear_context_done)
+    }
+
+    /** 导出：把所有 debug 相关的东西打成一个 zip，走系统分享面板 */
+    fun exportLogs() {
+        val f = LogExporter.exportEverything(context, buildDeviceSummary(context, settings))
+        if (f == null) {
+            toast = context.getString(R.string.settings_export_none)
+            return
+        }
+        toast = context.getString(R.string.settings_export_done, f.name)
+        LogExporter.share(context, f, "纸盒日志")
+    }
+
+    /** 删除日志：只清运行痕迹，不动记忆 / 技能 / 定时任务 */
+    fun deleteLogs() {
+        val n = LogExporter.deleteAllLogs(context)
         refreshStats()
-    }
-
-    fun exportLatest() {
-        val f = LogExporter.exportLatest(context)
-        if (f == null) {
-            toast = context.getString(R.string.settings_export_none)
-            return
-        }
-        toast = context.getString(R.string.settings_export_done, f.name)
-        LogExporter.share(context, f, "纸盒日志")
-    }
-
-    fun exportAll() {
-        val f = LogExporter.exportAll(context)
-        if (f == null) {
-            toast = context.getString(R.string.settings_export_none)
-            return
-        }
-        toast = context.getString(R.string.settings_export_done, f.name)
-        LogExporter.share(context, f, "纸盒日志")
+        toast = context.getString(R.string.log_delete_done)
+        if (n == 0) toast = context.getString(R.string.settings_export_none)
     }
 
     /**
@@ -673,6 +786,7 @@ private fun AppRoot(
                 overlayGranted = overlayGranted,
                 logStats = logStats,
                 memoryStats = memoryStats,
+                autoCapStats = autoCapStats,
                 appVersion = appVersion,
                 progress = progress,
                 toast = toast,
@@ -733,6 +847,7 @@ private fun AppRoot(
                 overlayGranted = overlayGranted,
                 logStats = logStats,
                 memoryStats = memoryStats,
+                autoCapStats = autoCapStats,
                 appVersion = appVersion,
                 toast = toast,
             ),
@@ -752,8 +867,8 @@ private fun AppRoot(
             onGotoAuth = { onOpenAccessibilitySettings() },
             onOpenOverlaySettings = onOpenOverlaySettings,
             onClearContext = { clearContext() },
-            onExportLatest = { exportLatest() },
-            onExportAll = { exportAll() },
+            onExportLogs = { exportLogs() },
+            onDeleteLogs = { deleteLogs() },
         )
     }
 }
@@ -781,20 +896,83 @@ private fun memorizeAfterTask(
     conversation: Conversation,
     sinceTurn: Int,
     llm: LlmClient,
-    onDone: () -> Unit,
+    onDone: (String?) -> Unit,
 ) {
     if (!settings.memoryEnabled) return
     // 只归纳这一段任务自己产生的轮次。把整段上下文都喂进去的话，
     // 之前任务的内容会被反复重新归纳 —— 既贵，又会让同一条认知
     // 在记忆文件里越滚越多份
     val turns = conversation.snapshot().drop(sinceTurn.coerceAtLeast(0))
-    if (turns.isEmpty()) return
+    if (turns.isEmpty()) {
+        onDone(null)
+        return
+    }
     scope.launch {
-        runCatching {
-            val title = MemoryWriter.write(context, llm, turns)
-            if (title != null && settings.saveLogs) AppLog.i("记忆已更新：$title", "记忆")
+        val title = runCatching { MemoryWriter.write(context, llm, turns) }.getOrNull()
+        if (title != null && settings.saveLogs) AppLog.i("记忆已更新：$title", "记忆")
+        onDone(title)
+    }
+}
+
+/**
+ * 导出包里 device.txt 的内容。
+ *
+ * 这份东西是"排查时第一批要问的问题"的答案 —— 版本、机型、模型、
+ * 思考档位、上下文策略、装了什么技能、记忆多大。写进包里，
+ * 用户就不用再来回回答这些问题了。
+ *
+ * ⚠️ **绝不能带 API Key**：这里只写打码后的形式。
+ */
+private fun buildDeviceSummary(context: android.content.Context, settings: AppSettings): String {
+    val macros = MacroStore.loadAll(context)
+    val (memCount, memChars) = MemoryStore.stats(context)
+    val capCount = AutoCapture.count(context)
+    val runs = AppLog.listRuns(context)
+    val exact = Scheduler.canScheduleExact(context)
+
+    return buildString {
+        appendLine("== 设备 ==")
+        appendLine("机型    ：${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+        appendLine("系统    ：Android ${android.os.Build.VERSION.RELEASE}（API ${android.os.Build.VERSION.SDK_INT}）")
+        appendLine()
+        appendLine("== 应用 ==")
+        appendLine("版本    ：${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"}")
+        appendLine("日志次数：${runs.size}")
+        appendLine("自动截图：$capCount 张")
+        appendLine()
+        appendLine("== 模型 ==")
+        appendLine("接口地址：${settings.baseUrl}")
+        appendLine("模型    ：${settings.modelName}")
+        appendLine("思考模式：${settings.thinking.label}")
+        appendLine("API Key ：${settings.maskedApiKey}（打码，完整值不会出现在导出包里）")
+        appendLine()
+        appendLine("== 运行 ==")
+        appendLine("操作通道：${settings.mode.label}")
+        appendLine("上下文  ：${settings.contextPolicy.label}")
+        appendLine("最大步数：${if (settings.maxSteps <= 0) "不限" else settings.maxSteps.toString()}")
+        appendLine("开启记忆：${settings.memoryEnabled}")
+        appendLine("保存日志：${settings.saveLogs}")
+        appendLine("保存截图：${settings.saveScreenshots}")
+        appendLine()
+        appendLine("== 记忆 ==")
+        appendLine("条数    ：$memCount（$memChars 字符）")
+        appendLine()
+        appendLine("== 技能 ==")
+        appendLine("内置    ：list_apps、recall_memory、list_skills")
+        if (macros.isEmpty()) {
+            appendLine("录制    ：无")
+        } else {
+            macros.forEach { appendLine("录制    ：${it.title}（${it.steps.size} 步，id=${it.id}）") }
         }
-        onDone()
+        appendLine()
+        appendLine("== 定时任务 ==")
+        appendLine("精确闹钟：${if (exact) "已允许" else "未允许（触发可能晚几分钟）"}")
+        val schedules = ScheduleStore.loadAll(context)
+        if (schedules.isEmpty()) {
+            appendLine("任务    ：无")
+        } else {
+            schedules.forEach { appendLine("任务    ：${it.timeLabel()} · ${it.task}（启用=${it.enabled}）") }
+        }
     }
 }
 

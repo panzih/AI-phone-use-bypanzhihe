@@ -356,12 +356,15 @@ private fun LogEntryRow(entry: LogEntry) {
         LogKind.ACTION -> MaterialTheme.colorScheme.primaryContainer
         LogKind.RESULT -> MaterialTheme.colorScheme.secondaryContainer
         LogKind.ERROR -> MaterialTheme.colorScheme.errorContainer
+        // 系统消息用最淡的一档：它是"分界线"，不该抢注意力
+        LogKind.SYSTEM -> MaterialTheme.colorScheme.surface
     }
     val onContainer = when (entry.kind) {
         LogKind.THOUGHT -> MaterialTheme.colorScheme.onSurfaceVariant
         LogKind.ACTION -> MaterialTheme.colorScheme.onPrimaryContainer
         LogKind.RESULT -> MaterialTheme.colorScheme.onSecondaryContainer
         LogKind.ERROR -> MaterialTheme.colorScheme.onErrorContainer
+        LogKind.SYSTEM -> MaterialTheme.colorScheme.outline
     }
 
     Surface(

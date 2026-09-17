@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -101,8 +102,8 @@ fun SettingsScreen(
     onGotoAuth: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onClearContext: () -> Unit,
-    onExportLatest: () -> Unit,
-    onExportAll: () -> Unit,
+    onExportLogs: () -> Unit,
+    onDeleteLogs: () -> Unit,
 ) {
     val s = state.settings
     val snackbar = remember { SnackbarHostState() }
@@ -235,8 +236,8 @@ fun SettingsScreen(
             item {
                 LogSection(
                     state = state,
-                    onExportLatest = onExportLatest,
-                    onExportAll = onExportAll,
+                    onExportLogs = onExportLogs,
+                    onDeleteLogs = onDeleteLogs,
                 )
             }
         }
@@ -646,9 +647,37 @@ private fun StepsSliderRow(
 @Composable
 private fun LogSection(
     state: MainUiState,
-    onExportLatest: () -> Unit,
-    onExportAll: () -> Unit,
+    onExportLogs: () -> Unit,
+    onDeleteLogs: () -> Unit,
 ) {
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.log_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.log_delete_confirm_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        onDeleteLogs()
+                    }
+                ) {
+                    Text(
+                        text = stringResource(R.string.log_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.schedule_cancel))
+                }
+            },
+        )
+    }
+
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(8.dp))
 
@@ -686,6 +715,14 @@ private fun LogSection(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                if (state.autoCapStats.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = state.autoCapStats,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -695,11 +732,17 @@ private fun LogSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Button(onClick = onExportLatest, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.settings_export_latest))
+            Button(onClick = onExportLogs, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.settings_export_logs_button))
             }
-            OutlinedButton(onClick = onExportAll, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.settings_export_all))
+            OutlinedButton(
+                onClick = { confirmDelete = true },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(
+                    text = stringResource(R.string.log_delete),
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         }
 

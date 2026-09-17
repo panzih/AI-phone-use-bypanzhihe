@@ -56,6 +56,22 @@
     <string name="recording_toast_deleted">已删除技能</string>
     <string name="recording_need_api_key">还没填 API Key。到「设置 → 模型」里填一个再试。</string>
 
+    <!-- 上下文与对话 -->
+    <string name="context_label">上下文</string>
+    <string name="context_cleared_manual">上下文已清空，从这里开始是一段新对话。上面的消息不会再发给 AI。</string>
+    <string name="context_cleared_idle">距上次操作已超过 24 小时，上下文已自动清空，从这里开始是一段新对话。</string>
+    <string name="context_cleared_on_open">距上次操作已超过 24 小时，打开时就清空了上下文。</string>
+    <string name="context_cleared_policy">上下文策略是「每次重置」，已清空并开一段新对话。</string>
+    <string name="context_restored">接着上次的对话（上次操作 %1$s）。</string>
+
+    <!-- 日志 -->
+    <string name="log_delete">删除日志</string>
+    <string name="settings_export_logs_button">导出日志</string>
+    <string name="log_delete_confirm_title">删除所有日志？</string>
+    <string name="log_delete_confirm_body">会删掉运行日志、诊断日志和自动截图。记忆、学到的技能和定时任务不受影响。这个操作不能撤销。</string>
+    <string name="log_delete_done">日志已删除</string>
+    <string name="log_autocap_stats">自动截图 %1$d 张 · %2$s</string>
+
     <!-- 定时任务 -->
     <string name="schedule_title">定时任务</string>
     <string name="schedule_intro">到点自动执行一条任务。注意：手机必须是解锁、亮屏状态，AI 才操作得了 —— 所以它是"到点提醒你、你看着它干"，不是半夜无人值守。</string>
@@ -128,8 +144,6 @@
     <!-- 设置 · 日志导出 -->
     <string name="settings_export_logs">导出日志</string>
     <string name="settings_export_logs_desc">打包成 zip，可以直接发给别人</string>
-    <string name="settings_export_all">导出全部</string>
-    <string name="settings_export_latest">导出最近一次</string>
     <string name="settings_log_stats">共 %1$d 次记录 · %2$s</string>
     <string name="settings_memory_stats">记忆：%1$d 条 · %2$s</string>
     <string name="settings_export_none">还没有日志可导出</string>

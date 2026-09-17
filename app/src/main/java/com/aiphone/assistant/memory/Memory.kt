@@ -69,6 +69,20 @@ class Conversation {
 
     fun snapshot(): List<Turn> = synchronized(turns) { turns.toList() }
 
+    /**
+     * 从持久化的状态恢复。
+     *
+     * **连 lastActivityAt 一起恢复**：光有内容不记时间的话，
+     * 重启之后就判不出"闲置超过 24 小时"这一档到底过期没有。
+     */
+    fun restore(savedTurns: List<Turn>, savedActivityAt: Long) {
+        synchronized(turns) {
+            turns.clear()
+            turns.addAll(savedTurns)
+        }
+        if (savedActivityAt > 0) lastActivityAt = savedActivityAt
+    }
+
     fun clear() {
         synchronized(turns) { turns.clear() }
         lastActivityAt = System.currentTimeMillis()

@@ -293,6 +293,7 @@ object AppLog {
         modelName: String,
         baseUrl: String,
         thinkingLabel: String,
+        extra: List<String> = emptyList(),
     ): List<String> = listOf(
         "应用版本：$appVersion",
         "系统    ：Android ${Build.VERSION.RELEASE}（API ${Build.VERSION.SDK_INT}）",
@@ -301,7 +302,20 @@ object AppLog {
         "模型    ：$modelName",
         "接口地址：$baseUrl",
         "思考模式：$thinkingLabel",
-    )
+        // 存储与内存：任务卡死、截图失败经常和这两样有关，先记下来省得回头问
+        "可用存储：${freeStorage()}",
+        "堆内存  ：${heapInfo()}",
+    ) + extra
+
+    private fun freeStorage(): String = runCatching {
+        val st = android.os.StatFs(android.os.Environment.getDataDirectory().path)
+        "${st.availableBytes / 1024 / 1024} MB / ${st.totalBytes / 1024 / 1024} MB"
+    }.getOrDefault("?")
+
+    private fun heapInfo(): String = runCatching {
+        val rt = Runtime.getRuntime()
+        "已用 ${(rt.totalMemory() - rt.freeMemory()) / 1024 / 1024} MB / 上限 ${rt.maxMemory() / 1024 / 1024} MB"
+    }.getOrDefault("?")
 
     /**
      * 目录名清理。
