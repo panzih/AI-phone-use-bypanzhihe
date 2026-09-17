@@ -45,21 +45,30 @@ enum class OperationMode(
  *
  * 所以这里不是"打开思考"，而是**把控制权交给用户**。
  *
+ * ## 四档，从最左拉到最右
+ *
+ * 标签用英文（OFF / LOW / HIGH / MAX），因为 `thinking` 和
+ * `reasoning_effort` 就是发给服务端的字段名，界面上对得上更好查。
+ *
+ * **没有"跟随服务端默认"这一档**：那一档等于一个参数都不发，
+ * 服务端会替你选 high —— 用户看不出自己在最贵的一档上。
+ * 现在最低一档就是显式的 OFF，界面显示的即实际发生的。
+ *
  * ## 参数是怎么发的
  *
  * 官方给的 OpenAI 格式是：
  *   - 开关：`{"thinking": {"type": "enabled" | "disabled"}}`
  *   - 强度：`{"reasoning_effort": "low" | "high" | "max"}`
  *
- * [SERVER_DEFAULT] 一个参数都不发，完全跟着服务端的默认走。
  * 另外：**思考模式下服务端会忽略 temperature**（官方原话：不报错但也不生效），
  * 所以开着思考时我们干脆不传它。
  *
- * 注意这套是 DeepSeek 的参数名。别的服务商可能不认 —— 不认就改回
- * [SERVER_DEFAULT]，那就一个额外参数都不发了。
+ * 注意这套是 DeepSeek 的参数名。别的服务商可能不认 —— 不认就把档位
+ * 设成 [OFF]，那时只发 temperature，和普通模型兼容。
  */
 enum class ThinkingMode(
     val id: String,
+    /** 界面上显示的标签。英文，和服务端字段对齐 */
     val label: String,
     val note: String,
     /** 发给服务端的 thinking.type；null 表示不发这个字段 */
@@ -67,37 +76,30 @@ enum class ThinkingMode(
     /** 发给服务端的 reasoning_effort；null 表示不发 */
     val effort: String?,
 ) {
-    SERVER_DEFAULT(
-        id = "default",
-        label = "跟随服务端默认",
-        note = "一个参数都不发。DeepSeek 的默认是「开着 + 强度 high」，也就是最贵但最准的一档",
-        toggle = null,
-        effort = null,
-    ),
     OFF(
         id = "off",
-        label = "关闭",
-        note = "不推理，直接给动作。最快最省，适合「点哪个按钮」这类简单判断",
+        label = "OFF",
+        note = "不推理，直接给动作。最快最省，适合「点哪个按钮」这类简单判断。这是默认档",
         toggle = "disabled",
         effort = null,
     ),
     LOW(
         id = "low",
-        label = "低",
-        note = "少量推理。速度接近关闭，遇到复杂界面比关闭更稳",
+        label = "LOW",
+        note = "少量推理。速度接近 OFF，遇到复杂界面比 OFF 更稳",
         toggle = "enabled",
         effort = "low",
     ),
     HIGH(
         id = "high",
-        label = "高",
+        label = "HIGH",
         note = "充分推理。慢一些、贵一些，界面复杂或者要绕圈子时更靠谱",
         toggle = "enabled",
         effort = "high",
     ),
     MAX(
         id = "max",
-        label = "最高",
+        label = "MAX",
         note = "推理拉满。最慢最贵，只在你确认任务确实难的时候用",
         toggle = "enabled",
         effort = "max",
@@ -106,15 +108,21 @@ enum class ThinkingMode(
     /**
      * 是不是真的在做思维链。
      *
-     * [SERVER_DEFAULT] 也算"可能在做" —— 因为 DeepSeek 的默认是开着的，
-     * 所以我们不能替它断言"没思考"。这个属性只用来决定**要不要传
-     * temperature**：只要可能在做思维链，传了也没用。
+     * 只用来决定**要不要传 temperature**：在做思维链就传了也没用。
+     * 四档里只有 [OFF] 不是。
      */
     val thinkingOn: Boolean get() = this != OFF
 
     companion object {
+        /**
+         * 认不出来就落到 [OFF]。
+         *
+         * 老版本存过 "default"（跟随服务端默认，实际是 high）—— 
+         * 那个值现在落到 OFF，用户会明显感觉变快变便宜，这是有意为之：
+         * 与其让他继续不知情地跑在最贵档，不如默认最省。
+         */
         fun fromId(id: String?): ThinkingMode =
-            entries.firstOrNull { it.id == id } ?: SERVER_DEFAULT
+            entries.firstOrNull { it.id == id } ?: OFF
     }
 }
 
@@ -194,26 +202,14 @@ data class AppSettings(
     val apiKey: String = "",
     val modelName: String = "deepseek-flash",
 
-    /** 思考模式。默认跟服务端走，不改用户原来看到的行为 */
-    val thinking: ThinkingMode = ThinkingMode.SERVER_DEFAULT,
+    /** 思考模式。默认 OFF：不推理，最快最省 */
+    val thinking: ThinkingMode = ThinkingMode.OFF,
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,
 
-    /**
-     * 在副屏上操作。
-     *
-     * 开了之后：任务开始时用 Shizuku 建一块虚拟屏，AI 的截图和触控
-     * 全部落到那块屏上，手机主屏留给你自己用。任务结束自动撤屏。
-     *
-     * **需要 Shizuku**（副屏的触控只能走 shell 的 input -d，
-     * 无障碍的手势注入没有"指定屏幕"的参数）。
-     *
-     * 默认关：它比主屏模式弱 —— 副屏**读不到控件树**，模型只能看截图猜坐标。
-     */
-    val useVirtualDisplay: Boolean = false,
+    // ---------- 更多设置 ----------
 
-    // ---------- 开发者设置 ----------
     /**
      * 一次任务最多走多少步。
      *

@@ -76,7 +76,7 @@ import com.aiphone.assistant.schedule.Schedule
 fun ScheduleScreen(
     state: MainUiState,
     onBack: () -> Unit,
-    onAdd: (task: String, hour: Int, minute: Int, daily: Boolean) -> Unit,
+    onAdd: (task: String, hour: Int, minute: Int, daily: Boolean, onVirtualDisplay: Boolean) -> Unit,
     onToggle: (Schedule, Boolean) -> Unit,
     onDelete: (String) -> Unit,
     onRequestExactAlarm: () -> Unit,
@@ -84,6 +84,10 @@ fun ScheduleScreen(
     val snackbar = remember { SnackbarHostState() }
     var task by remember { mutableStateOf("") }
     var daily by remember { mutableStateOf(true) }
+
+    // 在副屏上跑：逐条任务可选。默认关 —— 副屏读不到控件树，
+    // 定位精度不如主屏，只有简单流程才划算
+    var onVirtualDisplay by remember { mutableStateOf(false) }
     var pickerOpen by remember { mutableStateOf(false) }
     val timeState = rememberTimePickerState(initialHour = 9, initialMinute = 0, is24Hour = true)
 
@@ -100,7 +104,7 @@ fun ScheduleScreen(
                 TextButton(
                     onClick = {
                         pickerOpen = false
-                        onAdd(task.trim(), timeState.hour, timeState.minute, daily)
+                        onAdd(task.trim(), timeState.hour, timeState.minute, daily, onVirtualDisplay)
                         task = ""
                     }
                 ) {
@@ -206,6 +210,26 @@ fun ScheduleScreen(
                         Switch(checked = daily, onCheckedChange = { daily = it })
                     }
                     Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.schedule_use_vd),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.schedule_use_vd_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = onVirtualDisplay,
+                            onCheckedChange = { onVirtualDisplay = it },
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
                     Button(
                         onClick = { pickerOpen = true },
                         enabled = task.isNotBlank(),
@@ -247,7 +271,12 @@ fun ScheduleScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = s.timeLabel(),
+                            text = if (s.useVirtualDisplay) {
+                                s.timeLabel() + "  ·  " +
+                                    stringResource(R.string.schedule_badge_vd)
+                            } else {
+                                s.timeLabel()
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                         )
                         Spacer(Modifier.height(2.dp))

@@ -141,7 +141,10 @@
     <string name="settings_auth_unavailable">当前版本未接入</string>
 
     <!-- 设置 · 开发者 -->
-    <string name="settings_section_developer">开发者设置</string>
+    <string name="settings_section_developer">更多设置</string>
+    <string name="schedule_use_vd">在副屏上操作</string>
+    <string name="schedule_use_vd_desc">用 Shizuku 开一块虚拟屏，这条任务只在那块屏上跑，手机主屏留给你自己用；跑完自动撤屏。需要 Shizuku。副屏读不到控件树，定位精度不如主屏 —— 简单流程再用它。</string>
+    <string name="schedule_badge_vd">副屏</string>
     <string name="settings_developer_warning">除非你知道这是什么，否则请不要动！</string>
     <string name="settings_clear_context">清空上下文</string>
     <string name="settings_clear_context_done">上下文已清空</string>

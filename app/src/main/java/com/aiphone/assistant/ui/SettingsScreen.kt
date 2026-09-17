@@ -165,15 +165,6 @@ fun SettingsScreen(
                 )
             }
             item {
-                SwitchRow(
-                    title = stringResource(R.string.settings_use_vd),
-                    subtitle = stringResource(R.string.settings_use_vd_desc),
-                    checked = s.useVirtualDisplay,
-                    onCheckedChange = { onSettingsChange(s.copy(useVirtualDisplay = it)) },
-                )
-            }
-
-            item {
                 PermissionRow(
                     title = stringResource(R.string.settings_overlay_label),
                     desc = stringResource(R.string.settings_overlay_desc),
@@ -186,7 +177,7 @@ fun SettingsScreen(
 
             item { SectionDivider() }
 
-            // ================= 开发者设置 =================
+            // ================= 更多设置 =================
             item { SectionHeader(stringResource(R.string.settings_section_developer)) }
             item { DeveloperWarning() }
 
@@ -319,19 +310,63 @@ private fun ModelSection(
             shape = RoundedCornerShape(12.dp),
         )
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(4.dp))
 
-        DropdownRow(
-            title = stringResource(R.string.settings_model_thinking),
-            subtitle = s.thinking.note,
+        ThinkingModeSlider(
             current = s.thinking,
-            options = ThinkingMode.entries.toList(),
-            optionLabel = { it.label },
-            onSelect = { onChange(s.copy(thinking = it)) },
-            horizontalPadding = 0.dp,
+            onChange = { onChange(s.copy(thinking = it)) },
         )
 
         Spacer(Modifier.height(4.dp))
+    }
+}
+
+/**
+ * 思考模式滑块 —— 和「最大步数」「上下文」同一种交互。
+ *
+ * 四档从最省到最贵：OFF / LOW / HIGH / MAX。用滑块而不是下拉，
+ * 是因为这四档是一条**强度轴**，位置本身就表示了"调高会更贵更慢"。
+ */
+@Composable
+private fun ThinkingModeSlider(
+    current: ThinkingMode,
+    onChange: (ThinkingMode) -> Unit,
+) {
+    val options = ThinkingMode.entries
+    val index = options.indexOf(current).coerceAtLeast(0)
+    var draft by remember(index) { mutableFloatStateOf(index.toFloat()) }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.settings_model_thinking),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+
+        Slider(
+            value = draft,
+            onValueChange = { draft = it },
+            onValueChangeFinished = {
+                onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
+            },
+            valueRange = 0f..options.lastIndex.toFloat(),
+            // 四档之间三个间隔点
+            steps = (options.size - 2).coerceAtLeast(0),
+        )
+
+        Text(
+            text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

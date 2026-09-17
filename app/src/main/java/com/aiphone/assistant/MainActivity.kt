@@ -83,6 +83,12 @@ class MainActivity : ComponentActivity() {
      */
     private val pendingTask = mutableStateOf<String?>(null)
 
+    /**
+     * 这条定时任务要不要走副屏。和 [pendingTask] 同生共死：
+     * 都由同一个 intent 带进来、由同一个 LaunchedEffect 消费。
+     */
+    private val pendingUseVirtualDisplay = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // 边到边显示：内容铺到状态栏和导航栏下面，
         // 再靠 WindowInsets 给内容留出安全区。
@@ -108,7 +114,11 @@ class MainActivity : ComponentActivity() {
                     store = store,
                     appVersion = appVersion(),
                     pendingTask = pendingTask.value,
-                    onPendingTaskHandled = { pendingTask.value = null },
+                    pendingUseVirtualDisplay = pendingUseVirtualDisplay.value,
+                    onPendingTaskHandled = {
+                        pendingTask.value = null
+                        pendingUseVirtualDisplay.value = false
+                    },
                     onRequestExactAlarm = { requestExactAlarm() },
                     onOpenAccessibilitySettings = { openAccessibilitySettings() },
                     onOpenOverlaySettings = { openOverlaySettings() },
@@ -129,6 +139,9 @@ class MainActivity : ComponentActivity() {
         if (task.isBlank()) return
         val id = intent?.getStringExtra(EXTRA_SCHEDULE_ID)
         pendingTask.value = task
+        // 副屏是逐条定时任务的选项；手动输入的任务不会走这里
+        pendingUseVirtualDisplay.value =
+            intent?.getBooleanExtra(EXTRA_SCHEDULE_VIRTUAL_DISPLAY, false) == true
         // 界面已经在用户眼前了，那条提醒就多余了。放在这一层是因为
         // 只有 Activity 拿得到 scheduleId（Compose 那一层只拿到任务文本）
         id?.let { ScheduleReceiver.cancelNotification(this, it) }
@@ -156,6 +169,9 @@ class MainActivity : ComponentActivity() {
 
         /** 哪条定时任务触发的（用来撤掉它的通知） */
         const val EXTRA_SCHEDULE_ID = "schedule_id"
+
+        /** 这条定时任务要不要在副屏上跑（见 Schedule.useVirtualDisplay） */
+        const val EXTRA_SCHEDULE_VIRTUAL_DISPLAY = "schedule_virtual_display"
     }
 
     private fun appVersion(): String = runCatching {
@@ -211,6 +227,7 @@ private fun AppRoot(
     store: SettingsStore,
     appVersion: String,
     pendingTask: String?,
+    pendingUseVirtualDisplay: Boolean,
     onPendingTaskHandled: () -> Unit,
     onRequestExactAlarm: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
@@ -274,6 +291,15 @@ private fun AppRoot(
             )
         }
     }
+
+    /**
+     * 定时任务放在哪块屏上跑。
+     *
+     * 由定时任务自己带进来（见 `Schedule.useVirtualDisplay`），
+     * 手动输入的任务永远是 false。所以它不能放进 AppSettings ——
+     * 那是个全局开关，没法逐条任务区分。
+     */
+    var runOnVirtualDisplay by remember { mutableStateOf(false) }
 
     /**
      * **模型那一侧的历史**，和 [logs] 的作用域一样长。
@@ -457,7 +483,13 @@ private fun AppRoot(
         }
     }
 
-    fun addSchedule(task: String, hour: Int, minute: Int, daily: Boolean) {
+    fun addSchedule(
+        task: String,
+        hour: Int,
+        minute: Int,
+        daily: Boolean,
+        onVirtualDisplay: Boolean = false,
+    ) {
         if (task.isBlank()) return
         val s = Schedule(
             id = ScheduleStore.newId(),
@@ -465,6 +497,7 @@ private fun AppRoot(
             hour = hour,
             minute = minute,
             repeatDaily = daily,
+            useVirtualDisplay = onVirtualDisplay,
         )
         schedules = ScheduleStore.upsert(context, s)
         Scheduler.schedule(context, s)
@@ -657,7 +690,10 @@ private fun AppRoot(
                                 if (title != null) {
                                     "已记入记忆：$title"
                                 } else {
-                                    "这次没有值得记进记忆的内容"
+                                    // 走到这里只有两种可能：记忆开关刚被关掉，
+                                    // 或者归纳那次模型调用失败（失败会写进日志）。
+                                    // 正常情况下每轮任务都会留下一条记忆
+                                    "这次没写入记忆（归纳调用失败，详见日志）"
                                 },
                                 "助手",
                             )
@@ -781,11 +817,10 @@ private fun AppRoot(
             }
 
             // ---- 副屏模式：先建屏、切通道 ----
-            // 用户开了「在副屏上操作」之后，AI 的截图和触控都落到那块虚拟屏上，
-            // 手机主屏留给用户自己用。
+            // 只有**定时任务**才可能走副屏（逐条任务自己的选项，见 Schedule）。
+            // 手动输入的任务一律主屏 —— 主屏有控件树，定位比副屏的"看截图猜坐标"准得多。
             var vdCreated = false
-            if (settings.useVirtualDisplay) {
-                addLog(LogKind.SYSTEM, "正在创建副屏 ...", "副屏")
+            if (runOnVirtualDisplay) {                addLog(LogKind.SYSTEM, "正在创建副屏 ...", "副屏")
                 val st = runCatching { VirtualDisplayManager.create(context) }
                     .getOrElse {
                         VirtualDisplayManager.State(message = "创建失败：${it.message}")
@@ -855,6 +890,9 @@ private fun AppRoot(
                     controller.exitVirtualDisplay()
                     runCatching { VirtualDisplayManager.remove(context) }
                 }
+                // 副屏是**逐条任务**的选项，跑完就复位，
+                // 免得下一条手动输入的任务莫名其妙跑到副屏上
+                runOnVirtualDisplay = false
                 isRunning = false
                 progress = ""
                 OverlayService.stop(context)
@@ -904,6 +942,8 @@ private fun AppRoot(
         if (task.isBlank()) return@LaunchedEffect
         addLog(LogKind.ACTION, task, "定时任务")
         input = task
+        // 这条任务的副屏选项要在 submit() 之前放好 —— submit 里会读它
+        runOnVirtualDisplay = pendingUseVirtualDisplay
         submit()
         onPendingTaskHandled()
     }
@@ -979,7 +1019,7 @@ private fun AppRoot(
                 exactAlarmGranted = exactAlarmGranted,
             ),
             onBack = { screen = Screen.CONTROL },
-            onAdd = { task, h, m, daily -> addSchedule(task, h, m, daily) },
+            onAdd = { task, h, m, daily, vd -> addSchedule(task, h, m, daily, vd) },
             onToggle = { s, on -> toggleSchedule(s, on) },
             onDelete = { id -> deleteSchedule(id) },
             onRequestExactAlarm = onRequestExactAlarm,

@@ -36,10 +36,11 @@ data class LlmConfig(
     /**
      * 思考模式。
      *
-     * 官方文档：DeepSeek **默认就开着思考**（强度 high）。见 ThinkingMode ——
-     * 这里只是把控制权透传出去，`SERVER_DEFAULT` 表示一个参数都不发。
+     * 官方文档：DeepSeek **默认就开着思考**（强度 high），所以我们一律
+     * 显式发一个档位，不再有"什么都不发、让服务端替你决定"的情况。
+     * 见 ThinkingMode 的四档说明。
      */
-    val thinking: ThinkingMode = ThinkingMode.SERVER_DEFAULT,
+    val thinking: ThinkingMode = ThinkingMode.OFF,
     val timeoutMs: Int = 120_000,
 )
 

@@ -24,7 +24,6 @@ class SettingsStore(context: Context) {
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
         mode = OperationMode.fromId(sp.getString(KEY_MODE, null)),
-        useVirtualDisplay = sp.getBoolean(KEY_USE_VD, DEFAULT.useVirtualDisplay),
         maxSteps = sp.getInt(KEY_MAX_STEPS, DEFAULT.maxSteps),
         contextPolicy = ContextPolicy.fromId(sp.getString(KEY_CONTEXT_POLICY, null)),
         memoryEnabled = sp.getBoolean(KEY_MEMORY, DEFAULT.memoryEnabled),
@@ -39,7 +38,6 @@ class SettingsStore(context: Context) {
             .putString(KEY_MODEL, s.modelName)
             .putString(KEY_THINKING, s.thinking.id)
             .putString(KEY_MODE, s.mode.id)
-            .putBoolean(KEY_USE_VD, s.useVirtualDisplay)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
             .putString(KEY_CONTEXT_POLICY, s.contextPolicy.id)
             .putBoolean(KEY_MEMORY, s.memoryEnabled)
@@ -60,7 +58,9 @@ class SettingsStore(context: Context) {
         const val KEY_MODEL = "model_name"
         const val KEY_THINKING = "thinking_mode"
         const val KEY_MODE = "operation_mode"
-        const val KEY_USE_VD = "use_virtual_display"
+        // 曾经的全局「在副屏上操作」开关。现在是**逐条定时任务**的选项
+        // （见 Schedule.useVirtualDisplay），这里不再读写 —— 老配置文件里
+        // 残留的那个键会被忽略，不需要清理
         const val KEY_MAX_STEPS = "max_steps"
         const val KEY_CONTEXT_POLICY = "context_policy"
         const val KEY_MEMORY = "memory_enabled"

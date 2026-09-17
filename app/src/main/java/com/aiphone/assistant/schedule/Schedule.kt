@@ -24,6 +24,16 @@ data class Schedule(
     val minute: Int,
     /** true = 每天这个点；false = 只跑一次 */
     val repeatDaily: Boolean,
+    /**
+     * 这一条定时任务要不要在**副屏**上跑。
+     *
+     * 逐条任务可选，而不是全局开关：定时任务常常是"半夜/早上没人看着"
+     * 的那类，用副屏跑的好处是手机主屏还能继续用、跑完不留痕。
+     * 但副屏读不到控件树，简单流程才适合，所以交给用户按任务决定。
+     *
+     * 手动在主界面输入的任务一律走主屏（有控件树，定位更准）。
+     */
+    val useVirtualDisplay: Boolean = false,
     val enabled: Boolean = true,
     val lastRunAt: Long = 0L,
 ) {
@@ -39,6 +49,7 @@ data class Schedule(
         put("hour", hour)
         put("minute", minute)
         put("repeatDaily", repeatDaily)
+        put("useVirtualDisplay", useVirtualDisplay)
         put("enabled", enabled)
         put("lastRunAt", lastRunAt)
     }
@@ -53,6 +64,7 @@ data class Schedule(
                 hour = o.optInt("hour", 9).coerceIn(0, 23),
                 minute = o.optInt("minute", 0).coerceIn(0, 59),
                 repeatDaily = o.optBoolean("repeatDaily", true),
+                useVirtualDisplay = o.optBoolean("useVirtualDisplay", false),
                 enabled = o.optBoolean("enabled", true),
                 lastRunAt = o.optLong("lastRunAt", 0L),
             )

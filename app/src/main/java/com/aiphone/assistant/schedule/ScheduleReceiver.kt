@@ -82,6 +82,7 @@ class ScheduleReceiver : BroadcastReceiver() {
                 )
                 putExtra(MainActivity.EXTRA_RUN_TASK, schedule.task)
                 putExtra(MainActivity.EXTRA_SCHEDULE_ID, schedule.id)
+                putExtra(MainActivity.EXTRA_SCHEDULE_VIRTUAL_DISPLAY, schedule.useVirtualDisplay)
             }
             context.startActivity(i)
         }.onFailure { Log.w(TAG, "拉起主界面失败：${it.message}") }
@@ -107,6 +108,7 @@ class ScheduleReceiver : BroadcastReceiver() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(MainActivity.EXTRA_RUN_TASK, schedule.task)
                 putExtra(MainActivity.EXTRA_SCHEDULE_ID, schedule.id)
+                putExtra(MainActivity.EXTRA_SCHEDULE_VIRTUAL_DISPLAY, schedule.useVirtualDisplay)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
