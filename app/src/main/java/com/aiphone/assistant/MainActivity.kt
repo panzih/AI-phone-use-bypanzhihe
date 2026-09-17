@@ -66,9 +66,11 @@ import com.aiphone.assistant.ui.VirtualDisplayScreen
 import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -97,6 +99,8 @@ class MainActivity : ComponentActivity() {
 
         controller = ChannelController(applicationContext)
         store = SettingsStore(this)
+        // 让任务结束后的事件（记忆归纳）也能落盘 —— 那时没有活动 logger
+        AppLog.attach(this)
 
         // 冷启动时把定时任务取出来
         readScheduledIntent(intent)
@@ -684,16 +688,19 @@ private fun AppRoot(
                         conversation = conversation,
                         sinceTurn = taskTurnStart,
                         llm = llm,
-                        onDone = { title ->
+                        onDone = { outcome ->
                             addLog(
-                                if (title != null) LogKind.RESULT else LogKind.SYSTEM,
-                                if (title != null) {
-                                    "已记入记忆：$title"
-                                } else {
-                                    // 走到这里只有两种可能：记忆开关刚被关掉，
-                                    // 或者归纳那次模型调用失败（失败会写进日志）。
-                                    // 正常情况下每轮任务都会留下一条记忆
-                                    "这次没写入记忆（归纳调用失败，详见日志）"
+                                when (outcome) {
+                                    is MemoryWriter.Outcome.Written -> LogKind.RESULT
+                                    is MemoryWriter.Outcome.NotWritten -> LogKind.SYSTEM
+                                },
+                                when (outcome) {
+                                    is MemoryWriter.Outcome.Written ->
+                                        "已记入记忆：${outcome.title}"
+                                    is MemoryWriter.Outcome.NotWritten ->
+                                        // 把真实原因显示出来。以前这里是一句笼统的
+                                        // "没写入"，把主线程网络异常藏了整整一轮排查
+                                        "这次没写入记忆：${outcome.reason}"
                                 },
                                 "助手",
                             )
@@ -1081,21 +1088,53 @@ private fun memorizeAfterTask(
     conversation: Conversation,
     sinceTurn: Int,
     llm: LlmClient,
-    onDone: (String?) -> Unit,
+    onDone: (MemoryWriter.Outcome) -> Unit,
 ) {
-    if (!settings.memoryEnabled) return
+    if (!settings.memoryEnabled) {
+        onDone(MemoryWriter.Outcome.NotWritten("记忆开关是关的"))
+        return
+    }
     // 只归纳这一段任务自己产生的轮次。把整段上下文都喂进去的话，
     // 之前任务的内容会被反复重新归纳 —— 既贵，又会让同一条认知
     // 在记忆文件里越滚越多份
     val turns = conversation.snapshot().drop(sinceTurn.coerceAtLeast(0))
     if (turns.isEmpty()) {
-        onDone(null)
+        onDone(MemoryWriter.Outcome.NotWritten("这段任务没有可归纳的轮次"))
         return
     }
     scope.launch {
-        val title = runCatching { MemoryWriter.write(context, llm, turns) }.getOrNull()
-        if (title != null && settings.saveLogs) AppLog.i("记忆已更新：$title", "记忆")
-        onDone(title)
+        // ⚠️ **必须切到 IO 线程。**
+        //
+        // LlmClient.chat 是同步阻塞的 HTTP 调用。这里原来直接在
+        // `scope.launch`（主线程）里调用它，结果是 Android 抛
+        // NetworkOnMainThreadException —— 被下面的 runCatching 吞成 null，
+        // 表现就是"记忆永远写不进去，而且日志里查不出原因"。
+        //
+        // Agent 里那次模型调用一直有 withContext(Dispatchers.IO) 包着，
+        // 所以正常任务不受影响；只有记忆归纳这条路径漏了。
+        val outcome = withContext(Dispatchers.IO) {
+            runCatching { MemoryWriter.write(context, llm, turns) }
+                .getOrElse { e ->
+                    // 异常也要落盘：这里用**应用日志**（logger 是任务级的，
+                    // 任务一结束就被 close 了，写它等于没写）
+                    MemoryWriter.Outcome.NotWritten(
+                        "归纳调用抛异常：${e.javaClass.simpleName}: ${e.message}"
+                    )
+                }
+        }
+        // 无论成败都记一笔。记忆写不进去是用户看得见的事，
+        // 必须留下可追查的痕迹 —— 而且**要用 afterTask**：
+        // 任务级 logger 在 `agent.run` 返回时就 close 了，写它等于写进黑洞。
+        val line = when (outcome) {
+            is MemoryWriter.Outcome.Written -> "记忆已更新：${outcome.title}"
+            is MemoryWriter.Outcome.NotWritten -> "记忆未写入：${outcome.reason}"
+        }
+        AppLog.afterTask(
+            line,
+            "记忆",
+            if (outcome is MemoryWriter.Outcome.NotWritten) "W" else "I",
+        )
+        onDone(outcome)
     }
 }
 

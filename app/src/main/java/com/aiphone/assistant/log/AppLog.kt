@@ -203,8 +203,35 @@ object AppLog {
     private const val ROOT_DIR = "纸盒"
     private const val RUNS_DIR = "runs"
 
+    /** 任务结束后发生的事（目前是记忆归纳）记在这里，不受任务生命周期影响 */
+    private const val POST_TASK_LOG = "post_task.log"
+
     @Volatile
     private var current: RunLogger? = null
+
+    /**
+     * 应用级 Context。
+     *
+     * [afterTask] 要在任务结束之后写盘，那时没有活动 logger，只能自己
+     * 拿 filesDir。在 [android.app.Application.onCreate] 里注入一次。
+     */
+    @Volatile
+    private var appContext: Context? = null
+
+    private val postTaskLock = Any()
+
+    /**
+     * `afterTask` 用的时间戳格式。
+     *
+     * 单独一份而不是借 RunLogger 的：SimpleDateFormat **不是线程安全的**，
+     * 共享实例在并发写时会出错。这一份的访问全部在 postTaskLock 里。
+     */
+    private val postTaskTime = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+    /** 由 Application 在启动时调用一次 */
+    fun attach(context: Context) {
+        appContext = context.applicationContext
+    }
 
     private val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 
@@ -279,6 +306,36 @@ object AppLog {
     fun i(message: String, tag: String = "App") { current?.line(message, tag, "I") }
     fun w(message: String, tag: String = "App") { current?.line(message, tag, "W") }
     fun e(message: String, tag: String = "App") { current?.line(message, tag, "E") }
+
+    /**
+     * 记一条**任务结束之后**才发生的事。
+     *
+     * 为什么需要单独一个方法：`i/w/e` 写的是任务级 logger，而任务一结束
+     * `RunLogger.close()` 就把自己关了（`line()` 里直接 return）。记忆归纳
+     * 恰好发生在这个时刻 —— 于是它的成功/失败**一条都落不了盘**，
+     * "记忆写不进去"因此变得完全不可追查。
+     *
+     * 这个方法是应用级的，写到一个独立的 `post_task.log`，不受任务生命周期
+     * 影响，同时照常打 logcat。内容是追加的，最新的在最后。
+     */
+    fun afterTask(message: String, tag: String = "记忆", level: String = "I") {
+        val ctx = appContext
+        runCatching {
+            if (ctx == null) return
+            val f = File(rootDir(ctx), POST_TASK_LOG)
+            synchronized(postTaskLock) {
+                val stamped = "[${postTaskTime.format(Date())}] $tag: $message"
+                f.appendText(stamped + "\n")
+            }
+        }
+        runCatching {
+            when (level) {
+                "E" -> android.util.Log.e(RunLogger.LOGCAT_TAG, "$tag: $message")
+                "W" -> android.util.Log.w(RunLogger.LOGCAT_TAG, "$tag: $message")
+                else -> android.util.Log.i(RunLogger.LOGCAT_TAG, "$tag: $message")
+            }
+        }
+    }
 
     /**
      * 收集环境信息。

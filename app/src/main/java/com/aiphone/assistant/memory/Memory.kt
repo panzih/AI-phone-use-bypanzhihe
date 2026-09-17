@@ -209,6 +209,24 @@ object MemoryStore {
 }
 
 /**
+ * 归纳的结果。
+ *
+ * 分成"拿到条目"和"放弃并给出原因"两种，而不是用 `MemoryEntry?` ——
+ * 因为**放弃的原因必须能传到界面上**。原来一律返回 null，
+ * 用户只看到一句"没写入"，排查时完全无从下手。
+ */
+sealed class DistillResult {
+    /**
+     * @param note 需要额外说明时用（例如"模型回了「无」，已兜底"）。
+     *             为空表示这是一次正常归纳
+     */
+    data class Entry(val entry: MemoryEntry, val note: String = "") : DistillResult()
+
+    /** @param reason 可以直接给用户看的一句话 */
+    data class GaveUp(val reason: String) : DistillResult()
+}
+
+/**
  * 让模型把一次任务的记录归纳成一条洞察。
  *
  * ## 为什么值得多花一次模型调用
@@ -229,8 +247,8 @@ object MemoryStore {
  */
 class LlmDistiller(private val llm: LlmClient) {
 
-    suspend fun distill(turns: List<Turn>): MemoryEntry? {
-        if (turns.isEmpty()) return null
+    suspend fun distill(turns: List<Turn>): DistillResult {
+        if (turns.isEmpty()) return DistillResult.GaveUp("没有可归纳的轮次")
 
         val transcript = buildString {
             turns.forEach { t ->
@@ -257,24 +275,28 @@ class LlmDistiller(private val llm: LlmClient) {
         )
 
         val text = when (result) {
-            is LlmResult.Fail -> {
-                AppLog.w("归纳记忆失败：${result.message}", "记忆")
-                return null
-            }
+            is LlmResult.Fail -> return DistillResult.GaveUp("模型调用失败：${result.message}")
             is LlmResult.Ok -> result.text.trim()
         }
 
         // 模型偶尔会无视"必须写"的指令，回一个「无」或者干脆空。
         // **不允许因此不写记忆**（这是用户明确要求的），所以这里兜一条：
-        // 用任务原文顶上，并在日志里点出来。宁可记一条朴素的事实，
-        // 也不要出现"这一轮什么都没留下"。
+        // 用任务原文顶上。宁可记一条朴素的事实，也不要出现"这一轮什么都没留下"。
+        //
+        // 2026-09-17 修：这里原先是 `AppLog.w(...)` —— 而调用方是任务结束之后才
+        // 走的，那时任务级 logger 已经 close，写它等于写进黑洞。现在是应用级
+        // AppLog + 把原因一路带回界面。
         if (text.isBlank() || text == "无" || text.startsWith("无\n")) {
-            AppLog.w("模型没按要求输出记忆，已用任务原文兜底", "记忆")
             val fallback = turns.firstOrNull { it.role == Turn.Role.USER }?.text.orEmpty().trim()
-            if (fallback.isBlank()) return null
-            return MemoryEntry(
-                title = fallback.take(20),
-                body = "（模型未给出归纳，自动记录的任务原文）\n\n$fallback",
+            if (fallback.isBlank()) {
+                return DistillResult.GaveUp("模型没给内容，且找不到可兜底的任务原文")
+            }
+            return DistillResult.Entry(
+                MemoryEntry(
+                    title = fallback.take(20),
+                    body = "（模型未给出归纳，自动记录的任务原文）\n\n$fallback",
+                ),
+                note = "模型回了「无」，已用任务原文兜底",
             )
         }
 
@@ -286,7 +308,7 @@ class LlmDistiller(private val llm: LlmClient) {
             ?: "用户洞察"
         val body = lines.drop(1).joinToString("\n").trim().ifBlank { text }
 
-        return MemoryEntry(title = title, body = body)
+        return DistillResult.Entry(MemoryEntry(title = title, body = body))
     }
 
     private companion object {
@@ -333,6 +355,21 @@ class LlmDistiller(private val llm: LlmClient) {
  */
 object MemoryWriter {
 
+    /**
+     * 一次写入的结果。
+     *
+     * 用类型而不是 `String?`，是因为**"为什么没写进去"必须能说清楚**。
+     * 原来失败一律返回 null，调用方只能显示一句"没写入"，
+     * 用户和排查的人都无从下手 —— 这次"记忆写入失效"就是这么被藏住的。
+     */
+    sealed class Outcome {
+        /** 成功写入，[title] 是那条记忆的标题 */
+        data class Written(val title: String) : Outcome()
+
+        /** 没写，[reason] 是可以直接给用户看的一句话原因 */
+        data class NotWritten(val reason: String) : Outcome()
+    }
+
     private val lock = Mutex()
 
     /** 有没有正在排队/写入的 */
@@ -343,15 +380,23 @@ object MemoryWriter {
     /**
      * 排队写一条。
      *
-     * @return 写进去的标题；模型判断没什么可记、或调用失败时返回 null
+     * **调用方必须在 IO 线程**：里面会做同步阻塞的 HTTP 调用
+     * （见 [LlmDistiller.distill]）。
      */
-    suspend fun write(context: Context, llm: LlmClient, turns: List<Turn>): String? {
-        if (turns.isEmpty()) return null
+    suspend fun write(context: Context, llm: LlmClient, turns: List<Turn>): Outcome {
+        if (turns.isEmpty()) return Outcome.NotWritten("没有可归纳的轮次")
         busy = true
         return try {
             lock.withLock {
-                val entry = LlmDistiller(llm).distill(turns) ?: return@withLock null
-                if (MemoryStore.append(context, entry)) entry.title else null
+                when (val r = LlmDistiller(llm).distill(turns)) {
+                    is DistillResult.Entry ->
+                        if (MemoryStore.append(context, r.entry)) {
+                            Outcome.Written(r.entry.title)
+                        } else {
+                            Outcome.NotWritten("写文件失败（磁盘满或权限问题）")
+                        }
+                    is DistillResult.GaveUp -> Outcome.NotWritten(r.reason)
+                }
             }
         } finally {
             busy = false
