@@ -58,6 +58,10 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 需要 JDK 17 和 Android SDK 35。用 Android Studio 的话，
 `File → Open` 打开项目根目录，等同步完点运行即可。
 
+> **磁盘空间不够时**：构建产物能占几百 MB。Android Studio 在磁盘满的时候
+> 表现是"同步失败"，而报错只写 `No space left on device`，看不出是磁盘的问题。
+> 清一下即可：`bash tools/clean_build.sh`
+
 ## 首次使用：三步
 
 ### 1. 填模型配置
