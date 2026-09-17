@@ -29,6 +29,7 @@ import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.ContextStore
+import com.aiphone.assistant.display.MirrorActivity
 import com.aiphone.assistant.data.SettingsStore
 import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.llm.LlmClient
@@ -58,6 +59,7 @@ import com.aiphone.assistant.ui.MacroSummary
 import com.aiphone.assistant.ui.MainUiState
 import com.aiphone.assistant.ui.RecordingScreen
 import com.aiphone.assistant.ui.ScheduleScreen
+import com.aiphone.assistant.ui.VirtualDisplayScreen
 import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
@@ -809,6 +811,7 @@ private fun AppRoot(
             onControlPhone = { screen = Screen.CONTROL },
             onRecording = { screen = Screen.RECORDING },
             onSchedules = { screen = Screen.SCHEDULES },
+            onVirtualDisplay = { screen = Screen.VIRTUAL_DISPLAY },
         )
 
         Screen.RECORDING -> RecordingScreen(
@@ -825,6 +828,16 @@ private fun AppRoot(
             onDiscard = { discardRecording() },
             onLearn = { nameHint -> learnRecording(nameHint) },
             onDeleteMacro = { id -> deleteMacro(id) },
+        )
+
+        Screen.VIRTUAL_DISPLAY -> VirtualDisplayScreen(
+            onBack = { screen = Screen.CONTROL },
+            onOpenMirror = { displayId ->
+                // 副屏画面单独开一个窗口显示（用户要的"独立小窗"效果）。
+                // 这里必须用 context.startActivity —— Composable 里够不到
+                // Activity 的成员方法（和之前 requestExactAlarm 踩的是同一个坑）
+                runCatching { context.startActivity(MirrorActivity.intent(context, displayId)) }
+            },
         )
 
         Screen.SCHEDULES -> ScheduleScreen(

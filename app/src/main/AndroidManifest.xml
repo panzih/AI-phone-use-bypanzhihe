@@ -88,6 +88,18 @@
         </activity>
 
         <!--
+          副屏的"窗口"。
+
+          单独一个 Activity 是因为用户要的是"像视频号那样独立弹出来的窗口"。
+          它本身不做任何操作，只是把 shell 截到的副屏画面贴出来。
+        -->
+        <activity
+            android:name=".display.MirrorActivity"
+            android:exported="false"
+            android:label="@string/vd_title"
+            android:theme="@style/Theme.AiPhoneAssistant" />
+
+        <!--
           日志导出用的 FileProvider。
 
           authority 必须和 LogExporter 里拼的一致（<包名>.fileprovider）。
@@ -121,6 +133,25 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="AI 操作手机期间显示进度与急停按钮的悬浮控制面板" />
         </service>
+
+        <!--
+          Shizuku 的 binder 提供者。
+
+          注册它之后 Shizuku 才能把特权进程的 binder 交给本应用。
+          authority 必须写成「<包名>.shizuku」（Shizuku 库会按这个规则找），
+          permission 是 Shizuku 官方要求的，exported 必须为 true
+          —— 因为 binder 是**跨进程**递过来的，不导出就收不到。
+
+          没装 Shizuku 也不影响其它功能：这个 provider 只是注册在那，
+          不会主动拉起任何东西。
+        -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <!--
           定时任务到点的触发点。

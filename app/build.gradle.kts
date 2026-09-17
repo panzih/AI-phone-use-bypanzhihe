@@ -127,5 +127,9 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
 
+    // Shizuku：让普通应用借到 shell 身份。副屏、screencap、input 都要靠它
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+
     debugImplementation(libs.androidx.ui.tooling)
 }

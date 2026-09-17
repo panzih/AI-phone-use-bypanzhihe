@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.ConnectedTv
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -100,6 +101,7 @@ fun MainScreen(
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
+    onVirtualDisplay: () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -124,6 +126,10 @@ fun MainScreen(
                 },
                 onSchedules = {
                     onSchedules()
+                    scope.launch { drawerState.close() }
+                },
+                onVirtualDisplay = {
+                    onVirtualDisplay()
                     scope.launch { drawerState.close() }
                 },
                 onSettings = {
@@ -231,6 +237,7 @@ private fun BrandCenter() {
  *   1. 操作手机   ← 主功能
  *   2. 操作记录   ← 手动录一段操作，交给 AI 学成技能
  *   3. 定时任务   ← 到点自动跑一条任务
+ *   4. 副屏       ← 用 Shizuku 开虚拟屏，把画面搬到自己的窗口里
  *   3. 设置       ← 置底
  */
 @Composable
@@ -238,6 +245,7 @@ private fun AppDrawer(
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
+    onVirtualDisplay: () -> Unit,
     onSettings: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
@@ -285,6 +293,11 @@ private fun AppDrawer(
                 icon = Icons.Filled.Schedule,
                 title = stringResource(R.string.drawer_schedules),
                 onClick = onSchedules,
+            )
+            DrawerItem(
+                icon = Icons.Filled.ConnectedTv,
+                title = stringResource(R.string.drawer_virtual_display),
+                onClick = onVirtualDisplay,
             )
 
             Spacer(Modifier.weight(1f))

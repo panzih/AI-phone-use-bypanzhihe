@@ -12,6 +12,7 @@
     <string name="drawer_control_phone">操作手机</string>
     <string name="drawer_recording">操作记录</string>
     <string name="drawer_schedules">定时任务</string>
+    <string name="drawer_virtual_display">副屏</string>
     <string name="drawer_settings">设置</string>
 
     <!-- 顶栏 -->
@@ -65,6 +66,27 @@
     <string name="context_restored">接着上次的对话（上次操作 %1$s）。</string>
 
     <!-- 日志 -->
+    <!-- 副屏 -->
+    <string name="vd_title">副屏</string>
+    <string name="vd_intro">用 Shizuku 借到 shell 身份，开一块虚拟屏幕，把它的画面搬到这个应用里显示，并在上面模拟触控。\n\n注意：副屏上的点击**做不到**用无障碍实现（系统的手势注入接口没有指定屏幕的参数），只能走 shell 的 input 命令。</string>
+    <string name="vd_shizuku">Shizuku：%1$s</string>
+    <string name="vd_request_permission">申请授权</string>
+    <string name="vd_refresh">刷新状态</string>
+    <string name="vd_steps_title">按顺序点一遍，看哪一步不成立</string>
+    <string name="vd_create">1. 创建副屏</string>
+    <string name="vd_test_capture">2. 试截一张</string>
+    <string name="vd_test_tap">3. 试点一下</string>
+    <string name="vd_open_mirror">4. 打开副屏窗口</string>
+    <string name="vd_remove">撤销副屏</string>
+    <string name="vd_manual_id">手动指定副屏 id</string>
+    <string name="vd_use_manual_id">用这个 id</string>
+    <string name="vd_result_title">上一步结果</string>
+    <string name="vd_raw_title">原始输出</string>
+    <string name="vd_raw_desc">副屏 id 是推断出来的，各机型格式不一样。如果推断错了，把下面这段发我。</string>
+    <string name="vd_mirror_waiting">正在取副屏画面 ...</string>
+    <string name="vd_mirror_exit">退出</string>
+    <string name="vd_mirror_retry">重试</string>
+
     <string name="log_delete">删除日志</string>
     <string name="settings_export_logs_button">导出日志</string>
     <string name="log_delete_confirm_title">删除所有日志？</string>
