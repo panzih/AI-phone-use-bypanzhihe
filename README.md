@@ -58,6 +58,19 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 需要 JDK 17 和 Android SDK 35。用 Android Studio 的话，
 `File → Open` 打开项目根目录，等同步完点运行即可。
 
+> ⚠️ **Gradle 用的 JDK 必须是 17～22，不能用 25。**
+> Android Studio 2026 自带的 JBR 是 25，而 Gradle 8.9 自带的 Kotlin DSL
+> 编译器不认识这个版本号 —— 报错会是一句莫名其妙的 `25.0.3`：
+>
+> ```
+> * What went wrong:
+> 25.0.3
+> java.lang.IllegalArgumentException: 25.0.3
+> ```
+>
+> 解决：`Settings → Build, Execution, Deployment → Build Tools → Gradle
+> → Gradle JDK`，改成 17 或 21 即可。**不需要改代码。**
+
 > **磁盘空间不够时**：构建产物能占几百 MB。Android Studio 在磁盘满的时候
 > 表现是"同步失败"，而报错只写 `No space left on device`，看不出是磁盘的问题。
 > 清一下即可：`bash tools/clean_build.sh`
