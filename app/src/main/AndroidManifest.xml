@@ -64,6 +64,23 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+
+        <!--
+          Shizuku 的包名必须显式声明。
+
+          上面那个 intent 只覆盖"有桌面入口的应用"，对 Shizuku 不生效。
+          而 ShizukuBridge.isInstalled() 走的是
+          packageManager.getPackageInfo("moe.shizuku.privileged.api") ——
+          在 Android 11+ 上这同样是被包可见性过滤的查询接口。
+
+          不声明的话，即使 Shizuku 装好且正在运行，isInstalled 也返回 false，
+          状态机永远停在 NOT_INSTALLED：界面显示"没装 Shizuku"，
+          连授权框都弹不出来。诊断极难，因为一切都不报错。
+
+          debug 包也列上：Shizuku 的调试版用的是另一个包名。
+        -->
+        <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="moe.shizuku.privileged.api.debug" />
     </queries>
 
     <application

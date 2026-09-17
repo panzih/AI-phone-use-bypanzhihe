@@ -84,10 +84,19 @@ object ShizukuBridge {
         else -> State.READY
     }
 
-    fun isInstalled(context: Context): Boolean = runCatching {
-        context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
-        true
-    }.getOrDefault(false)
+    /**
+     * Shizuku 装了没有。
+     *
+     * ⚠️ 两个包名都要试（正式版 / debug 版），而且**必须在 manifest 的
+     * `<queries>` 里声明** —— `getPackageInfo` 在 Android 11+ 上受包可见性
+     * 过滤，没声明就永远查不到，表现是"装了 Shizuku 却显示没装"。
+     */
+    fun isInstalled(context: Context): Boolean = SHIZUKU_PACKAGES.any { pkg ->
+        runCatching {
+            context.packageManager.getPackageInfo(pkg, 0)
+            true
+        }.getOrDefault(false)
+    }
 
     fun ping(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
@@ -185,6 +194,12 @@ object ShizukuBridge {
     }
 
     private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+
+    /** 正式版 + debug 版。两边都要能在 manifest 的 `<queries>` 里找到 */
+    private val SHIZUKU_PACKAGES = listOf(
+        SHIZUKU_PACKAGE,
+        "$SHIZUKU_PACKAGE.debug",
+    )
 
     /** 改了 ShellService 的实现就 +1 */
     private const val SHELL_SERVICE_VERSION = 1
