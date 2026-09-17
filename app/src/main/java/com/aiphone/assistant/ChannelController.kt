@@ -119,6 +119,16 @@ class ChannelController(private val context: Context) {
     suspend fun captureFrame(): ByteArray? =
         withContext(Dispatchers.IO) { ensureChannel().screenshot() }
 
+    /** 最后一次截图失败的原因，null 表示上次成功或还没失败过 */
+    fun lastScreenshotError(): String? {
+        val ch = ensureChannel()
+        return when (ch) {
+            is com.aiphone.assistant.channel.AccessibilityChannel -> ch.lastScreenshotError
+            is com.aiphone.assistant.channel.DisplayChannel -> ch.lastShotError
+            else -> null
+        }
+    }
+
     /** 当前能否操作（服务是否真的连着，不是"设置里开着"） */
     /**
      * 当前通道能不能真的用。

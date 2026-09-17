@@ -268,6 +268,8 @@ class Agent(
             var modelOutput = ""
             var imageRequests = 0
             var skillCalls = 0
+            var imageOverLimitRetries = 0
+            var skillOverLimitRetries = 0
 
             /**
              * 读不到控件树时（副屏模式就是这种），**截图是模型唯一的信息来源**。
@@ -427,8 +429,11 @@ class Agent(
                             OverlayBus.show()
 
                             if (shot == null || shot.isEmpty()) {
-                                logger?.error("截图失败，只能靠控件树继续", "截图")
-                                imageNote = "截图取不到（可能是安全页面、或者系统限流），只能靠界面元素判断。"
+                                val err = controller.lastScreenshotError() ?: "未知原因"
+                                logger?.error("截图失败：$err", "截图")
+                                imageNote = "截图失败（$err）。只能靠界面元素判断。"
+                                // 截图失败时清空 pendingImage，防止旧图污染
+                                pendingImage = null
                             } else {
                                 pendingImage = shot
                                 logger?.line("截图：${w}x$h，${shot.size} 字节（本次发送）", "截图")
@@ -439,8 +444,31 @@ class Agent(
                             continue@ask
                         }
                         if (p.needImage) {
+                            // 超限后如果模型还是只要图不给动作，直接终止，不要继续烧钱
+                            if (p.actions.isEmpty()) {
+                                val msg = "模型已经要求了 $MAX_IMAGE_REQUESTS 次截图，仍然没有给出任何动作。" +
+                                    "可能是这个界面只靠截图也看不懂，或者模型卡住了。"
+                                logger?.error(msg, "截图超限")
+                                listener.onEvent(EventKind.ERROR, msg, "截图超限")
+                                finish(false, msg)
+                                return
+                            }
+                            // 超限但模型给了动作 → 执行动作（别丢有效动作），但计数器 +1
+                            imageOverLimitRetries++
+                            if (imageOverLimitRetries > OVER_LIMIT_MAX_RETRY) {
+                                val msg = "模型连续 $imageOverLimitRetries 次坚持要截图，即使已经给了动作。" +
+                                    "说明它根本没打算靠界面元素做决策，继续下去就是烧钱。"
+                                logger?.error(msg, "截图超限")
+                                listener.onEvent(EventKind.ERROR, msg, "截图超限")
+                                finish(false, msg)
+                                return
+                            }
+                            // 告诉模型以后不会再给图了
+                            imageNote = "这一轮不会再给截图了（已经要了 $MAX_IMAGE_REQUESTS 次）。" +
+                                "请根据界面元素列表继续操作，不要再要截图了。"
                             logger?.warn(
-                                "模型又要截图，但这一轮已经给过 $MAX_IMAGE_REQUESTS 次了，先按它给的动作走",
+                                "模型又要截图，但这一轮已经给过 $MAX_IMAGE_REQUESTS 次了，" +
+                                    "给了动作，先执行（第 $imageOverLimitRetries 次超限重试）",
                                 "截图",
                             )
                         }
@@ -477,8 +505,31 @@ class Agent(
                             continue@ask
                         }
                         if (skillId != null) {
+                            // 超限后如果模型还是只要技能不给动作，直接终止，不要继续烧钱
+                            if (p.actions.isEmpty()) {
+                                val msg = "模型已经要求了 $MAX_SKILL_CALLS 次调用技能，仍然没有给出任何动作。" +
+                                    "可能是模型卡住了，或者技能也解决不了问题。"
+                                logger?.error(msg, "技能超限")
+                                listener.onEvent(EventKind.ERROR, msg, "技能超限")
+                                finish(false, msg)
+                                return
+                            }
+                            // 超限但模型给了动作 → 执行动作（别丢有效动作），但计数器 +1
+                            skillOverLimitRetries++
+                            if (skillOverLimitRetries > OVER_LIMIT_MAX_RETRY) {
+                                val msg = "模型连续 $skillOverLimitRetries 次坚持要调用技能，即使已经给了动作。" +
+                                    "说明它根本没打算靠现有信息做决策，继续下去就是烧钱。"
+                                logger?.error(msg, "技能超限")
+                                listener.onEvent(EventKind.ERROR, msg, "技能超限")
+                                finish(false, msg)
+                                return
+                            }
+                            // 告诉模型以后不会再调技能了
+                            skillNote = "这一轮不会再调用技能了（已经调了 $MAX_SKILL_CALLS 次）。" +
+                                "请根据已有信息继续操作，不要再调技能了。"
                             logger?.warn(
-                                "模型又要调技能，但这一轮已经调过 $MAX_SKILL_CALLS 次了，先按它给的动作走",
+                                "模型又要调技能，但这一轮已经调过 $MAX_SKILL_CALLS 次了，" +
+                                    "给了动作，先执行（第 $skillOverLimitRetries 次超限重试）",
                                 "技能",
                             )
                         }
@@ -794,6 +845,16 @@ class Agent(
          * 给两次机会，之后就必须按现有信息做决定。
          */
         const val MAX_IMAGE_REQUESTS = 2
+
+        /**
+         * 超限后模型还坚持要图/要技能，最多重试几次。
+         *
+         * 超限后如果模型给了动作，就执行动作（别丢有效动作），
+         * 但如果它连续好几次都只给"要图/要技能 + 随便一个动作"，
+         * 说明它根本没打算靠现有信息做决策，继续下去就是烧钱。
+         * 给 3 次机会，之后直接停。
+         */
+        const val OVER_LIMIT_MAX_RETRY = 3
 
         /**
          * 上下文预算。

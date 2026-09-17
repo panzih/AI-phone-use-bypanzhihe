@@ -121,8 +121,14 @@ private const val TAG = "SkillRegistry"
  *
  * 以后加记忆、用户洞察、剪贴板之类的，都往这里加一行 ——
  * 目录和系统提示词会自动带上。
+ *
+ * 注：device_state、read_setting、foreground_state 依赖 Shizuku/ADB，
+ * 当前版本以无障碍为主，这些技能先注释掉，后续版本再开放。
  */
 private val DEFAULT_SKILLS: List<Skill> = listOf(
     AppListSkill,
     MemorySkill,
+    // DeviceStateSkill,
+    // ReadSettingSkill,
+    // ForegroundStateSkill,
 )

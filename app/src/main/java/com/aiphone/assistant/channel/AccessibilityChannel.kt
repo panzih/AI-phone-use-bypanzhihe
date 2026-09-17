@@ -51,6 +51,11 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
     @Volatile
     private var lastNodes: List<UiNode> = emptyList()
 
+    /** 最后一次截图失败的原因，null 表示上次成功或还没失败过 */
+    @Volatile
+    var lastScreenshotError: String? = null
+        private set
+
     private val service: AutoService? get() = AutoService.get()
 
     // ------------------------------------------------------------------
@@ -99,7 +104,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
      * 隔一会儿重试基本都能拿到。这不是可选的优化，是必需的容错。
      */
     override suspend fun screenshot(): ByteArray? = withContext(Dispatchers.IO) {
-        val svc = service ?: return@withContext null
+        val svc = service ?: run {
+            lastScreenshotError = "无障碍服务未连接"
+            return@withContext null
+        }
 
         repeat(3) { attempt ->
             when (val r = svc.takeShot()) {
@@ -109,6 +117,7 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                         r.bitmap.recycle()
                         out.toByteArray()
                     }
+                    lastScreenshotError = null
                     return@withContext bytes
                 }
 
@@ -117,8 +126,10 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                         "截图失败(尝试 ${attempt + 1}/3): ${r.reason}")
                     // 限流就等一下重试；安全窗口没救，直接放弃
                     if (r.reason.contains("太快") || r.reason.contains("太短")) {
+                        lastScreenshotError = "截图被系统限流：${r.reason}"
                         Thread.sleep(400L * (attempt + 1))
                     } else {
+                        lastScreenshotError = "截图失败：${r.reason}"
                         return@withContext null
                     }
                 }
@@ -218,8 +229,8 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                         tapByIndex(action.targetIndex, onPoint)
                     } else {
                         onPoint?.invoke(action.x, action.y)
-                        val ok = doGesture { cb -> svc.tapAt(action.x.toFloat(), action.y.toFloat(), cb) }
-                        if (ok) null else "点击失败"
+                        doGesture { cb -> svc.tapAt(action.x.toFloat(), action.y.toFloat(), cb) }
+                            .toError("点击")
                     }
                 }
 
@@ -239,13 +250,12 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                     if (node != null && svc.longClickNode(node)) {
                         null
                     } else {
-                        val ok = doGesture { cb ->
+                        doGesture { cb ->
                             svc.longPressAt(
                                 action.x.toFloat(), action.y.toFloat(),
                                 action.durationMs.coerceIn(300, 10_000).toLong(), cb,
                             )
-                        }
-                        if (ok) null else "长按失败"
+                        }.toError("长按")
                     }
                 }
 
@@ -263,8 +273,8 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                     if (node != null && (cx <= 0 || cy <= 0)) return@withContext "双击目标无效"
 
                     onPoint?.invoke(cx, cy)
-                    val ok = doGesture { cb -> svc.doubleTapAt(cx.toFloat(), cy.toFloat(), cb) }
-                    if (ok) null else "双击失败"
+                    doGesture { cb -> svc.doubleTapAt(cx.toFloat(), cy.toFloat(), cb) }
+                        .toError("双击")
                 }
 
                 // 滚动：优先节点级（不需要坐标、不会滚过头），不行退回手势
@@ -283,14 +293,13 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                     // 而不是只有一个孤零零的圈
                     onPoint?.invoke(action.x, action.y)
                     onPoint?.invoke(action.x2, action.y2)
-                    val ok = doGesture { cb ->
+                    doGesture { cb ->
                         svc.dragAt(
                             action.x.toFloat(), action.y.toFloat(),
                             action.x2.toFloat(), action.y2.toFloat(),
                             moveMs.toLong(), cb,
                         )
-                    }
-                    if (ok) null else "拖拽失败"
+                    }.toError("拖拽")
                 }
 
                 // 滑动：松手前有停顿，不触发惯性
@@ -300,14 +309,13 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                     // 而不是只有一个孤零零的圈
                     onPoint?.invoke(action.x, action.y)
                     onPoint?.invoke(action.x2, action.y2)
-                    val ok = doGesture { cb ->
+                    doGesture { cb ->
                         svc.swipeAt(
                             action.x.toFloat(), action.y.toFloat(),
                             action.x2.toFloat(), action.y2.toFloat(),
                             d.toLong(), cb,
                         )
-                    }
-                    if (ok) null else "滑动失败"
+                    }.toError("滑动")
                 }
 
                 // 甩动：松手前不停顿，保持速度触发惯性滚动。
@@ -318,14 +326,13 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                     // 而不是只有一个孤零零的圈
                     onPoint?.invoke(action.x, action.y)
                     onPoint?.invoke(action.x2, action.y2)
-                    val ok = doGesture { cb ->
+                    doGesture { cb ->
                         svc.flickAt(
                             action.x.toFloat(), action.y.toFloat(),
                             action.x2.toFloat(), action.y2.toFloat(),
                             d.toLong(), cb,
                         )
-                    }
-                    if (ok) null else "甩动失败"
+                    }.toError("甩动")
                 }
 
                 TouchKind.PINCH_OUT, TouchKind.PINCH_IN -> {
@@ -375,7 +382,7 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
 
         val duration = action.durationMs.coerceIn(200, 2_000).toLong()
 
-        val ok = doGesture { cb ->
+        return doGesture { cb ->
             svc.gesture(
                 listOf(
                     // 左手指：从 (cx-startGap) 移到 (cx-endGap)
@@ -392,23 +399,39 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 duration,
                 cb,
             )
-        }
-        return if (ok) null else "双指手势失败"
+        }.toError("双指手势")
     }
 
     /** 把回调式的 dispatchGesture 包成挂起调用 */
     private suspend fun doGesture(
         block: ((Boolean) -> Unit) -> Unit,
-    ): Boolean = withTimeoutOrNull(5_000) {
-        var result = false
-        val latch = java.util.concurrent.CountDownLatch(1)
-        block { ok ->
-            result = ok
-            latch.countDown()
+    ): GestureResult {
+        val result = withTimeoutOrNull(5_000) {
+            var success = false
+            val latch = java.util.concurrent.CountDownLatch(1)
+            block { ok ->
+                success = ok
+                latch.countDown()
+            }
+            latch.await(4, java.util.concurrent.TimeUnit.SECONDS)
+            if (success) GestureResult.Success else GestureResult.Cancelled
         }
-        latch.await(4, java.util.concurrent.TimeUnit.SECONDS)
-        result
-    } ?: false
+        return result ?: GestureResult.Timeout
+    }
+
+    /** 手势执行结果 */
+    private sealed class GestureResult {
+        object Success : GestureResult()
+        object Cancelled : GestureResult()
+        object Timeout : GestureResult()
+
+        /** 转成给用户看的错误信息，null 表示成功 */
+        fun toError(actionName: String): String? = when (this) {
+            Success -> null
+            is Cancelled -> "${actionName}被系统取消了（可能是界面正在切换，或者有弹窗挡住了）"
+            is Timeout -> "${actionName}超时了（系统 5 秒内没给结果）"
+        }
+    }
 
     // ------------------------------------------------------------------
     // 文本输入：ACTION_SET_TEXT（无障碍的核心优势之一）
