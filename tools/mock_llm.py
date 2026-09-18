@@ -64,65 +64,13 @@ PORT = 8765
 DELAY = float(os.environ.get("MOCK_DELAY", "0"))
 
 # 每一轮要回的回复。最后一个发完就停在 finished 上。
+#
+# 这个剧本专门用来验证 F1 的有界性：永远要图 + 给一个能解析的动作。
+# 预期：最多 5 次 ask 循环就会 finish(false)，不会无限烧钱。
 SCRIPTED = [
-    # 请求1（第1步）：一轮一批动作，中间夹一个显式 sleep。
-    # 预期：点 2 → 等 10 秒（而不是 10+1.5 秒）→ 点 5 → 等 1.5 秒 → 下一轮
-    '{"thought": "先点设置，等页面加载完，再点网络和互联网",'
-    ' "next_hint": "在设置里找到网络和互联网",'
-    ' "need_image": false,'
-    ' "actions": ['
-    '   {"action": "tap", "index": 2},'
-    '   {"action": "sleep", "duration_ms": 10000},'
-    '   {"action": "tap", "index": 5}'
-    ' ], "finished": false}',
-
-    # 请求2（第2步）：控件树说不清这一屏，要一张截图 —— 不算一步
-    '{"thought": "界面元素看不出来这是什么页面，要一张截图确认",'
-    ' "next_hint": "确认当前页面", "need_image": true, "actions": []}',
-
-    # 请求3：看完图之后给动作。顺便用**旧的单动作格式 + markdown 围栏**，
-    # 验证防御性解析和向后兼容
-    '```json\n'
-    '{"thought": "看清楚了，是设置页，点第一个可点元素", "action": "tap", "index": 4,'
-    ' "next_hint": "打开 WiFi 设置", "finished": false}\n'
-    '```',
-
-    # 请求4（第3步）：先拉技能说明文档 —— 验证"按需取文档"这条路
-    '{"thought": "我需要知道有哪些技能可用", "next_hint": "查看可用技能",'
-    ' "use_skill": "list_skills", "actions": []}',
-
-    # 请求5：看了文档之后，调 list_apps 拿应用列表和包名
-    '{"thought": "要打开设置，先确认包名，不能凭记忆编",'
-    ' "next_hint": "查询已安装的应用列表",'
-    ' "use_skill": "list_apps", "actions": []}',
-
-    # 请求6：拿真实包名去打开应用 —— 验证技能结果确实留在上下文里
-    '{"thought": "包名拿到了，用真实包名启动",'
-    ' "next_hint": "打开系统设置", "finished": false,'
-    ' "actions": [{"action": "open_app", "package": "com.android.settings"}]}',
-
-    # 请求7（第4步）：连点两次同一个元素，中间只等 1ms —— 模拟双击
-    '{"thought": "双击放大这个区域", "next_hint": "确认放大结果", "finished": false,'
-    ' "actions": [{"action": "tap", "index": 7},'
-    '             {"action": "sleep", "duration_ms": 1},'
-    '             {"action": "tap", "index": 7}]}',
-
-    # 请求8（第5步）：一条编造的动作用 + 一条合法的。
-    # 预期：shell 被丢掉并回灌给模型，合法的 scroll 照常执行
-    '{"thought": "混一个不存在的动作进去", "next_hint": "只应该执行滚动", "finished": false,'
-    ' "actions": ['
-    '   {"action": "shell", "command": "rm -rf /"},'
-    '   {"action": "scroll", "direction": "down"}'
-    ' ]}',
-
-    # 请求9（第6步）：坐标越界 —— 验证夹紧
-    '{"thought": "点一个超出屏幕的坐标", "next_hint": "这一步不该执行", "finished": false,'
-    ' "actions": [{"action": "tap", "x": 99999, "y": -50}]}',
-
-    # 请求10：收尾
-    '{"thought": "做完了", "action": "", "finished": true,'
-    ' "summary": "全部步骤执行完毕，链路验证通过"}',
-]
+    # 永远要图 + 给一个能解析的动作
+    '{"thought":"我需要看截图","need_image": true, "actions":[{"action":"tap","x":1,"y":1}]}',
+] * 10  # 重复 10 次，足够触发超限计数器
 
 state = {"n": 0, "last_messages": None, "last_texts": None}
 
