@@ -92,10 +92,17 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // 必须第一时间挂前台服务：startForegroundService 之后系统只给一个很短的
+        // 窗口；进程冷启动、切后台过渡、通知权限对话框并发时主线程可能被拖住，
+        // 放在它前面的每一步都在挤占这个窗口，超时会抛
+        // ForegroundServiceDidNotStartInTimeException（B1）。这是系统调度竞态、
+        // 应用层无法根除，只能把「到 startForeground 的路径」压到最短。
+        // 本函数只用到 NotificationManager、不依赖下面的 wm，可安全前置；
+        // 它内部已 try/catch，失败会主动 stopSelf 收掉自己，不让系统超时杀进程。
+        startForegroundCompat()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         OverlayBus.service = this
         android.util.Log.i(TAG, "onCreate：可以画悬浮窗 = ${canDrawOverlays()}")
-        startForegroundCompat()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -150,48 +157,62 @@ class OverlayService : Service() {
      * 悬浮窗正好被藏着的那一瞬间用户还有这条退路。
      */
     private fun startForegroundCompat() {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "AI 操作手机",
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = "AI 正在操作手机时的状态与急停"
-                setShowBadge(false)
+        // 起不了前台服务也不能让它崩：悬浮窗本就是「锦上添花」，没它任务照样要
+        // 跑通。specialUse 权限 / 通知渠道 / 资源等任何异常，都降级为「本次无悬浮窗」。
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    "AI 操作手机",
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = "AI 正在操作手机时的状态与急停"
+                    setShowBadge(false)
+                }
+                nm.createNotificationChannel(channel)
             }
-            nm.createNotificationChannel(channel)
-        }
 
-        val stopIntent = PendingIntent.getService(
-            this,
-            1,
-            Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-
-        val notification: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("纸盒正在操作手机")
-            .setContentText("点通知里的「急停」可以随时停下")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setOngoing(true)
-            .addAction(
-                Notification.Action.Builder(
-                    null,
-                    "急停",
-                    stopIntent,
-                ).build()
+            val stopIntent = PendingIntent.getService(
+                this,
+                1,
+                Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            val notification: Notification = Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("纸盒正在操作手机")
+                .setContentText("点通知里的「急停」可以随时停下")
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setOngoing(true)
+                .addAction(
+                    Notification.Action.Builder(
+                        null,
+                        "急停",
+                        stopIntent,
+                    ).build()
+                )
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e(
+                TAG,
+                "startForeground 失败，主动收掉服务、本次无悬浮窗，任务继续：${t.message}",
+                t,
             )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            // 进不了前台就不能让服务悬在「没进前台」的状态：主动销毁，平台检测到
+            // 服务在销毁会取消前台超时，不会再抛 DidNotStart；任务协程在
+            // MainActivity、与本服务解耦，无悬浮窗也能照常跑完（B1 闭环）。
+            stopSelf()
         }
     }
 
