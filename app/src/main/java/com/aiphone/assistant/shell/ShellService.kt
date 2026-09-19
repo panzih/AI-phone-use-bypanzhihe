@@ -43,14 +43,37 @@ class ShellService : IShellService.Stub() {
     /** 上一次成功抓到的帧；静态画面没新帧时 grabFrame 也能稳定返回 */
     private var lastFrameBytes: ByteArray? = null
 
+    /** 孤儿 :shell 清理是否已做过（每个服务进程只在首次建屏前做一次） */
+    private var orphanCleaned = false
+
     override fun destroy() {
         Log.i(TAG, "ShellService 被销毁")
-        synchronized(this) {
-            runCatching { virtualDisplay?.release() }
-            runCatching { imageReader?.close() }
-            virtualDisplay = null
-            imageReader = null
-            lastFrameBytes = null
+        synchronized(this) { releaseDisplayLocked() }
+    }
+
+    /** 释放副屏相关资源（VirtualDisplay + ImageReader + 缓存帧）；destroy/destroyDisplay 共用 */
+    private fun releaseDisplayLocked(): Int {
+        val id = virtualDisplay?.display?.displayId ?: -1
+        runCatching { virtualDisplay?.release() }
+        runCatching { imageReader?.close() }
+        virtualDisplay = null
+        imageReader = null
+        lastFrameBytes = null
+        return id
+    }
+
+    override fun destroyDisplay(): Int = synchronized(this) {
+        try {
+            if (virtualDisplay == null) {
+                Log.i(TAG, "destroyDisplay：没有副屏可销毁")
+                return@synchronized -1
+            }
+            val id = releaseDisplayLocked()
+            Log.i(TAG, "副屏已主动销毁 displayId=$id")
+            id
+        } catch (t: Throwable) {
+            Log.w(TAG, "destroyDisplay 失败：$t")
+            -2
         }
     }
 
@@ -95,6 +118,9 @@ class ShellService : IShellService.Stub() {
             virtualDisplay?.let { vd ->
                 if (vd.display.displayId >= 0) return@synchronized vd.display.displayId
             }
+
+            // 0.5.1：建自己的屏之前，先清掉上一轮 server 死亡遗留的孤儿 :shell（只一次）
+            cleanupOrphansOnce()
 
             val ctx = ensureContext()
             val manager = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
@@ -151,6 +177,52 @@ class ShellService : IShellService.Stub() {
         } catch (t: Throwable) {
             "启动失败：${t.javaClass.simpleName} ${t.message}"
         }
+    }
+
+    // ================= 0.5.1：生命周期 =================
+
+    /**
+     * 只跑一次：杀掉同 uid 下、除自己以外残留的 assistant:shell 进程。
+     *
+     * Shizuku server 被强杀/重启时，它 fork 的 :shell 会变孤儿（父进程=1）、
+     * 仍占着虚拟屏。新服务建屏前把它们 kill，系统的死亡接收器会自动释放其 VirtualDisplay。
+     * 用 [Process.myPid] 排除自己，绝不会自断。
+     *
+     * ## 已知缺口（0.5.1 未做，已记入待办）
+     * kill 之后**不重新枚举、不查 dumpsys 确认孤儿屏真的消失**，清理失败也只 [Log.w]、
+     * 没有把"清理没成功"传回上层的路径。验证与上报等 Agent 接入副屏那版一起做，
+     * 在此之前不要把本方法当成已闭环。
+     */
+    private fun cleanupOrphansOnce() {
+        if (orphanCleaned) return
+        orphanCleaned = true
+        try {
+            val myPid = Process.myPid()
+            // ps -A 列：USER PID PPID ...，PID 是第 2 列
+            val orphans = runUnlocked("ps -A").lineSequence()
+                .filter { it.contains("com.aiphone.assistant:shell") }
+                .mapNotNull { it.trim().split(Regex("\\s+")).getOrNull(1)?.toIntOrNull() }
+                .filter { it != myPid }
+                .toList()
+            if (orphans.isEmpty()) {
+                Log.i(TAG, "孤儿清理：无残留 :shell")
+            } else {
+                for (pid in orphans) {
+                    Log.i(TAG, "清理上一轮遗留的孤儿 :shell pid=$pid（其副屏随之释放）")
+                    runCatching { Process.killProcess(pid) }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "孤儿清理失败：$t")
+        }
+    }
+
+    /** 直接 ProcessBuilder 跑命令（持锁内用，避免重入 synchronized 的 exec） */
+    private fun runUnlocked(command: String): String {
+        val p = ProcessBuilder("sh", "-c", command).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().use { it.readText() }
+        p.waitFor()
+        return out
     }
 
     /**

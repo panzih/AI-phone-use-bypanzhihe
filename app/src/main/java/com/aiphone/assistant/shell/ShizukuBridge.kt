@@ -186,9 +186,22 @@ object ShizukuBridge {
             }
     }
 
-    /** 抓副屏当前帧（PNG）；失败返回空数组 */
-    suspend fun grabFrame(context: Context): ByteArray = withContext(Dispatchers.IO) {
+    /** 主动销毁当前副屏，返回被销毁的 displayId（无屏 -1、失败 -2） */
+    suspend fun destroyDisplay(context: Context): Int = withContext(Dispatchers.IO) {
         val problem = ensureBound(context)
+        if (problem != null) {
+            lastError = problem
+            return@withContext -2
+        }
+        runCatching { service?.destroyDisplay() ?: -2 }
+            .getOrElse {
+                lastError = "销毁副屏异常：${it.message}"
+                -2
+            }
+    }
+
+    /** 抓副屏当前帧（PNG）；失败返回空数组 */
+    suspend fun grabFrame(context: Context): ByteArray = withContext(Dispatchers.IO) {        val problem = ensureBound(context)
         if (problem != null) {
             lastError = problem
             return@withContext ByteArray(0)
@@ -243,6 +256,6 @@ object ShizukuBridge {
         "$SHIZUKU_PACKAGE.debug",
     )
 
-    /** 改了 ShellService 的实现就 +1（0.5.0 新增建屏/抓帧/副屏起应用） */
-    private const val SHELL_SERVICE_VERSION = 2
+    /** 改了 ShellService 的实现就 +1（0.5.1 新增 destroyDisplay + 孤儿 :shell 清理） */
+    private const val SHELL_SERVICE_VERSION = 3
 }

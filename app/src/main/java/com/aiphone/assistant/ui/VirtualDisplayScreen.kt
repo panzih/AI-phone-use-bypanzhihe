@@ -79,6 +79,7 @@ fun VirtualDisplayScreen(
     var busy by remember { mutableStateOf(false) }
     var manualId by remember { mutableStateOf("") }
     var stepResult by remember { mutableStateOf("") }
+    var destroyMsg by remember { mutableStateOf("") }
 
     fun refreshState() {
         scope.launch {
@@ -301,6 +302,31 @@ fun VirtualDisplayScreen(
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (busy) "自检中…" else "运行 0.5.0 自检") }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    busy = true
+                                    val r = ShizukuBridge.destroyDisplay(context)
+                                    destroyMsg = when {
+                                        r >= 0 -> "已销毁副屏 displayId=$r"
+                                        r == -1 -> "当前没有副屏可销毁"
+                                        else -> "销毁失败（$r）：${ShizukuBridge.lastError ?: ""}"
+                                    }
+                                    busy = false
+                                }
+                            },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("销毁副屏") }
+                        if (destroyMsg.isNotBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                destroyMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
                     }
                 }

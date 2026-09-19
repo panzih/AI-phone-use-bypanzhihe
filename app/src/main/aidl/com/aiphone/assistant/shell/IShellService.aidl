@@ -77,4 +77,14 @@ interface IShellService {
      * @return am start 的原始输出；失败返回错误文本
      */
     String startOnDisplay(String component, int displayId) = 5;
+
+    /**
+     * 主动销毁当前服务持有的虚拟副屏（只释放副屏/ImageReader，不退出服务）。
+     *
+     * 0.5.1：任务结束在 finally 里调，不再靠"解绑时进程顺带死了"收尾——
+     * 切 .daemon(true) 后那个顺带效应会消失。
+     *
+     * @return 被销毁的 displayId（没有副屏可销毁返回 -1；失败返回 -2）
+     */
+    int destroyDisplay() = 6;
 }
