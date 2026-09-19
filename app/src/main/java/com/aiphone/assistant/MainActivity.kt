@@ -534,7 +534,6 @@ private fun AppRoot(
     }
 
     // 每次回到前台重新判断授权状态，并处理"闲置超时自动清空上下文"
-    // 任务开始后要把主界面退到后台 —— 否则 Agent 操作的是纸盒自己
     val hostActivity = LocalContext.current as? ComponentActivity
 
     var resumeTick by remember { mutableIntStateOf(0) }
@@ -844,7 +843,6 @@ private fun AppRoot(
             // 只有**定时任务**才可能走副屏（逐条任务自己的选项，见 Schedule）。
             // 手动输入的任务一律主屏 —— 主屏有控件树，定位比副屏的"看截图猜坐标"准得多。
             var vdCreated = false
-            var movedToBack = false
 
             // 把纸盒拉回前台的局部函数
             fun bringAppToFront() {
@@ -870,8 +868,8 @@ private fun AppRoot(
                     )
                     isRunning = false
                     progress = ""
-                    // 任务结束，把界面拉回前台（如果我们之前把它放到后台了）
-                if (movedToBack) bringAppToFront()
+                    // 任务结束，把纸盒界面拉回前台
+                bringAppToFront()
                 OverlayService.stop(context)
                     return@launch
                 }
@@ -887,13 +885,9 @@ private fun AppRoot(
                 // 必须走 context（本项目已经在这里踩过三次了）
                 runCatching { context.startActivity(MirrorActivity.intent(context, id)) }
             } else {
-                // 主屏模式：把界面让开，否则 Agent 第一步要额外按一次 Home，
-                // 而且中间那一下用户会看到纸盒自己的界面被当成操作对象。
-                val activity = hostActivity
-                if (activity != null) {
-                    activity.moveTaskToBack(true)
-                    movedToBack = true
-                }
+                // 主屏模式不再一启动就把纸盒退到后台（那样用户会先看到桌面）。
+                // "把界面让开"改由 Agent 在真正要截图 / 操作别的 app 前按需做；
+                // 第一批动作若是 open_app，则完全不弹桌面、由打开动作自己切走。
             }
 
             // 自动截图：任务期间每 5 秒一张，**故意不隐藏任何 UI** ——
@@ -935,8 +929,8 @@ private fun AppRoot(
                 runOnVirtualDisplay = false
                 isRunning = false
                 progress = ""
-                // 任务结束，把界面拉回前台（如果我们之前把它放到后台了）
-                if (movedToBack) bringAppToFront()
+                // 任务结束，无条件把纸盒界面拉回前台（无论中途有没有让开）
+                bringAppToFront()
                 OverlayService.stop(context)
                 refreshStats()
             }

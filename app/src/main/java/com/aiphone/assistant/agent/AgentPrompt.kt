@@ -176,6 +176,9 @@ fail 时在 summary 里写清楚三件事：**卡在哪一步、试过什么、�
    然后设 finished=true。
 4. **不要凭记忆编包名。** 要用 open_app 打开应用之前，先调 list_apps 技能
    拿到真实包名 —— 编错了系统只会说"没找到这个包"，你看不出是名字记错了。
+5. **如果屏幕上看到的是「纸盒」自己的界面，说明目标应用还没打开。**
+   不要在纸盒界面里操作（别点它的发送、设置等按钮），直接用 open_app
+   打开你要操作的应用。
 """.trimIndent() + skillSection(skillCatalog) + memorySection(memory)
 
     /**

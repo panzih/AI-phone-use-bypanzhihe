@@ -48,9 +48,11 @@ import java.security.MessageDigest
  *
  * ## 关于"自己拍自己"
  *
- * 无障碍读的是当前活动窗口，控制应用自己在前台时读到的是纸盒自己的界面，
- * 模型会对着它操作。所以循环开始前会检查前台包名，是我们就先按一下回桌面。
- * 另外控件树解析时会**按包名过滤掉我们自己的节点**，双保险。
+ * 无障碍读的是当前活动窗口，纸盒自己在前台时模型读到的是纸盒界面、会对着
+ * 它操作。但又不能任务一启动就盲目回桌面（第一批动作若是 open_app，多按一次
+ * HOME 只是白弹一下桌面）。所以改成 lazy：模型要截图、或执行非 open_app
+ * 动作前才按需让开；open_app 执行后若没切走再补一次。控件树解析还会按包名
+ * 过滤掉我们自己的节点，双保险。
  */
 class Agent(
     private val controller: ChannelController,
@@ -132,6 +134,9 @@ class Agent(
     private var cacheHitTokens = 0
     private var cacheMissTokens = 0
 
+    /** 这次任务是否已经把纸盒让到后台（lazy，全程只让一次） */
+    private var foregroundYielded = false
+
     suspend fun run(task: String) {
         // ---- 1. 通道就绪？ ----
         val problem = controller.probe()
@@ -154,10 +159,10 @@ class Agent(
         logger?.line(if (OverlayBus.isShowing) "悬浮窗已就绪" else "悬浮窗未启动（缺权限或未开）", "悬浮")
         logger?.line("技能：${skills.ids().size} 个（${skills.ids().joinToString("、")}）", "技能")
 
-        // ---- 2. 别拍到自己 ----
-        ensureNotSelfForeground()
+        // 不在任务开头无条件让开纸盒（那样会先弹一下桌面）；改成 lazy：
+        // 第一次截图 / 执行非 open_app 动作前才按需让开，见 yieldForegroundIfNeeded。
 
-        // ---- 3. 开跑 ----
+        // ---- 开跑 ----
         // 系统提示词**必须逐字稳定**：它是前缀的第 0 个 token，一变整段
         // 上下文的缓存全废。所以记忆用的是调用方固定下来的那一份快照
         // （见 CarriedContext.memorySnapshot），这里不重新去读记忆文件。
@@ -422,6 +427,8 @@ class Agent(
                             imageRequests++
                             logger?.line("模型要求看截图（第 $imageRequests 次）", "截图")
 
+                            // 截图前先确保纸盒不在前台，否则模型看到的是纸盒自己
+                            yieldForegroundIfNeeded()
                             OverlayBus.setPhase(AgentPhase.SCREENSHOT)
                             OverlayBus.hide()
                             delay(OVERLAY_SETTLE_MS)
@@ -610,10 +617,15 @@ class Agent(
                         return
                     }
                 } else {
+                    OverlayBus.setPhase(AgentPhase.ACTING)
+                    val isOpenApp = action.kind == TouchKind.OPEN_APP
+                    // 非 open_app 动作：执行前先按需让开（纸盒在前台就回桌面），
+                    // 否则这一下会点到纸盒自己。
+                    if (!isOpenApp) yieldForegroundIfNeeded()
+
                     // 注入前**只在真会撞上急停按钮时**才藏。
                     // 状态卡本身是 FLAG_NOT_TOUCHABLE，永远不会吃点击，
                     // 所以只需要担心按钮那一小块。
-                    OverlayBus.setPhase(AgentPhase.ACTING)
                     val mustHide = touchesStopButton(action)
                     if (mustHide) {
                         OverlayBus.hide()
@@ -627,6 +639,9 @@ class Agent(
                     if (mustHide) {
                         OverlayBus.show()
                     }
+                    // open_app 执行后确认真切走了；没切走（包名错/启动失败）
+                    // 就补按 HOME，避免下一步模型读到纸盒自己的界面。
+                    if (isOpenApp) verifyLeftAfterOpenApp()
 
                     if (execResult == null) {
                         logger?.line("  $single → 已执行", "执行")
@@ -689,19 +704,48 @@ class Agent(
     // ------------------------------------------------------------------
 
     /**
-     * 让开前台。
+     * 让开前台（lazy）。
      *
-     * 无障碍读的是当前活动窗口，如果纸盒自己在前台，
-     * 模型看到的就是纸盒的界面 —— 它会开始点自己的按钮。
+     * 用在"模型要截图"以及"执行非 open_app 动作"之前：纸盒自己还在前台，
+     * 模型看到/点到的就是纸盒界面。已经不在前台就什么都不做。全程只让一次。
      */
-    private suspend fun ensureNotSelfForeground() {
-        val pkg = withContext(Dispatchers.IO) { controller.currentPackage() } ?: return
-        if (pkg != selfPackage) return
-        logger?.warn("控制应用自己在前台，先把界面让出来（回桌面）", "通道")
+    private suspend fun yieldForegroundIfNeeded() {
+        if (foregroundYielded) return
+        val pkg = withContext(Dispatchers.IO) { controller.currentPackage() }
+        if (pkg != null && pkg != selfPackage) {
+            foregroundYielded = true
+            return
+        }
+        logger?.warn("即将截图 / 操作别的界面，先把纸盒让到后台（回桌面）", "通道")
+        pressHomeToYield()
+    }
+
+    /**
+     * open_app 执行之后确认前台已经切走。
+     *
+     * open_app 可能因为包名错 / 启动失败而没切走，纸盒还在前台；不补一下，
+     * 下一步模型读到的就是纸盒自己的界面、开始点自己。
+     */
+    private suspend fun verifyLeftAfterOpenApp() {
+        if (foregroundYielded) return
+        val pkg = withContext(Dispatchers.IO) { controller.currentPackage() }
+        if (pkg != null && pkg != selfPackage) {
+            foregroundYielded = true
+            return
+        }
+        logger?.warn("open_app 似乎没切到目标应用，补按 HOME 让开", "通道")
+        pressHomeToYield()
+    }
+
+    /** 按 HOME 把纸盒让到后台，并等界面切走。 */
+    private suspend fun pressHomeToYield() {
+        OverlayBus.setPhase(AgentPhase.ACTING)
         withContext(Dispatchers.IO) {
             controller.execute(TAP_HOME) { px, py -> OverlayBus.pulse(px, py) }
         }
-        delay(800)
+        // 临时值（固定等待），等 A1 / awaitStable 事件驱动落地后替换
+        delay(FOREGROUND_YIELD_MS)
+        foregroundYielded = true
     }
 
     /**
@@ -815,6 +859,13 @@ class Agent(
          * 100ms 对 60Hz 来说是 6 帧，足够。
          */
         const val OVERLAY_SETTLE_MS = 100L
+
+        /**
+         * 按 HOME 让开后、等界面切走的时间。
+         *
+         * ⚠️ 临时值（固定等待），等 A1 / awaitStable 事件驱动落地后替换。
+         */
+        const val FOREGROUND_YIELD_MS = 600L
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
