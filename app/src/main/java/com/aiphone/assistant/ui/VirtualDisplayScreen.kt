@@ -45,11 +45,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import android.graphics.BitmapFactory
+import com.aiphone.assistant.BuildConfig
 import com.aiphone.assistant.R
 import com.aiphone.assistant.display.VirtualDisplayManager
 import com.aiphone.assistant.shell.AdbShell
 import com.aiphone.assistant.shell.ShizukuBridge
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 副屏。
@@ -87,6 +91,70 @@ fun VirtualDisplayScreen(
     }
 
     LaunchedEffect(Unit) { refreshState() }
+
+    /**
+     * 0.5.0 自检：在 shell 服务进程里把 建屏→副屏起应用→抓帧→触控→
+     * 帧差异 整条闭环跑一遍，每步原始输出都收集到 [stepResult]。
+     */
+    fun runSelfTest() {
+        scope.launch {
+            busy = true
+            val sb = StringBuilder()
+            try {
+                sb.appendLine("① createDisplay（flags=0x1fd49）…")
+                val id = ShizukuBridge.createDisplay(context)
+                if (id < 0) {
+                    sb.appendLine("   失败：${ShizukuBridge.lastError}")
+                    stepResult = sb.toString()
+                    busy = false
+                    return@launch
+                }
+                sb.appendLine("   → displayId=$id")
+
+                val dd = ShizukuBridge.run(context, "dumpsys display | grep -iE 'PaperBoxVD|Display Id'")
+                sb.appendLine("② dumpsys display：")
+                sb.appendLine(dd.trim().ifBlank { "（未 grep 到）" })
+
+                ShizukuBridge.run(context, "am force-stop com.android.settings")
+                val so = ShizukuBridge.startOnDisplay(context, "com.android.settings/.Settings", id)
+                sb.appendLine("③ startOnDisplay：")
+                sb.appendLine(so.trim())
+                kotlinx.coroutines.delay(3000)
+
+                val ct = ShizukuBridge.run(
+                    context,
+                    "dumpsys activity containers | grep -nE \"Display $id name|Task=|settings\"",
+                )
+                sb.appendLine("④ containers：")
+                sb.appendLine(ct.trim())
+
+                val before = ShizukuBridge.grabFrame(context)
+                sb.appendLine("⑤ grabFrame 点击前：${before.size} 字节")
+
+                ShizukuBridge.run(context, "input -d $id tap 540 745")
+                kotlinx.coroutines.delay(3000)
+                val after = ShizukuBridge.grabFrame(context)
+                sb.appendLine("⑥ input tap 后 grabFrame：${after.size} 字节")
+
+                val ratio = withContext(Dispatchers.IO) {
+                    runCatching { frameDiffRatio(before, after) }.getOrDefault(-1.0)
+                }
+                sb.appendLine("⑦ 点击前后帧差异率：${if (ratio < 0) "计算失败" else "%.2f%%".format(ratio * 100)}")
+
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.cacheDir.resolve("selftest_before.png").writeBytes(before)
+                        context.cacheDir.resolve("selftest_after.png").writeBytes(after)
+                    }
+                }
+                sb.appendLine("（前后帧已存到应用 cache：selftest_before/after.png）")
+            } catch (t: Throwable) {
+                sb.appendLine("自检异常：${t.javaClass.simpleName} ${t.message}")
+            }
+            stepResult = sb.toString()
+            busy = false
+        }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -216,6 +284,28 @@ fun VirtualDisplayScreen(
                 }
             }
 
+            // ---------- 0.5.0 自检（仅调试可见）----------
+            if (BuildConfig.DEBUG) {
+                item { SectionDivider() }
+                item {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "0.5.0 自检（仅调试可见）",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = { runSelfTest() },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (busy) "自检中…" else "运行 0.5.0 自检") }
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+            }
+
             // ---------- 结果 ----------
             if (stepResult.isNotBlank()) {
                 item { SectionDivider() }
@@ -278,4 +368,29 @@ private fun SectionDivider() {
     Spacer(Modifier.height(8.dp))
     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
     Spacer(Modifier.height(4.dp))
+}
+
+/**
+ * 两帧 PNG 的像素差异率（每隔几个像素采样，省 CPU）。
+ * @return 0~1；解码失败返回 -1
+ */
+private fun frameDiffRatio(a: ByteArray, b: ByteArray): Double {
+    val b1 = BitmapFactory.decodeByteArray(a, 0, a.size) ?: return -1.0
+    val b2 = BitmapFactory.decodeByteArray(b, 0, b.size) ?: return -1.0
+    val w = minOf(b1.width, b2.width)
+    val h = minOf(b1.height, b2.height)
+    var diff = 0L
+    var total = 0L
+    val step = 6
+    var y = 0
+    while (y < h) {
+        var x = 0
+        while (x < w) {
+            total++
+            if (b1.getPixel(x, y) != b2.getPixel(x, y)) diff++
+            x += step
+        }
+        y += step
+    }
+    return if (total == 0L) -1.0 else diff.toDouble() / total
 }

@@ -49,4 +49,32 @@ interface IShellService {
      * @return 原始字节；失败返回空数组
      */
     byte[] execBytes(String command) = 2;
+
+    // ===== 0.5.0：TRUSTED 虚拟副屏闭环（全部在 shell 服务进程里完成）=====
+
+    /**
+     * 建一块 TRUSTED 虚拟副屏。
+     *
+     * 尺寸/密度**照抄主屏**（跨屏参数不一致会触发 configuration change、
+     * Activity 被重建，move-stack 就失去意义）。
+     *
+     * @return 新屏的 displayId；失败返回 -1
+     */
+    int createDisplay() = 3;
+
+    /**
+     * 从副屏抓一帧。
+     *
+     * @return PNG 字节；副屏不存在或还没出帧返回空数组
+     */
+    byte[] grabFrame() = 4;
+
+    /**
+     * 在指定副屏上启动应用。
+     *
+     * @param component 形如 "com.android.settings/.Settings"
+     * @param displayId 副屏 id（由 [createDisplay] 返回）
+     * @return am start 的原始输出；失败返回错误文本
+     */
+    String startOnDisplay(String component, int displayId) = 5;
 }

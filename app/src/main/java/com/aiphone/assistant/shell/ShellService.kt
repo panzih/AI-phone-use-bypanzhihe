@@ -1,7 +1,19 @@
 package com.aiphone.assistant.shell
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.Image
+import android.media.ImageReader
+import android.os.Looper
+import android.os.Handler
+import android.os.Process
 import android.util.Log
+import android.view.Display
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 
 /**
  * 跑在 shell 进程里的服务实现。
@@ -11,16 +23,35 @@ import java.io.ByteArrayOutputStream
  * Shizuku 用 `app_process` 起一个 **uid=2000（shell）** 的进程，把这份代码
  * 加载进去。所以：
  *
- *   - 这里**碰不到应用的对象**（没有 Context、没有单例、没有 UI）
- *   - 抛出的异常会跨进程传回去，最好都自己吞掉转成文本
- *   - 日志分两条：logcat 里看到的 tag 是这个进程打的
+ *   - 这里**碰不到应用的对象**（没有现成 Context、没有单例、没有 UI），
+ *     需要 Context 时得自己反射 `ActivityThread.systemMain()`
+ *   - 抛出的异常会跨进程传回去，最好都自己吞掉转成文本/错误码
  *
  * 换句话说，这个文件里能用的只有 JDK 和 Android framework 的基础能力。
+ *
+ * ## 0.5.0 起新增：TRUSTED 虚拟副屏
+ *
+ * `createDisplay / grabFrame / startOnDisplay` 三个方法把"建一块可交互的
+ * 副屏、在上面起应用、抓帧"全部放进这个长驻服务进程，是后台模式的地基。
  */
 class ShellService : IShellService.Stub() {
 
+    private var appContext: Context? = null
+    private var imageReader: ImageReader? = null
+    private var virtualDisplay: VirtualDisplay? = null
+
+    /** 上一次成功抓到的帧；静态画面没新帧时 grabFrame 也能稳定返回 */
+    private var lastFrameBytes: ByteArray? = null
+
     override fun destroy() {
         Log.i(TAG, "ShellService 被销毁")
+        synchronized(this) {
+            runCatching { virtualDisplay?.release() }
+            runCatching { imageReader?.close() }
+            virtualDisplay = null
+            imageReader = null
+            lastFrameBytes = null
+        }
     }
 
     override fun exec(command: String): String = try {
@@ -56,7 +87,158 @@ class ShellService : IShellService.Stub() {
         ByteArray(0)
     }
 
+    // ================= 0.5.0：TRUSTED 虚拟副屏 =================
+
+    override fun createDisplay(): Int = synchronized(this) {
+        try {
+            // 幂等：已经建了就直接返回现有 id
+            virtualDisplay?.let { vd ->
+                if (vd.display.displayId >= 0) return@synchronized vd.display.displayId
+            }
+
+            val ctx = ensureContext()
+            val manager = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+
+            // 铁律：副屏宽/高/density 照抄主屏，任何偏差都会在跨屏时触发
+            // configuration change、Activity 被重建，move-stack 就失去意义
+            val main = manager.getDisplay(Display.DEFAULT_DISPLAY)
+            val w = main.mode.physicalWidth
+            val h = main.mode.physicalHeight
+            val dpi = ctx.resources.displayMetrics.densityDpi
+            Log.i(TAG, "主屏参数 w=$w h=$h dpi=$dpi")
+
+            val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, MAX_IMAGES)
+            imageReader = reader
+
+            val vd = manager.createVirtualDisplay(
+                DISPLAY_NAME, w, h, dpi, reader.surface, VIRTUAL_DISPLAY_FLAGS,
+            )
+            virtualDisplay = vd
+            Log.i(TAG, "副屏已建 displayId=${vd.display.displayId} flags=0x${VIRTUAL_DISPLAY_FLAGS.toString(16)}")
+            vd.display.displayId
+        } catch (t: Throwable) {
+            // 反射调用包了一层 InvocationTargetException，要顺着 cause 挖到底才是真错误
+            val root = generateSequence(t) { it.cause }.lastOrNull { it !is java.lang.reflect.InvocationTargetException } ?: t
+            Log.w(TAG, "createDisplay 失败：${root.javaClass.simpleName} ${root.message}", root)
+            -1
+        }
+    }
+
+    override fun grabFrame(): ByteArray = synchronized(this) {
+        try {
+            val reader = imageReader
+                ?: return@synchronized lastFrameBytes ?: ByteArray(0)
+            val img: Image? = reader.acquireLatestImage()
+            if (img != null) {
+                val png = imageToPng(img)
+                img.close()
+                if (png.isNotEmpty()) {
+                    lastFrameBytes = png
+                    return@synchronized png
+                }
+            }
+            // 没有新帧（静态画面）就回退上一帧
+            lastFrameBytes ?: ByteArray(0)
+        } catch (t: Throwable) {
+            Log.w(TAG, "grabFrame 失败：$t")
+            lastFrameBytes ?: ByteArray(0)
+        }
+    }
+
+    override fun startOnDisplay(component: String, displayId: Int): String = synchronized(this) {
+        try {
+            exec("am start --display $displayId -n $component")
+        } catch (t: Throwable) {
+            "启动失败：${t.javaClass.simpleName} ${t.message}"
+        }
+    }
+
+    /**
+     * 反射拿一个**包名匹配本进程 uid** 的 Context。
+     *
+     * - shell(uid2000)：system context 包名是 "android"（uid1000），直接用会在
+     *   createVirtualDisplay 报 "packageName must match the calling uid"，
+     *   要换成 createPackageContext("com.android.shell")
+     * - root(uid0)：system context 可直接用
+     */
+    private fun ensureContext(): Context {
+        appContext?.let { return it }
+
+        // Shizuku 的 binder 方法跑在 binder 线程，而 ActivityThread.systemMain()
+        // 内部 new Handler 必须用主线程 Looper。Shizuku 启动时主线程 Looper 已就绪，
+        // 这里把初始化 post 回主线程、阻塞等结果。
+        val mainLooper = Looper.getMainLooper()
+        if (mainLooper != null && Looper.myLooper() != mainLooper) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var result: Context? = null
+            var err: Throwable? = null
+            Handler(mainLooper).post {
+                try {
+                    result = initSystemContext()
+                } catch (t: Throwable) {
+                    err = t
+                } finally {
+                    latch.countDown()
+                }
+            }
+            latch.await()
+            err?.let { throw it }
+            return (result as Context).also { appContext = it }
+        }
+
+        // 已在主线程（裸 app_process 等情况）
+        return initSystemContext().also { appContext = it }
+    }
+
+    /** 必须在主线程调用：反射拿包名匹配本进程 uid 的 system Context */
+    private fun initSystemContext(): Context {
+        // 裸 app_process 主线程 Looper 可能还没准备；Shizuku 进程则已准备
+        if (Looper.myLooper() == null) Looper.prepare()
+        val at = Class.forName("android.app.ActivityThread")
+        val thread = at.getMethod("systemMain").invoke(null)
+        var ctx = at.getMethod("getSystemContext").invoke(thread) as Context
+        if (Process.myUid() == Process.SHELL_UID) {
+            ctx = ctx.createPackageContext("com.android.shell", 0)
+        }
+        return ctx
+    }
+
+    /** Image（RGBA_8888，可能带 rowStride padding）转成 PNG 字节 */
+    private fun imageToPng(img: Image): ByteArray {
+        val plane = img.planes[0]
+        val buf: ByteBuffer = plane.buffer
+        val paddedW = plane.rowStride / plane.pixelStride
+        val w = img.width
+        val h = img.height
+        val bmp = Bitmap.createBitmap(paddedW, h, Bitmap.Config.ARGB_8888)
+        bmp.copyPixelsFromBuffer(buf)
+        val fixed = if (paddedW != w) Bitmap.createBitmap(bmp, 0, 0, w, h) else bmp
+        val out = ByteArrayOutputStream(w * h / 8)
+        fixed.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return out.toByteArray()
+    }
+
     private companion object {
         const val TAG = "ShellService"
+        const val DISPLAY_NAME = "PaperBoxVD"
+        const val MAX_IMAGES = 3
+
+        // 与一手实测程序 RootVD 完全一致、在 root/shell/user 三种条件下都通过。
+        // 各移位位含义：6=SUPPORTS_TOUCH，8=DESTROY_CONTENT_ON_REMOVAL，
+        // 10=TRUSTED（核心），11=OWN_DISPLAY_GROUP，12=ALWAYS_UNLOCKED，
+        // 13=TOUCH_FEEDBACK_DISABLED，14=OWN_FOCUS，15=DEVICE_DISPLAY_GROUP，
+        // 16=STEAL_TOP_FOCUS_DISABLED
+        const val VIRTUAL_DISPLAY_FLAGS: Int =
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
+                (1 shl 6) or
+                (1 shl 8) or
+                (1 shl 10) or
+                (1 shl 11) or
+                (1 shl 12) or
+                (1 shl 13) or
+                (1 shl 14) or
+                (1 shl 15) or
+                (1 shl 16)
     }
 }

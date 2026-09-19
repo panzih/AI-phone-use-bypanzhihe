@@ -170,6 +170,48 @@ object ShizukuBridge {
             }
     }
 
+    // ===== 0.5.0：TRUSTED 副屏三方法的薄包装 =====
+
+    /** 建 TRUSTED 副屏，返回 displayId；失败返回 -1 */
+    suspend fun createDisplay(context: Context): Int = withContext(Dispatchers.IO) {
+        val problem = ensureBound(context)
+        if (problem != null) {
+            lastError = problem
+            return@withContext -1
+        }
+        runCatching { service?.createDisplay() ?: -1 }
+            .getOrElse {
+                lastError = "建副屏异常：${it.message}"
+                -1
+            }
+    }
+
+    /** 抓副屏当前帧（PNG）；失败返回空数组 */
+    suspend fun grabFrame(context: Context): ByteArray = withContext(Dispatchers.IO) {
+        val problem = ensureBound(context)
+        if (problem != null) {
+            lastError = problem
+            return@withContext ByteArray(0)
+        }
+        runCatching { service?.grabFrame() ?: ByteArray(0) }
+            .getOrElse {
+                lastError = "抓帧异常：${it.message}"
+                ByteArray(0)
+            }
+    }
+
+    /** 在指定副屏启动应用，component 形如 "com.android.settings/.Settings" */
+    suspend fun startOnDisplay(
+        context: Context,
+        component: String,
+        displayId: Int,
+    ): String = withContext(Dispatchers.IO) {
+        val problem = ensureBound(context)
+        if (problem != null) return@withContext "错误：$problem"
+        runCatching { service?.startOnDisplay(component, displayId).orEmpty() }
+            .getOrElse { "启动异常：${it.javaClass.simpleName} ${it.message}" }
+    }
+
     /**
      * UserService 的启动参数。
      *
@@ -201,6 +243,6 @@ object ShizukuBridge {
         "$SHIZUKU_PACKAGE.debug",
     )
 
-    /** 改了 ShellService 的实现就 +1 */
-    private const val SHELL_SERVICE_VERSION = 1
+    /** 改了 ShellService 的实现就 +1（0.5.0 新增建屏/抓帧/副屏起应用） */
+    private const val SHELL_SERVICE_VERSION = 2
 }
