@@ -79,7 +79,7 @@ enum class ThinkingMode(
     OFF(
         id = "off",
         label = "OFF",
-        note = "不推理，直接给动作。最快最省，适合「点哪个按钮」这类简单判断。这是默认档",
+        note = "不推理，直接给动作。最快最省，适合「点哪个按钮」这类简单判断",
         toggle = "disabled",
         effort = null,
     ),
@@ -204,6 +204,14 @@ data class AppSettings(
 
     /** 思考模式。默认 OFF：不推理，最快最省 */
     val thinking: ThinkingMode = ThinkingMode.OFF,
+
+    /**
+     * 是否自定义思考强度。
+     *
+     * 关着的时候，滑块隐藏，用默认值（OFF）。
+     * 开着的时候，显示滑块，用户可以自己调四档。
+     */
+    val customThinkingEnabled: Boolean = false,
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,

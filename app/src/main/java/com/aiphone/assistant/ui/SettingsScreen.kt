@@ -314,6 +314,8 @@ private fun ModelSection(
 
         ThinkingModeSlider(
             current = s.thinking,
+            customEnabled = s.customThinkingEnabled,
+            onCustomEnabledChange = { onChange(s.copy(customThinkingEnabled = it)) },
             onChange = { onChange(s.copy(thinking = it)) },
         )
 
@@ -326,10 +328,15 @@ private fun ModelSection(
  *
  * 四档从最省到最贵：OFF / LOW / HIGH / MAX。用滑块而不是下拉，
  * 是因为这四档是一条**强度轴**，位置本身就表示了"调高会更贵更慢"。
+ *
+ * 右边加一个开关：关着的时候滑块隐藏，用默认值 OFF；开着的时候
+ * 显示滑块，用户可以自己调。
  */
 @Composable
 private fun ThinkingModeSlider(
     current: ThinkingMode,
+    customEnabled: Boolean,
+    onCustomEnabledChange: (Boolean) -> Unit,
     onChange: (ThinkingMode) -> Unit,
 ) {
     val options = ThinkingMode.entries
@@ -343,30 +350,46 @@ private fun ThinkingModeSlider(
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
             )
+            Switch(
+                checked = customEnabled,
+                onCheckedChange = onCustomEnabledChange,
+            )
+        }
+
+        if (customEnabled) {
+            Spacer(Modifier.height(4.dp))
+
             Text(
                 text = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Medium,
             )
+
+            Slider(
+                value = draft,
+                onValueChange = { draft = it },
+                onValueChangeFinished = {
+                    onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
+                },
+                valueRange = 0f..options.lastIndex.toFloat(),
+                // 四档之间三个间隔点
+                steps = (options.size - 2).coerceAtLeast(0),
+            )
+
+            Text(
+                text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "关闭时使用官方默认档位（HIGH）：充分推理，复杂任务更稳",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-
-        Slider(
-            value = draft,
-            onValueChange = { draft = it },
-            onValueChangeFinished = {
-                onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
-            },
-            valueRange = 0f..options.lastIndex.toFloat(),
-            // 四档之间三个间隔点
-            steps = (options.size - 2).coerceAtLeast(0),
-        )
-
-        Text(
-            text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -776,7 +799,7 @@ private fun LogSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Button(onClick = onExportLogs, modifier = Modifier.weight(1f)) {
+            OutlinedButton(onClick = onExportLogs, modifier = Modifier.weight(1f)) {
                 Text(stringResource(R.string.settings_export_logs_button))
             }
             OutlinedButton(

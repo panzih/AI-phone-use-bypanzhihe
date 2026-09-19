@@ -65,12 +65,51 @@ DELAY = float(os.environ.get("MOCK_DELAY", "0"))
 
 # 每一轮要回的回复。最后一个发完就停在 finished 上。
 #
-# 这个剧本专门用来验证 F1 的有界性：永远要图 + 给一个能解析的动作。
-# 预期：最多 5 次 ask 循环就会 finish(false)，不会无限烧钱。
-SCRIPTED = [
-    # 永远要图 + 给一个能解析的动作
-    '{"thought":"我需要看截图","need_image": true, "actions":[{"action":"tap","x":1,"y":1}]}',
-] * 10  # 重复 10 次，足够触发超限计数器
+# 用环境变量 MOCK_SCRIPT 选择剧本：
+#   MOCK_SCRIPT=full     完整剧本（默认）：覆盖各种边界情况
+#   MOCK_SCRIPT=bounded  F1 有界性验证：永远要图 + 给一个能解析的动作
+SCRIPT = os.environ.get("MOCK_SCRIPT", "full")
+
+if SCRIPT == "bounded":
+    # F1 有界性验证剧本：永远要图 + 给一个能解析的动作。
+    # 预期：最多 5 次 ask 循环就会 finish(false)，不会无限烧钱。
+    SCRIPTED = [
+        '{"thought":"我需要看截图","need_image": true, "actions":[{"action":"tap","x":1,"y":1}]}',
+    ] * 10  # 重复 10 次，足够触发超限计数器
+else:
+    # 完整剧本：覆盖各种边界情况
+    SCRIPTED = [
+        # 请求1  一批 3 个动作（点 2 → 显式 sleep 10s → 点 5）
+        #        —— 验证"一轮一批动作"，以及显式 sleep 顶掉默认间隔
+        '{"thought":"先点一下，等10秒，再点一下","actions":[{"action":"tap","x":200,"y":200},{"action":"sleep","ms":10000},{"action":"tap","x":500,"y":500}]}',
+        # 请求2  need_image=true（不给动作）
+        #        —— 验证按需截图
+        '{"thought":"我需要看截图","need_image": true}',
+        # 请求3  看完图后给动作（旧的单动作格式 + markdown 围栏）
+        #        —— 验证防御性解析和向后兼容
+        '```json\n{"thought":"看到了，点这个按钮","action":"tap","x":300,"y":400}\n```',
+        # 请求4  use_skill="list_skills"
+        #        —— 验证"按需取技能说明文档"
+        '{"thought":"我想看看有哪些技能","use_skill":"list_skills"}',
+        # 请求5  use_skill="list_apps"
+        #        —— 验证技能调用：系统应把已安装应用 + 包名回灌给模型
+        '{"thought":"我想看看有哪些应用","use_skill":"list_apps"}',
+        # 请求6  用拿到的包名 open_app
+        #        —— 验证技能结果确实留在上下文里、能被用上
+        '{"thought":"打开设置应用","actions":[{"action":"open_app","package":"com.android.settings"}]}',
+        # 请求7  连点两次 + 中间 sleep 1ms
+        #        —— 模拟双击
+        '{"thought":"双击这个位置","actions":[{"action":"tap","x":100,"y":100},{"action":"sleep","ms":1},{"action":"tap","x":100,"y":100}]}',
+        # 请求8  actions 里混一个编造的动作名（shell）和一个合法动作
+        #        —— 验证白名单：坏的那条丢掉、好的照常执行
+        '{"thought":"执行几个操作","actions":[{"action":"shell","cmd":"ls"},{"action":"tap","x":200,"y":200}]}',
+        # 请求9  坐标越界
+        #        —— 验证夹紧
+        '{"thought":"点一下屏幕外面","actions":[{"action":"tap","x":9999,"y":9999}]}',
+        # 请求10 finished=true
+        #        —— 验证正常收尾
+        '{"thought":"任务完成了","finished":true}',
+    ]
 
 state = {"n": 0, "last_messages": None, "last_texts": None}
 

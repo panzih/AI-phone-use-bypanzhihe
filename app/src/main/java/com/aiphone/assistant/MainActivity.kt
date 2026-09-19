@@ -33,6 +33,8 @@ import com.aiphone.assistant.data.ContextStore
 import com.aiphone.assistant.display.MirrorActivity
 import com.aiphone.assistant.display.VirtualDisplayManager
 import com.aiphone.assistant.data.SettingsStore
+import com.aiphone.assistant.data.ThinkingMode
+
 import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.llm.ChatTurn
 import com.aiphone.assistant.llm.LlmClient
@@ -469,7 +471,7 @@ private fun AppRoot(
                     baseUrl = settings.baseUrl,
                     apiKey = settings.apiKey,
                     model = settings.modelName,
-                    thinking = settings.thinking,
+                    thinking = if (settings.customThinkingEnabled) settings.thinking else ThinkingMode.HIGH,
                 )
             )
             val macro = runCatching { MacroLearner(llm).learn(rec, nameHint) }.getOrNull()
@@ -622,7 +624,7 @@ private fun AppRoot(
                 baseUrl = settings.baseUrl,
                 apiKey = settings.apiKey,
                 model = settings.modelName,
-                thinking = settings.thinking,
+                thinking = if (settings.customThinkingEnabled) settings.thinking else ThinkingMode.HIGH,
             )
         )
         // 接着上一段上下文时，把上一个任务的指纹链也接上 ——
@@ -805,6 +807,21 @@ private fun AppRoot(
         scope.launch {
             isRunning = true
 
+            // 主屏模式必须先连好无障碍服务。这一步放在**任何服务启动之前**：
+            // 若先 startForegroundService 起了悬浮窗、再在拦截分支里 stop，
+            // 服务还没来得及 startForeground 就被停，系统会抛
+            // ForegroundServiceDidNotStartInTimeException，把整个 app 搞崩。
+            if (!runOnVirtualDisplay && !com.aiphone.assistant.a11y.AutoService.isConnected) {
+                addLog(
+                    LogKind.ERROR,
+                    "还没开启无障碍服务。到「设置 → 操作授权 → 无障碍」里开一下再发任务。",
+                    "无障碍未开启",
+                )
+                isRunning = false
+                progress = ""
+                return@launch
+            }
+
             // 通知权限：拒绝也不拦流程，只是少了通知栏那个急停按钮
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -827,7 +844,17 @@ private fun AppRoot(
             // 只有**定时任务**才可能走副屏（逐条任务自己的选项，见 Schedule）。
             // 手动输入的任务一律主屏 —— 主屏有控件树，定位比副屏的"看截图猜坐标"准得多。
             var vdCreated = false
-            if (runOnVirtualDisplay) {                addLog(LogKind.SYSTEM, "正在创建副屏 ...", "副屏")
+            var movedToBack = false
+
+            // 把纸盒拉回前台的局部函数
+            fun bringAppToFront() {
+                val intent = android.content.Intent(context, MainActivity::class.java).apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+                context.startActivity(intent)
+            }
+            if (runOnVirtualDisplay) {
+                addLog(LogKind.SYSTEM, "正在创建副屏 ...", "副屏")
                 val st = runCatching { VirtualDisplayManager.create(context) }
                     .getOrElse {
                         VirtualDisplayManager.State(message = "创建失败：${it.message}")
@@ -843,7 +870,9 @@ private fun AppRoot(
                     )
                     isRunning = false
                     progress = ""
-                    OverlayService.stop(context)
+                    // 任务结束，把界面拉回前台（如果我们之前把它放到后台了）
+                if (movedToBack) bringAppToFront()
+                OverlayService.stop(context)
                     return@launch
                 }
                 vdCreated = true
@@ -860,7 +889,11 @@ private fun AppRoot(
             } else {
                 // 主屏模式：把界面让开，否则 Agent 第一步要额外按一次 Home，
                 // 而且中间那一下用户会看到纸盒自己的界面被当成操作对象。
-                hostActivity?.moveTaskToBack(true)
+                val activity = hostActivity
+                if (activity != null) {
+                    activity.moveTaskToBack(true)
+                    movedToBack = true
+                }
             }
 
             // 自动截图：任务期间每 5 秒一张，**故意不隐藏任何 UI** ——
@@ -902,6 +935,8 @@ private fun AppRoot(
                 runOnVirtualDisplay = false
                 isRunning = false
                 progress = ""
+                // 任务结束，把界面拉回前台（如果我们之前把它放到后台了）
+                if (movedToBack) bringAppToFront()
                 OverlayService.stop(context)
                 refreshStats()
             }
