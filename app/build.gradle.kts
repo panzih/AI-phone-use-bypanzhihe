@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.5.5"
+        versionCode = 18
+        versionName = "0.5.6"
     }
 
     /**
@@ -113,6 +113,12 @@ android {
         aidl = true
         buildConfig = true
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -133,4 +139,9 @@ dependencies {
     implementation(libs.shizuku.provider)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    // 本地单元测试：JUnit + Robolectric。Robolectric 提供真实 android.graphics.Rect，
+    // 让坐标点击的命中测试 bounds.contains 能在 JVM 上真跑（否则是 stub）
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }

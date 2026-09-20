@@ -1,6 +1,7 @@
 package com.aiphone.assistant.agent
 
 import com.aiphone.assistant.ChannelController
+import com.aiphone.assistant.a11y.UiNode
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.llm.ChatTurn
 import com.aiphone.assistant.llm.LlmClient
@@ -594,7 +595,7 @@ class Agent(
             // 状态卡放不下 12 个动作，只显示第一个 + 总数
             OverlayBus.update(step, maxSteps, overlayText(p.actions), p.nextHint)
 
-            // ---- 逐个执行 ----
+            // ---- 逐个执行（执行 + 等界面稳定 + 动作后验证）----
             val results = ArrayList<String>(p.actions.size)
             for ((i, action) in p.actions.withIndex()) {
                 if (isStopped()) {
@@ -604,9 +605,10 @@ class Agent(
 
                 val single = AgentPrompt.describe(action)
                 OverlayBus.update(step, maxSteps, overlayText(listOf(action)), p.nextHint)
+                val next = p.actions.getOrNull(i + 1)
 
-                // sleep 由这里自己做（用协程 delay，可以中途响应急停），
-                // 不走通道 —— 通道里的 Thread.sleep 会把整个线程按住。
+                // sleep 由这里自己做（协程 delay，可中途急停），不走通道 ——
+                // 通道里的 Thread.sleep 会把整个线程按住。
                 if (action.kind == TouchKind.WAIT) {
                     OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
                     logger?.line("  $single", "执行")
@@ -622,6 +624,14 @@ class Agent(
                     // 非 open_app 动作：执行前先按需让开（纸盒在前台就回桌面），
                     // 否则这一下会点到纸盒自己。
                     if (!isOpenApp) yieldForegroundIfNeeded()
+
+                    // 动作前控件树：用来算“动作前指纹”，tap 时还用来判断点的
+                    // 是不是发送/支付等有副作用的按钮（决定要不要自动重试）。
+                    val beforeNodes = if (isVerifiable(action.kind)) {
+                        withContext(Dispatchers.IO) { controller.parseNodes() }
+                    } else {
+                        null
+                    }
 
                     // 注入前**只在真会撞上急停按钮时**才藏。
                     // 状态卡本身是 FLAG_NOT_TOUCHABLE，永远不会吃点击，
@@ -639,37 +649,41 @@ class Agent(
                     if (mustHide) {
                         OverlayBus.show()
                     }
-                    // open_app 执行后确认真切走了；没切走（包名错/启动失败）
-                    // 就补按 HOME，避免下一步模型读到纸盒自己的界面。
-                    if (isOpenApp) verifyLeftAfterOpenApp()
 
-                    if (execResult == null) {
-                        logger?.line("  $single → 已执行", "执行")
-                        results.add("$single → 已执行")
-                    } else {
+                    if (execResult != null) {
                         logger?.error("  $single → $execResult", "执行")
                         listener.onEvent(EventKind.ERROR, execResult, "第 $step 步 · 失败")
                         results.add("$single → 失败：$execResult")
+                    } else if (isOpenApp) {
+                        // 先等目标应用启动，再确认前台是否切走 —— 顺序不能反：
+                        // 冷启动慢（软件渲染/重 app）时，刚发出 open_app 就检查，
+                        // 界面还停在纸盒会被误判“没切走”而补按 HOME。
+                        OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                        val after = awaitStable(TouchKind.OPEN_APP)
+                        if (after == null) {
+                            finish(false, "你停止了任务（等待中被叫停）")
+                            return
+                        }
+                        // 启动后仍没切走（包名错/启动失败）才补 HOME，
+                        // 避免下一步模型读到纸盒自己的界面。
+                        verifyLeftAfterOpenApp()
+                        logger?.line("  $single → 已执行", "执行")
+                        results.add("$single → 已执行")
+                    } else if (next?.kind == TouchKind.WAIT) {
+                        // 下一个动作就是显式 sleep，由它去等，这里不再补等待
+                        logger?.line("  $single → 已执行", "执行")
+                        results.add("$single → 已执行")
+                    } else {
+                        // 等界面稳定（最后一个动作也等，等价原来的一批收尾），
+                        // 拿到稳定指纹后做动作后验证、必要时一次重试
+                        OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                        val after = awaitStable(action.kind)
+                        if (after == null) {
+                            finish(false, "你停止了任务（等待中被叫停）")
+                            return
+                        }
+                        results.add(verifyAction(action, single, beforeNodes, after))
                     }
-                }
-
-                // ---- 和下一个动作之间，等界面稳定 ----
-                if (shouldWaitBetween(action, p.actions.getOrNull(i + 1))) {
-                    OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                    if (!awaitStable(action.kind)) {
-                        finish(false, "你停止了任务（等待中被叫停）")
-                        return
-                    }
-                }
-            }
-
-            // 一批做完，进入下一轮之前等界面稳定（模型显式 sleep 结尾就不用等）
-            val last = p.actions.last()
-            if (last.kind != TouchKind.WAIT) {
-                OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                if (!awaitStable(last.kind)) {
-                    finish(false, "你停止了任务（等待中被叫停）")
-                    return
                 }
             }
 
@@ -764,14 +778,61 @@ class Agent(
         return !isStopped()
     }
 
-    /** 两个动作之间要不要等界面稳定 */
-    private fun shouldWaitBetween(current: TouchAction, next: TouchAction?): Boolean {
-        // 一批的最后一个动作由循环外的收尾等待负责 —— 这里再等就成了等两遍
-        if (next == null) return false
-        // 刚等过 / 下一个就是显式 sleep —— 都不再补等待
-        if (current.kind == TouchKind.WAIT) return false
-        if (next.kind == TouchKind.WAIT) return false
-        return true
+    /** 这个动作要不要做“动作后验证”：第一版只验证最可靠的导航类点击/返回 */
+    private fun isVerifiable(kind: TouchKind): Boolean =
+        kind == TouchKind.TAP || kind == TouchKind.KEY_BACK
+
+    /**
+     * 动作执行并等界面稳定后，比动作前后指纹判断动作有没有生效。
+     * - 指纹变了 → 界面变化，动作生效。
+     * - 指纹没变 → 可能没点中：导航类动作**重试一次**；有副作用的动作
+     *   （发送/支付/下单/确认/删除等）**只上报、绝不重试**，避免一次误判
+     *   就重复发送/付款。
+     *
+     * @return 回灌给模型、写进结果列表的一行
+     */
+    private suspend fun verifyAction(
+        action: TouchAction,
+        single: String,
+        beforeNodes: List<UiNode>?,
+        after: String,
+    ): String {
+        if (beforeNodes == null) {
+            logger?.line("  $single → 已执行", "执行")
+            return "$single → 已执行"
+        }
+        val before = PageFingerprint.fingerprint(beforeNodes)
+        if (after != before) {
+            logger?.line("  $single → 已执行（界面已变化）", "执行")
+            return "$single → 已执行"
+        }
+
+        // 界面没变化 → 动作可能没生效
+        if (hasSideEffect(action, beforeNodes)) {
+            logger?.warn("  $single → 已执行但界面没变化，请确认是否点中（不自动重试）", "执行")
+            return "$single → 已执行，但界面没变化，请确认是否点中"
+        }
+
+        // 导航类：重试一次
+        logger?.warn("  $single → 界面没变化，重试一次", "执行")
+        OverlayBus.setPhase(AgentPhase.ACTING)
+        val retryError = withContext(Dispatchers.IO) {
+            controller.execute(action) { px, py -> OverlayBus.pulse(px, py) }
+        }
+        if (retryError != null) {
+            logger?.error("  $single → 重试失败：$retryError", "执行")
+            return "$single → 已执行但界面无变化，可能没点中（重试失败：$retryError）"
+        }
+        OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+        val after2 = awaitStable(action.kind)
+        if (after2 == null) return "$single → 重试中被中断"
+        return if (after2 != before) {
+            logger?.line("  $single → 重试后界面已变化", "执行")
+            "$single → 已执行（首次未生效，重试后生效）"
+        } else {
+            logger?.warn("  $single → 重试后界面仍无变化，可能点不动", "执行")
+            "$single → 已执行但界面无变化，可能没点中"
+        }
     }
 
     /**
@@ -783,9 +844,9 @@ class Agent(
      * 停了。时钟/进度条这类每秒变字的页面可能永远不稳定，hardCap 是唯一
      * 出口。全程走 [awaitWithStop]，急停能立刻打断。
      *
-     * @return false 表示被急停叫停
+     * @return 稳定（或到 hardCap）时的页面指纹；null 表示被急停叫停
      */
-    private suspend fun awaitStable(kind: TouchKind): Boolean {
+    private suspend fun awaitStable(kind: TouchKind): String? {
         val start = System.nanoTime()
         fun elapsedMs() = (System.nanoTime() - start) / 1_000_000L
 
@@ -794,24 +855,27 @@ class Agent(
             else -> STABLE_MIN_MS to STABLE_HARD_MS
         }
 
-        // 最小起步（可急停）
-        if (!awaitWithStop(minFloor)) return false
+        // 最小起步（可急停），随后采第一次指纹
+        if (!awaitWithStop(minFloor)) return null
+        var fp = PageFingerprint.fingerprint(
+            withContext(Dispatchers.IO) { controller.parseNodes() }
+        )
+        if (isStopped()) return null
 
-        var lastFp: String? = null
         while (true) {
-            if (isStopped()) return false
-            val elapsed = elapsedMs()
-            if (elapsed >= hardCap) return true
+            // 轮询间隔（不越过 hardCap），再采样比对
+            val waitMs = minOf(STABLE_POLL_MS, hardCap - elapsedMs())
+            if (!awaitWithStop(waitMs)) return null
 
-            val nodes = withContext(Dispatchers.IO) { controller.parseNodes() }
-            val fp = PageFingerprint.fingerprint(nodes)
-            // 连续两次指纹相同 → 稳定（第一次没有上一次可比）
-            if (lastFp != null && fp == lastFp) return true
-            lastFp = fp
-
-            // 等到下一次轮询，但不越过 hardCap
-            val waitMs = minOf(STABLE_POLL_MS, hardCap - elapsed)
-            if (!awaitWithStop(waitMs)) return false
+            val newFp = PageFingerprint.fingerprint(
+                withContext(Dispatchers.IO) { controller.parseNodes() }
+            )
+            if (isStopped()) return null
+            // 连续两次指纹相同 → 稳定
+            if (newFp == fp) return newFp
+            fp = newFp
+            // 一直不稳定 → hardCap 兜底，返回当前指纹
+            if (elapsedMs() >= hardCap) return fp
         }
     }
 
@@ -877,8 +941,61 @@ class Agent(
     private fun md5(bytes: ByteArray): Int =
         MessageDigest.getInstance("MD5").digest(bytes).contentHashCode()
 
-    private companion object {
+    companion object {
         val TAP_HOME = TouchAction(kind = TouchKind.KEY_HOME)
+
+        /**
+         * 按钮文字里这些词表示“点了就有副作用”（发消息/付款/下单/授权…）。
+         *
+         * 动作后若界面没变化，命中这些词的按钮**只上报、不自动重试** ——
+         * 指纹误判一次就可能重复发送/付款，是这套机制唯一会造成不可逆后果
+         * 的地方，所以词表宁宽勿漏（误判顶多不重试、让人确认）。
+         */
+        val SIDE_EFFECT_WORDS = listOf(
+            // 中文
+            "发送", "发信", "发出", "提交", "确认", "确定", "删除", "支付", "付款",
+            "付账", "下单", "订购", "订单", "购买", "买入", "抢购", "转账", "汇款",
+            "寄出", "发布", "发表", "送出", "授权", "授予", "允许", "同意", "安装",
+            "解绑", "注销", "退出登录",
+            // 英文
+            "send", "pay", "submit", "confirm", "delete", "remove", "order", "buy",
+            "purchase", "post", "publish", "authorize", "allow", "grant", "checkout", "ok",
+        )
+
+        /**
+         * 判断动作是不是有副作用（重试会造成重复发送/支付等）。
+         * 返回 true 的动作在“指纹没变”时只上报、不重试；拿不准时按有副作用处理。
+         * internal：本地单元测试直接构造 UiNode 验证，无需起 Agent 实例。
+         */
+        internal fun hasSideEffect(action: TouchAction, beforeNodes: List<UiNode>): Boolean {
+            when (action.kind) {
+                // 系统导航键无副作用
+                TouchKind.KEY_BACK, TouchKind.KEY_HOME, TouchKind.KEY_RECENTS -> return false
+                TouchKind.TAP -> {
+                    // 编号点击时模型只给 index、x/y 默认 0：按编号定位真正的目标，
+                    // 不能拿 (0,0) 做命中测试（会误判到左上角标题/根容器，甚至对
+                    // 发送、支付按钮错误放行重试）；只有坐标点击才用范围找。
+                    val hit = if (action.targetIndex > 0) {
+                        beforeNodes.filter { it.index == action.targetIndex }
+                    } else {
+                        beforeNodes.filter { it.bounds.contains(action.x, action.y) }
+                    }
+                    if (hit.isEmpty()) return true                 // 找不到命中目标，保守
+                    if (hit.any { labelHasSideEffect(it) }) return true
+                    // 点中的控件全无文字/描述（纯图标，无法判断意图）→ 保守当副作用
+                    if (hit.none { (it.text + it.contentDesc).isNotBlank() }) return true
+                    return false
+                }
+                else -> return true
+            }
+        }
+
+        /** 控件文字/描述里是否含“发送/支付/确认/删除”等会造成副作用的词 */
+        internal fun labelHasSideEffect(node: UiNode): Boolean {
+            val label = node.text.ifBlank { node.contentDesc }.lowercase()
+            if (label.isBlank()) return false
+            return SIDE_EFFECT_WORDS.any { label.contains(it) }
+        }
 
         /**
          * 藏完悬浮窗后等一小会儿再截图/注入。
