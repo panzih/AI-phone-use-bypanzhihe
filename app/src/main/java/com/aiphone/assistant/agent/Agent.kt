@@ -34,7 +34,7 @@ import java.security.MessageDigest
  * 才有价值 —— 所以改成由模型自己用 `need_image` 要。
  *
  * **2. 一轮执行一批动作。**
- * 模型一次给出若干个动作，中间自动补默认间隔（[AgentPrompt.DEFAULT_GAP_MS]）；
+ * 模型一次给出若干个动作，中间自动等界面稳定（页面指纹判据）；
  * 模型显式写了 sleep 就完全不补，用它的值。往返次数因此大幅下降。
  *
  * **3. 模型可以主动调技能。**
@@ -653,22 +653,21 @@ class Agent(
                     }
                 }
 
-                // ---- 和下一个动作之间的间隔 ----
-                val gap = gapBetween(action, p.actions.getOrNull(i + 1))
-                if (gap > 0) {
+                // ---- 和下一个动作之间，等界面稳定 ----
+                if (shouldWaitBetween(action, p.actions.getOrNull(i + 1))) {
                     OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                    if (!awaitWithStop(gap.toLong())) {
+                    if (!awaitStable(action.kind)) {
                         finish(false, "你停止了任务（等待中被叫停）")
                         return
                     }
                 }
             }
 
-            // 一批做完，进入下一轮之前再等一次（模型显式 sleep 结尾就不用等）
+            // 一批做完，进入下一轮之前等界面稳定（模型显式 sleep 结尾就不用等）
             val last = p.actions.last()
             if (last.kind != TouchKind.WAIT) {
                 OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                if (!awaitWithStop(gapForKind(last.kind).toLong())) {
+                if (!awaitStable(last.kind)) {
                     finish(false, "你停止了任务（等待中被叫停）")
                     return
                 }
@@ -765,25 +764,55 @@ class Agent(
         return !isStopped()
     }
 
-    /** 两个动作之间补多久 */
-    private fun gapBetween(current: TouchAction, next: TouchAction?): Int {
-        // 一批的最后一个动作由循环外的收尾等待负责 —— 这里再补一次就成了等两遍
-        if (next == null) return 0
-        // 刚等过 / 下一个就是显式 sleep —— 都不再补默认间隔
-        if (current.kind == TouchKind.WAIT) return 0
-        if (next.kind == TouchKind.WAIT) return 0
-        return gapForKind(current.kind)
+    /** 两个动作之间要不要等界面稳定 */
+    private fun shouldWaitBetween(current: TouchAction, next: TouchAction?): Boolean {
+        // 一批的最后一个动作由循环外的收尾等待负责 —— 这里再等就成了等两遍
+        if (next == null) return false
+        // 刚等过 / 下一个就是显式 sleep —— 都不再补等待
+        if (current.kind == TouchKind.WAIT) return false
+        if (next.kind == TouchKind.WAIT) return false
+        return true
     }
 
     /**
-     * 默认间隔。
+     * 等当前界面稳定，可被急停打断。
      *
-     * 只有"打开应用"特殊：冷启动明显比界面切换慢，1.5 秒经常不够，
-     * 而模型很难预判这一点。其余一律 1.5 秒，不够就让模型自己写 sleep。
+     * 判据：`max(最小起步, 连续两次指纹相同)` 且不超过 hardCap —— 动作刚
+     * 发出时界面还没开始变，立刻采样会误判“已稳定”，所以先等一个最小起步；
+     * 之后每 [STABLE_POLL_MS] 取一次控件树算指纹，连续两次相同就认为界面
+     * 停了。时钟/进度条这类每秒变字的页面可能永远不稳定，hardCap 是唯一
+     * 出口。全程走 [awaitWithStop]，急停能立刻打断。
+     *
+     * @return false 表示被急停叫停
      */
-    private fun gapForKind(kind: TouchKind): Int = when (kind) {
-        TouchKind.OPEN_APP -> AgentPrompt.OPEN_APP_GAP_MS
-        else -> AgentPrompt.DEFAULT_GAP_MS
+    private suspend fun awaitStable(kind: TouchKind): Boolean {
+        val start = System.nanoTime()
+        fun elapsedMs() = (System.nanoTime() - start) / 1_000_000L
+
+        val (minFloor, hardCap) = when (kind) {
+            TouchKind.OPEN_APP -> OPEN_STABLE_MIN_MS to OPEN_STABLE_HARD_MS
+            else -> STABLE_MIN_MS to STABLE_HARD_MS
+        }
+
+        // 最小起步（可急停）
+        if (!awaitWithStop(minFloor)) return false
+
+        var lastFp: String? = null
+        while (true) {
+            if (isStopped()) return false
+            val elapsed = elapsedMs()
+            if (elapsed >= hardCap) return true
+
+            val nodes = withContext(Dispatchers.IO) { controller.parseNodes() }
+            val fp = PageFingerprint.fingerprint(nodes)
+            // 连续两次指纹相同 → 稳定（第一次没有上一次可比）
+            if (lastFp != null && fp == lastFp) return true
+            lastFp = fp
+
+            // 等到下一次轮询，但不越过 hardCap
+            val waitMs = minOf(STABLE_POLL_MS, hardCap - elapsed)
+            if (!awaitWithStop(waitMs)) return false
+        }
     }
 
     private fun fail(message: String, label: String) {
@@ -869,6 +898,24 @@ class Agent(
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
+
+        /**
+         * 普通动作后等界面稳定的参数：
+         * - 最小起步：动作刚发出界面还没开始变，立刻采样会误判“已稳定”，
+         *   先等这么久给界面开始变化的时间。
+         * - 硬上限：时钟/进度条这类每秒变字的页面可能永远不稳定，到点就放行。
+         * - 轮询间隔：每次取控件树是一次 binder 调用，不宜更短。
+         */
+        const val STABLE_MIN_MS = 400L
+        const val STABLE_HARD_MS = 1200L
+        const val STABLE_POLL_MS = 200L
+
+        /**
+         * 打开应用（冷启动）的稳定参数：最小起步更长 —— 启动页常常整段
+         * 不在控件树里，指纹会误判“已稳定”；硬上限也相应放宽。
+         */
+        const val OPEN_STABLE_MIN_MS = 1500L
+        const val OPEN_STABLE_HARD_MS = 2500L
 
         /**
          * 卡死的硬上限。
