@@ -697,7 +697,7 @@ private fun AppRoot(
                                 },
                                 when (outcome) {
                                     is MemoryWriter.Outcome.Written ->
-                                        "已记入记忆：${outcome.title}"
+                                        "本次新增记忆：${outcome.title}"
                                     is MemoryWriter.Outcome.NotWritten ->
                                         // 把真实原因显示出来。以前这里是一句笼统的
                                         // "没写入"，把主线程网络异常藏了整整一轮排查
@@ -1018,6 +1018,7 @@ private fun AppRoot(
             onRecording = { screen = Screen.RECORDING },
             onSchedules = { screen = Screen.SCHEDULES },
             onVirtualDisplay = { screen = Screen.VIRTUAL_DISPLAY },
+            onNewConversation = { clearContext() },
         )
 
         Screen.RECORDING -> RecordingScreen(
