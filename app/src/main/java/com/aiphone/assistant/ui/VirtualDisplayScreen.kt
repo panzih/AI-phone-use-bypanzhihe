@@ -80,6 +80,7 @@ fun VirtualDisplayScreen(
     var manualId by remember { mutableStateOf("") }
     var stepResult by remember { mutableStateOf("") }
     var destroyMsg by remember { mutableStateOf("") }
+    var selftestId by remember { mutableStateOf<Int?>(null) }
 
     fun refreshState() {
         scope.launch {
@@ -111,6 +112,7 @@ fun VirtualDisplayScreen(
                     return@launch
                 }
                 sb.appendLine("   → displayId=$id")
+                selftestId = id
 
                 val dd = ShizukuBridge.run(context, "dumpsys display | grep -iE 'PaperBoxVD|Display Id'")
                 sb.appendLine("② dumpsys display：")
@@ -302,6 +304,12 @@ fun VirtualDisplayScreen(
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (busy) "自检中…" else "运行 0.5.0 自检") }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { selftestId?.let(onOpenMirror) },
+                            enabled = !busy && selftestId != null,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("打开镜像窗") }
                         Spacer(Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = {

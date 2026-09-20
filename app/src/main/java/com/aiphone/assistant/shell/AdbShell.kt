@@ -82,19 +82,14 @@ object AdbShell {
         listDisplays(context).firstOrNull { !it.virtual } ?: listDisplays(context).firstOrNull()
 
     /**
-     * 建一块虚拟副屏。
+     * （旧链路）写 `overlay_display_devices` 建一块模拟副屏，和"开发者选项
+     * → 模拟副屏"同一机制；只需 `WRITE_SECURE_SETTINGS`，但建出来的是
+     * 非 TRUSTED 假屏。
      *
-     * ## 为什么走 settings 而不是 DisplayManager.createVirtualDisplay
+     * 当前 TRUSTED 副屏由 ShellService 反射 DisplayManager.createVirtualDisplay
+     * 直连建立（见 ShizukuBridge.createDisplay），不走这里；方法保留备用。
      *
-     * `createVirtualDisplay` 要 `CREATE_VIRTUAL_DISPLAY` 权限，那是
-     * **signature 级**的 —— 厂商预装应用才有，Shizuku 给的 shell 身份
-     * 也拿不到。
-     *
-     * 而 `overlay_display_devices` 这个系统设置项只需要
-     * `WRITE_SECURE_SETTINGS`，**shell 身份有**。写进去之后系统自己
-     * 就会把这块屏建出来，和"开发者选项里的模拟副屏"是同一个机制。
-     *
-     * 值是 `<宽>x<高>/<dpi>`。传空串则撤掉全部。
+     * 值是 `<宽>x<高>/<dpi>`。
      */
     suspend fun createVirtualDisplay(context: Context, width: Int, height: Int, dpi: Int): String {
         val spec = "${width}x$height/$dpi"
@@ -102,7 +97,7 @@ object AdbShell {
         return ShizukuBridge.run(context, "settings put global overlay_display_devices '$spec'")
     }
 
-    /** 撤掉虚拟副屏（全部） */
+    /** （旧链路）撤掉 overlay_display_devices 建的模拟副屏（全部） */
     suspend fun removeVirtualDisplay(context: Context): String {
         Log.i(TAG, "撤副屏")
         return ShizukuBridge.run(context, "settings put global overlay_display_devices ''")
@@ -141,11 +136,11 @@ object AdbShell {
         ShizukuBridge.runBytes(context, "screencap -p")
 
     /**
-     * 截指定显示器。
+     * （旧链路）用 `screencap -d <id>` 截指定显示器。
      *
-     * `screencap -d <id>` 是 Android 10 之后才有的参数，而且**不是所有
-     * ROM 都实现完整**。拿不到就返回空数组 —— 调用方要把这个情况
-     * 如实显示出来，而不是显示一张黑图假装成功。
+     * 对 TRUSTED 虚拟屏它返回 Status -2、拿不到图 —— 虚拟屏画面进的是
+     * ImageReader，取帧走 ShizukuBridge.grabFrame。方法保留备用；
+     * 拿不到时返回空数组，调用方不得显示黑图假装成功。
      */
     suspend fun screenshotDisplay(context: Context, displayId: Int): ByteArray {
         val bytes = ShizukuBridge.runBytes(context, "screencap -p -d $displayId")

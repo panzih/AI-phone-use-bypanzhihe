@@ -874,9 +874,15 @@ private fun AppRoot(
                     return@launch
                 }
                 vdCreated = true
+                // 副屏在 shell 端照抄主屏 Display.Mode 而建，这里用同一口径取
+                // 主屏物理尺寸；写死尺寸会让 screenSize() 报错值、坐标整体偏掉
+                val displayManager = context.getSystemService(android.content.Context.DISPLAY_SERVICE)
+                    as android.hardware.display.DisplayManager
+                val mainDisplay = displayManager.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                val realSize = mainDisplay.mode.physicalWidth to mainDisplay.mode.physicalHeight
                 controller.enterVirtualDisplay(
                     displayId = id,
-                    size = VirtualDisplayManager.DEFAULT_WIDTH to VirtualDisplayManager.DEFAULT_HEIGHT,
+                    size = realSize,
                 )
                 addLog(LogKind.SYSTEM, "副屏已就绪（id=$id），AI 将在这块屏上操作", "副屏")
 

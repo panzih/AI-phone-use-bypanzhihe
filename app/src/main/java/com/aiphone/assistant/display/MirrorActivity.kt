@@ -43,7 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
-import com.aiphone.assistant.shell.AdbShell
+import com.aiphone.assistant.shell.ShizukuBridge
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -61,10 +61,11 @@ import kotlinx.coroutines.isActive
  * 显示出来）。我们要的是"在手机主屏上看着 AI 在副屏里操作"，
  * 所以必须自己把画面搬过来。
  *
- * ## 刷新是"截图循环"，不是投屏
+ * ## 刷新是"抓帧循环"，不是投屏
  *
- * 每秒向 shell 要一张 `screencap -d`。比 MediaProjection 简单得多
- * （不需要用户授权 + 常驻通知），代价是每秒一张图的带宽和延迟。
+ * 每秒从 shell 服务要一张副屏当前帧（ImageReader 回读，见
+ * ShizukuBridge.grabFrame）。比 MediaProjection 简单得多
+ * （不需要用户授权 + 常驻通知），代价是每秒一帧的带宽和延迟。
  * 对"看着 AI 操作"这个用途够用。
  */
 class MirrorActivity : ComponentActivity() {
@@ -108,11 +109,11 @@ private fun MirrorScreen(displayId: Int, onExit: () -> Unit) {
             return@LaunchedEffect
         }
         while (isActive) {
-            val bytes = AdbShell.screenshotDisplay(context, displayId)
+            val bytes = ShizukuBridge.grabFrame(context)
             if (bytes.isEmpty()) {
                 failCount++
-                status = "截不到副屏（第 $failCount 次失败）。" +
-                    "可能是这台设备不支持 screencap -d，或者副屏已经没了。"
+                status = "抓不到副屏画面（第 $failCount 次失败）。" +
+                    "副屏可能已经没了，或者 shell 服务断开了。"
             } else {
                 val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (bmp != null) {

@@ -18,7 +18,7 @@ import kotlinx.coroutines.withContext
  *
  * | | 无障碍 | 副屏（这条） |
  * |---|---|---|
- * | 截图 | `takeScreenshot` | `screencap -p -d <id>` |
+ * | 截图 | `takeScreenshot` | `ShizukuBridge.grabFrame`（ImageReader 回读） |
  * | 控件树 | **有**，定位主力 | **没有** |
  * | 注入 | `dispatchGesture`（节点级/手势级） | `input -d <id>` |
  * | 触控目标 | 只能主屏 | 指定那块屏 |
@@ -88,12 +88,12 @@ class DisplayChannel(
     override suspend fun screenSize(): Pair<Int, Int>? = size
 
     override suspend fun screenshot(): ByteArray? = withContext(Dispatchers.IO) {
-        val bytes = AdbShell.screenshotDisplay(context, displayId)
+        // 副屏画面进 ImageReader，直接从 shell 服务抓当前帧；
+        // screencap -d 对虚拟屏返回 Status -2、拿不到图
+        val bytes = ShizukuBridge.grabFrame(context)
         if (bytes.isEmpty()) {
-            // 失败要说清楚是哪一种：ROM 不支持、还是屏没了。
-            // 只报"截图失败"的话，用户和模型都不知道下一步该干什么
-            lastShotError = "截不到副屏 $displayId。可能是这台设备不支持 " +
-                "screencap -d，或者副屏已经被撤掉了。"
+            lastShotError = "抓不到副屏 $displayId 的画面。副屏可能已经被撤掉，" +
+                "或者 shell 服务断开了。"
             Log.w(TAG, lastShotError!!)
             null
         } else {
