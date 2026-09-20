@@ -734,15 +734,7 @@ private fun AppRoot(
         // 自动保存读的也是这个变量，不同步的话它会把旧值（空的）盖回来
         modelHistory = finalHistory
         modelFingerprints = llm.fingerprintChain()
-        addLog(
-            LogKind.SYSTEM,
-            if (finalHistory.isEmpty()) {
-                "这段上下文是空的（任务没走到需要记住的步骤）"
-            } else {
-                "这段上下文已保存 ${finalHistory.size} 条模型历史，下一次任务会接着它继续。"
-            },
-            "上下文",
-        )
+        // 上下文已保存是内部状态，不再作为一条日志显示给用户
     }
 
     fun submit() {
