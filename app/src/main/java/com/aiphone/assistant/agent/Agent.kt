@@ -630,6 +630,10 @@ class Agent(
                     // 云端，本批后续预排动作暂不执行（break）
                     logger?.line("  $single", "执行")
                     results.add(handleDismissDialog())
+                    val skipped = p.actions.size - i - 1
+                    if (skipped > 0) {
+                        results.add("dismiss_dialog 后的 $skipped 个动作本轮未执行（已交回云端）")
+                    }
                     break
                 } else {
                     OverlayBus.setPhase(AgentPhase.ACTING)
