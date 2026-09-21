@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import android.graphics.BitmapFactory
 import com.aiphone.assistant.BuildConfig
 import com.aiphone.assistant.R
+import com.aiphone.assistant.a11y.VirtualDisplayProbe
 import com.aiphone.assistant.display.VirtualDisplayManager
 import com.aiphone.assistant.shell.AdbShell
 import com.aiphone.assistant.shell.ShizukuBridge
@@ -304,6 +305,23 @@ fun VirtualDisplayScreen(
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (busy) "自检中…" else "运行 0.5.0 自检") }
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    busy = true
+                                    val id = selftestId
+                                    stepResult = if (id == null) {
+                                        "请先点「运行 0.5.0 自检」建屏并把 Settings 起在副屏。"
+                                    } else {
+                                        VirtualDisplayProbe.run(context, id)
+                                    }
+                                    busy = false
+                                }
+                            },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("运行 0.7 副屏无障碍探针") }
                         Spacer(Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = { selftestId?.let(onOpenMirror) },
