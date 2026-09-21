@@ -89,9 +89,9 @@
     <string name="vd_mirror_waiting">正在取副屏画面 ...</string>
     <string name="vd_mirror_exit">退出</string>
     <string name="vd_mirror_retry">重试</string>
-    <string name="vd_not_ready_title">副屏功能暂未开放</string>
-    <string name="vd_not_ready_desc">当前版本以无障碍操作为主，副屏相关功能正在开发中，后续版本会陆续开放。</string>
-    <string name="settings_vd_entry_desc">虚拟显示器，让 AI 在后台继续操作（实验性）</string>
+    <string name="vd_not_ready_title">副屏 · Shizuku 模式</string>
+    <string name="vd_not_ready_desc">副屏需要 Shizuku：AI 在虚拟屏上用「截图 + 坐标点击」操作——系统不把虚拟屏的窗口交给无障碍，读不到控件，精度不如主屏。当前版本还没把副屏接进自动任务（手动「切到副屏」在后续版本），下方是建屏调试工具。</string>
+    <string name="settings_vd_entry_desc">虚拟显示器，需要 Shizuku。AI 用截图 + 坐标在后台操作，主屏留给你；读不到控件，精度不如主屏。</string>
 
     <string name="log_delete">删除日志</string>
     <string name="settings_export_logs_button">导出日志</string>

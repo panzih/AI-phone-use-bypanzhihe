@@ -48,7 +48,6 @@ import androidx.compose.ui.unit.dp
 import android.graphics.BitmapFactory
 import com.aiphone.assistant.BuildConfig
 import com.aiphone.assistant.R
-import com.aiphone.assistant.a11y.VirtualDisplayProbe
 import com.aiphone.assistant.display.VirtualDisplayManager
 import com.aiphone.assistant.shell.AdbShell
 import com.aiphone.assistant.shell.ShizukuBridge
@@ -57,14 +56,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 副屏。
+ * 副屏（Shizuku 模式）。
  *
- * ## 当前状态：**暂未开放**
+ * ## 工作方式
  *
- * 副屏功能依赖 Shizuku/ADB 权限，当前版本以无障碍为主，
- * 副屏相关功能暂未配置完成，所有按钮禁用。
+ * 用 Shizuku 借 shell 身份开一块虚拟屏，AI 在上面用「截图 + input -d 坐标」
+ * 操作。系统不把虚拟屏的窗口交给无障碍（0.7.0 实测：getWindows() 不含副屏、
+ * dispatchGesture 打到主屏），所以读不到控件、精度不如主屏。
  *
- * 代码保留，后续版本再开放。
+ * ## 当前状态
+ *
+ * 尚未接入自动任务（手动「切到副屏」在 0.8.0）。DEBUG 区保留建屏自检 /
+ * 镜像 / 销毁等调试工具。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -305,23 +308,6 @@ fun VirtualDisplayScreen(
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (busy) "自检中…" else "运行 0.5.0 自检") }
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    busy = true
-                                    val id = selftestId
-                                    stepResult = if (id == null) {
-                                        "请先点「运行 0.5.0 自检」建屏并把 Settings 起在副屏。"
-                                    } else {
-                                        VirtualDisplayProbe.run(context, id)
-                                    }
-                                    busy = false
-                                }
-                            },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("运行 0.7 副屏无障碍探针") }
                         Spacer(Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = { selftestId?.let(onOpenMirror) },

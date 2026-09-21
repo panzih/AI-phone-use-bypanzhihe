@@ -31,6 +31,15 @@ import kotlinx.coroutines.withContext
  * 和手势注入都只认**默认显示器**，安卓没有给第三方应用"读副屏无障碍树"
  * 的口子。
  *
+ * 实测依据（0.7.0 探针，AVD API35，TRUSTED 副屏、副屏上 Settings 处于
+ * resumed）：
+ * - `getWindows()` 不返回任何副屏窗口（结果全部 displayId=0），拿不到 root；
+ * - `dispatchGesture` 手势落到主屏（点击后主屏帧差异 4.27%、副屏 0%），
+ *   它没有指定显示器的参数；
+ * - 但 `takeScreenshot(displayId)` 能截副屏，结果与 `grabFrame` 逐帧一致
+ *   —— 即只有截图能走无障碍，节点 / 手势不行。截图仍统一用 `grabFrame`
+ *   （见 capability.canAccessSecureWindow：无障碍截图会过滤 FLAG_SECURE）。
+ *
  * 另外：副屏的**前台应用名读不到**（那也要靠无障碍树）。所以
  * `ChannelController.currentPackage()` 在副屏模式下直接返回 null ——
  * "自己在前台就让位"那个防护在副屏上会自动跳过，这是对的：
