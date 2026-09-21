@@ -385,7 +385,7 @@ class OverlayService : Service() {
 
         return LinearLayout(this).apply {
             background = GradientDrawable().apply {
-                cornerRadius = dp(24).toFloat()
+                cornerRadius = dp(12).toFloat()
                 setColor(Color.parseColor("#D32F2F"))
             }
             // 轻微的投影，浅色界面下也看得清
@@ -405,7 +405,7 @@ class OverlayService : Service() {
                 // 按钮自己先变灰，给一个"已经收到了"的即时反馈 ——
                 // 否则用户会以为没点上，反复戳
                 background = GradientDrawable().apply {
-                    cornerRadius = dp(24).toFloat()
+                    cornerRadius = dp(12).toFloat()
                     setColor(Color.parseColor("#757575"))
                 }
             }
