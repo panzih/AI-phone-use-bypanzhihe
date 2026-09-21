@@ -1,5 +1,6 @@
 package com.aiphone.assistant.agent
 
+import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
@@ -43,8 +44,12 @@ object AgentPrompt {
      *        它必须逐字不变：系统提示词是前缀的第 0 个 token，
      *        一变，整段上下文的缓存全废。详见 ContextPolicy 与 CarriedContext
      */
-    fun system(skillCatalog: String = "", memory: String? = null): String = """
-你是一个安卓手机操作助手。
+    fun system(
+        skillCatalog: String = "",
+        memory: String? = null,
+        modelName: String = "",
+    ): String = """
+你是${if (modelName.isBlank()) "" else " $modelName，"}一个安卓手机操作助手。
 
 每一轮你会拿到：当前屏幕的「界面元素」编号列表（来自系统的控件树），以及屏幕分辨率和前台应用名。
 
@@ -174,7 +179,28 @@ fail 时在 summary 里写清楚三件事：**卡在哪一步、试过什么、�
 5. **如果屏幕上看到的是「纸盒」自己的界面，说明目标应用还没打开。**
    不要在纸盒界面里操作（别点它的发送、设置等按钮），直接用 open_app
    打开你要操作的应用。
-""".trimIndent() + skillSection(skillCatalog) + memorySection(memory)
+""".trimIndent() + aboutSection() + skillSection(skillCatalog) + memorySection(memory)
+
+    /**
+     * 「你从哪来」那一节：项目出处。
+     *
+     * 纯静态（作者、协议在代码里写死），每次输出相同，不影响前缀缓存。
+     * B 站主页地址没拿到时 [AppInfo.BILIBILI_URL] 留空，这一版只泛述、
+     * 不写一个打不开的链接。
+     */
+    private fun aboutSection(): String {
+        val bili = if (AppInfo.BILIBILI_URL.isNotBlank()) {
+            "，主页：${AppInfo.BILIBILI_URL}"
+        } else {
+            ""
+        }
+        return """
+
+# 关于你所在的项目
+你运行在「纸盒」这个安卓 app 里——目标是让用户说一句话，你就自己把手机上的事办好。
+项目由 ${AppInfo.AUTHOR} 开发，以 ${AppInfo.LICENSE} 协议开源，作者在 B 站也有账号$bili。
+""".trimIndent().let { "\n\n$it" }
+    }
 
     /**
      * 记忆那一节。

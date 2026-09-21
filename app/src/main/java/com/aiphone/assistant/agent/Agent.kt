@@ -173,7 +173,11 @@ class Agent(
         // 系统提示词**必须逐字稳定**：它是前缀的第 0 个 token，一变整段
         // 上下文的缓存全废。所以记忆用的是调用方固定下来的那一份快照
         // （见 CarriedContext.memorySnapshot），这里不重新去读记忆文件。
-        val system = AgentPrompt.system(skills.catalog(), memorySnapshot)
+        val system = AgentPrompt.system(
+            skills.catalog(),
+            memorySnapshot,
+            modelName = settings.modelName,
+        )
         val memoryChars = memorySnapshot?.length ?: 0
         logger?.line(
             when {

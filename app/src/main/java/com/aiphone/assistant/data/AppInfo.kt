@@ -24,4 +24,12 @@ object AppInfo {
      * `https://github.com/你的用户名/纸盒`
      */
     const val REPO_URL = ""
+
+    /**
+     * 作者的 B 站主页。
+     *
+     * 和 [REPO_URL] 一样，没拿到地址就先留空，提示词里只泛述「B 站有账号」，
+     * 不编一个打不开的链接。地址确定后填这里。
+     */
+    const val BILIBILI_URL = ""
 }
