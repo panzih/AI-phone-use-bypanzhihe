@@ -127,6 +127,11 @@ class DisplayChannel(
         onPoint: ((Int, Int) -> Unit)?,
     ): String? = withContext(Dispatchers.IO) {
         try {
+            // 副屏没有控件列表（currentNodes 为空），index 无法解析成坐标。
+            // 显式拒绝带 index 的动作，别让 x/y 默认 0 的 index 动作静默点到 (0,0)。
+            if (action.targetIndex > 0) {
+                return@withContext "副屏没有元素列表，不能用 index。请只看截图、用 x / y 给坐标，不要给 index。"
+            }
             when (action.kind) {
                 // dismiss_dialog 在 Agent 层就转成 TAP，不会走到通道；兜底报错
                 TouchKind.DISMISS_DIALOG -> "内部错误：关闭弹窗未在端侧处理"

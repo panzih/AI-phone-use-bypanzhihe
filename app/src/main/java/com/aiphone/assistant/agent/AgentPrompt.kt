@@ -65,6 +65,8 @@ object AgentPrompt {
 **优先用 index 指定要操作的元素。**
 只有当目标在列表里找不到（列表没截全、或者是个纯图标的自绘控件）时，才退回用 x / y 直接给坐标。
 
+**如果这一轮根本没有「界面元素」列表（副屏模式、或纯自绘界面），就完全不要用 index** —— 列表不存在，编号没有任何意义。直接看附图，tap / swipe 等动作一律用 x / y 给坐标。
+
 # 一次给一批动作，不要一步一步来
 actions 是一个**按顺序执行**的数组。
 
@@ -319,16 +321,22 @@ $catalog
             appendLine(imageNote)
             appendLine()
         }
+        val noTree = uiTree.isNullOrBlank()
         appendLine("# 界面元素")
-        appendLine(
-            uiTree?.takeIf { it.isNotBlank() }
-                ?: "（这次没能读到控件树。如果判断不了这一屏是什么，把 need_image 设为 true 要一张截图）"
-        )
+        if (noTree) {
+            appendLine("这一屏没有元素列表（副屏 / 自绘界面读不到控件树）。直接看附图，用 x / y 给坐标：x 向右、y 向下，原点在左上角，范围 0..屏宽 / 屏高。tap / swipe 等动作一律用 x/y，不要给 index。")
+        } else {
+            appendLine(uiTree)
+        }
         appendLine()
         append(
             when {
                 imageNote != null && skillNote != null ->
                     "截图和技能返回都附在本条消息里。请重新判断，输出本轮的 JSON。"
+                noTree && imageNote != null ->
+                    "截图已附在本条消息里。这一屏没有元素列表，请根据截图用 x / y 输出坐标动作（不要给 index），输出本轮的 JSON。"
+                noTree ->
+                    "这一屏没有元素列表，请用 x / y 输出坐标动作（不要给 index），输出本轮的 JSON。"
                 imageNote != null ->
                     "截图已附在本条消息里。请结合界面元素重新判断，输出本轮的 JSON。"
                 skillNote != null ->
