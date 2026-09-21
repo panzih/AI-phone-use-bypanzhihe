@@ -324,9 +324,11 @@ class Agent(
             var skillNote: String? = null
 
             // ---- 上一批要求"动作后看新画面"：和这步的新树同一瞬间截图 ----
-            if (tree != null && shotAfterPending) {
-                shotAfterPending = false
-                if (totalImages >= MAX_TOTAL_IMAGES) {
+            if (shotAfterPending) {
+                shotAfterPending = false // 无条件清，副屏（tree==null）也不残留
+                if (tree == null) {
+                    // 副屏每步自带 autoImage，动作后截图无意义、直接跳过
+                } else if (totalImages >= MAX_TOTAL_IMAGES) {
                     // 任务级图上限：忽略，不附图
                     logger?.line(
                         "忽略 screenshot_after：已达本次任务图片上限（$MAX_TOTAL_IMAGES 张）",
