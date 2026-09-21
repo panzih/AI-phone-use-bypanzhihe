@@ -90,6 +90,7 @@
     <string name="vd_mirror_retry">重试</string>
     <string name="vd_not_ready_title">副屏功能暂未开放</string>
     <string name="vd_not_ready_desc">当前版本以无障碍操作为主，副屏相关功能正在开发中，后续版本会陆续开放。</string>
+    <string name="settings_vd_entry_desc">虚拟显示器，让 AI 在后台继续操作（实验性）</string>
 
     <string name="log_delete">删除日志</string>
     <string name="settings_export_logs_button">导出日志</string>

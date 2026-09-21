@@ -1017,7 +1017,6 @@ private fun AppRoot(
             onControlPhone = { screen = Screen.CONTROL },
             onRecording = { screen = Screen.RECORDING },
             onSchedules = { screen = Screen.SCHEDULES },
-            onVirtualDisplay = { screen = Screen.VIRTUAL_DISPLAY },
             onNewConversation = { clearContext() },
         )
 
@@ -1038,7 +1037,7 @@ private fun AppRoot(
         )
 
         Screen.VIRTUAL_DISPLAY -> VirtualDisplayScreen(
-            onBack = { screen = Screen.CONTROL },
+            onBack = { screen = Screen.SETTINGS },
             onOpenMirror = { displayId ->
                 // 副屏画面单独开一个窗口显示（用户要的"独立小窗"效果）。
                 // 这里必须用 context.startActivity —— Composable 里够不到
@@ -1086,6 +1085,7 @@ private fun AppRoot(
             onBack = { screen = Screen.CONTROL; toast = null },
             onGotoAuth = { onOpenAccessibilitySettings() },
             onOpenOverlaySettings = onOpenOverlaySettings,
+            onOpenVirtualDisplay = { screen = Screen.VIRTUAL_DISPLAY },
             onClearContext = { clearContext() },
             onExportLogs = { exportLogs() },
             onDeleteLogs = { deleteLogs() },

@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Visibility
@@ -101,6 +102,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onGotoAuth: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
+    onOpenVirtualDisplay: () -> Unit,
     onClearContext: () -> Unit,
     onExportLogs: () -> Unit,
     onDeleteLogs: () -> Unit,
@@ -162,6 +164,7 @@ fun SettingsScreen(
                     authorized = state.authorized,
                     onSelect = { onSettingsChange(s.copy(mode = it)) },
                     onGotoAuth = onGotoAuth,
+                    onOpenVirtualDisplay = onOpenVirtualDisplay,
                 )
             }
             item {
@@ -403,6 +406,7 @@ private fun AuthSection(
     authorized: Boolean,
     onSelect: (OperationMode) -> Unit,
     onGotoAuth: () -> Unit,
+    onOpenVirtualDisplay: () -> Unit,
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         DropdownRow(
@@ -426,6 +430,14 @@ private fun AuthSection(
             grantedText = stringResource(R.string.settings_auth_granted),
             unavailableText = stringResource(R.string.settings_auth_unavailable),
             onAction = onGotoAuth,
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        NavigationRow(
+            title = stringResource(R.string.vd_title),
+            desc = stringResource(R.string.settings_vd_entry_desc),
+            onOpen = onOpenVirtualDisplay,
         )
     }
 }
@@ -501,6 +513,50 @@ private fun PermissionRow(
                 Text(actionText)
             }
         }
+    }
+}
+
+/**
+ * 导航行 —— 点一下跳到对应设置页。
+ *
+ * 用在「操作授权」里：副屏不是"授予权限"，而是进入它自己的页面，
+ * 所以右侧不放授权状态、放一个箭头，排版与 [PermissionRow] 保持一致。
+ */
+@Composable
+private fun NavigationRow(
+    title: String,
+    desc: String?,
+    onOpen: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            if (!desc.isNullOrBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = desc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(Modifier.width(12.dp))
+
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -28,7 +28,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.AddComment
-import androidx.compose.material.icons.filled.ConnectedTv
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -108,7 +107,6 @@ fun MainScreen(
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
-    onVirtualDisplay: () -> Unit,
     onNewConversation: () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -135,10 +133,6 @@ fun MainScreen(
                 },
                 onSchedules = {
                     onSchedules()
-                    scope.launch { drawerState.close() }
-                },
-                onVirtualDisplay = {
-                    onVirtualDisplay()
                     scope.launch { drawerState.close() }
                 },
                 onSettings = {
@@ -277,7 +271,6 @@ private fun AppDrawer(
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
-    onVirtualDisplay: () -> Unit,
     onSettings: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
@@ -325,11 +318,6 @@ private fun AppDrawer(
                 icon = Icons.Filled.Schedule,
                 title = stringResource(R.string.drawer_schedules),
                 onClick = onSchedules,
-            )
-            DrawerItem(
-                icon = Icons.Filled.ConnectedTv,
-                title = stringResource(R.string.drawer_virtual_display),
-                onClick = onVirtualDisplay,
             )
 
             Spacer(Modifier.weight(1f))
