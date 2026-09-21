@@ -138,6 +138,12 @@ class Agent(
     /** 这次任务是否已经把纸盒让到后台（lazy，全程只让一次） */
     private var foregroundYielded = false
 
+    /**
+     * 端侧意图执行器（无状态）。模型显式下发 dismiss_dialog 时，
+     * 用它在当前页面找安全关闭按钮；端侧不做自主前置决策。
+     */
+    private val localRuleEngine = LocalRuleEngine()
+
     suspend fun run(task: String) {
         // ---- 1. 通道就绪？ ----
         val problem = controller.probe()
@@ -618,6 +624,13 @@ class Agent(
                         finish(false, "你停止了任务（等待中被叫停）")
                         return
                     }
+                } else if (action.kind == TouchKind.DISMISS_DIALOG) {
+                    // 云端显式下发：端侧在当前页面找安全关闭按钮，找到就点、
+                    // 找不到（或涉及授权/支付）就不操作；然后立刻把控制权交回
+                    // 云端，本批后续预排动作暂不执行（break）
+                    logger?.line("  $single", "执行")
+                    results.add(handleDismissDialog())
+                    break
                 } else {
                     OverlayBus.setPhase(AgentPhase.ACTING)
                     val isOpenApp = action.kind == TouchKind.OPEN_APP
@@ -715,6 +728,37 @@ class Agent(
     // ------------------------------------------------------------------
     // 内部
     // ------------------------------------------------------------------
+
+    /**
+     * 执行云端显式下发的“关闭弹窗”：端侧在当前页面找安全关闭按钮，
+     * 找到就点、找不到（或涉及授权/支付）就不操作，结果交回云端。
+     * @return 回灌给模型、写进结果列表的一行
+     */
+    private suspend fun handleDismissDialog(): String {
+        OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+        val nodes = withContext(Dispatchers.IO) { controller.parseNodes() } ?: emptyList()
+        val r = localRuleEngine.findSafeDismiss(nodes)
+        val target = r.target
+            ?: return "关闭弹窗：${r.reason}（未操作）"
+
+        // 找到安全按钮：非 open_app，执行前先按需让开前台，避免点到纸盒自己
+        yieldForegroundIfNeeded()
+        val tap = TouchAction(TouchKind.TAP, targetIndex = target.index)
+        val mustHide = touchesStopButton(tap)
+        if (mustHide) {
+            OverlayBus.hide()
+            delay(OVERLAY_SETTLE_MS)
+        }
+        val err = withContext(Dispatchers.IO) {
+            controller.execute(tap) { px, py -> OverlayBus.pulse(px, py) }
+        }
+        if (mustHide) OverlayBus.show()
+        if (err != null) return "关闭弹窗：点击失败（$err）"
+
+        val after = awaitStable(TouchKind.TAP)
+        if (after == null) return "关闭弹窗：等待中被中断"
+        return "关闭弹窗：${r.reason}"
+    }
 
     /**
      * 让开前台（lazy）。

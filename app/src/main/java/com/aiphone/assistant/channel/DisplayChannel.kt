@@ -119,6 +119,9 @@ class DisplayChannel(
     ): String? = withContext(Dispatchers.IO) {
         try {
             when (action.kind) {
+                // dismiss_dialog 在 Agent 层就转成 TAP，不会走到通道；兜底报错
+                TouchKind.DISMISS_DIALOG -> "内部错误：关闭弹窗未在端侧处理"
+
                 TouchKind.TAP -> {
                     onPoint?.invoke(action.x, action.y)
                     ok(AdbShell.tap(context, displayId, action.x, action.y), "点击")

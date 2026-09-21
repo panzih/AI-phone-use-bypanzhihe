@@ -115,6 +115,10 @@ object ActionParser {
         put("launch_app", TouchKind.OPEN_APP)
         put("sleep", TouchKind.WAIT)
         put("delay", TouchKind.WAIT)
+        // 端侧关闭弹窗：模型可能用这些写法，都认（无参数，端侧自己找按钮）
+        put("dismiss", TouchKind.DISMISS_DIALOG)
+        put("close_dialog", TouchKind.DISMISS_DIALOG)
+        put("close_popup", TouchKind.DISMISS_DIALOG)
     }
 
     /** 这些"动作名"其实是"我要看截图"，不是真动作 */

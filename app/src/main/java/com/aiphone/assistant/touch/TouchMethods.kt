@@ -189,6 +189,21 @@ enum class TouchKind(
         needsPoint = false,
         needsDuration = true,
     ),
+
+    /**
+     * 端侧关闭弹窗（云端模型显式下发）。
+     *
+     * 端侧**不自主决策**：只有模型明确要求时才执行，在当前页面找
+     * “稍后/跳过/取消”等安全关闭按钮，找到就点、找不到（或页面涉及
+     * 授权/支付）就不操作，然后立刻把结果交回云端，不连续自作主张。
+     */
+    DISMISS_DIALOG(
+        id = "dismiss_dialog",
+        label = "关闭弹窗",
+        description = "端侧找安全的关闭按钮点掉弹窗，找不到就不操作并交回云端",
+        needsPoint = false,
+        needsDuration = false,
+    ),
     ;
 
     companion object {
