@@ -992,9 +992,16 @@ class Agent(
 
         /** 控件文字/描述里是否含“发送/支付/确认/删除”等会造成副作用的词 */
         internal fun labelHasSideEffect(node: UiNode): Boolean {
-            val label = node.text.ifBlank { node.contentDesc }.lowercase()
-            if (label.isBlank()) return false
-            return SIDE_EFFECT_WORDS.any { label.contains(it) }
+            val raw = node.text.ifBlank { node.contentDesc }
+            if (raw.isBlank()) return false
+            val label = raw.lowercase()
+            // 中文词按子串（中文不靠空格分词）；英文词按整词 —— 否则 "ok" 会
+            // 误伤 book/look，让英文界面几乎不重试（功能静默失效）。
+            val englishTokens = label.split(Regex("[^a-z]")).toHashSet()
+            return SIDE_EFFECT_WORDS.any { word ->
+                if (word.all { it in 'a'..'z' }) word in englishTokens
+                else label.contains(word)
+            }
         }
 
         /**

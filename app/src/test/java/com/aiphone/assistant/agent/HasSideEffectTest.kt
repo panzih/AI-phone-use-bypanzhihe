@@ -107,4 +107,31 @@ class HasSideEffectTest {
             Agent.hasSideEffect(TouchAction(TouchKind.KEY_BACK), emptyList())
         )
     }
+
+    // 8. 英文 Book 不含整词 ok → false（旧的子串匹配会把 book 误判成 ok）
+    @Test
+    fun `英文Book按钮_不被ok误伤_允许重试`() {
+        val nodes = listOf(node(5, text = "Book"))
+        assertFalse(
+            Agent.hasSideEffect(TouchAction(TouchKind.TAP, targetIndex = 5), nodes)
+        )
+    }
+
+    // 9. 英文 Look 同理 → false
+    @Test
+    fun `英文Look按钮_不被ok误伤_允许重试`() {
+        val nodes = listOf(node(5, text = "Look"))
+        assertFalse(
+            Agent.hasSideEffect(TouchAction(TouchKind.TAP, targetIndex = 5), nodes)
+        )
+    }
+
+    // 10. 整词 OK 仍是真实的高风险确认按钮 → true
+    @Test
+    fun `英文OK按钮_整词命中_不重试`() {
+        val nodes = listOf(node(5, text = "OK"))
+        assertTrue(
+            Agent.hasSideEffect(TouchAction(TouchKind.TAP, targetIndex = 5), nodes)
+        )
+    }
 }
