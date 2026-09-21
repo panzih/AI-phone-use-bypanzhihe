@@ -58,6 +58,7 @@
     <string name="recording_toast_learn_failed">学习失败：%1$s</string>
     <string name="recording_toast_deleted">已删除技能</string>
     <string name="recording_need_api_key">还没填 API Key。到「设置 → 模型」里填一个再试。</string>
+    <string name="recording_shortcut_opened">已打开操作记录，点「开始录制」就能录下你的操作。</string>
 
     <!-- 上下文与对话 -->
     <string name="context_label">上下文</string>

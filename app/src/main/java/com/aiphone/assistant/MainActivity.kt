@@ -49,6 +49,7 @@ import com.aiphone.assistant.memory.Turn
 import com.aiphone.assistant.record.MacroLearner
 import com.aiphone.assistant.record.MacroStore
 import com.aiphone.assistant.record.Recorder
+import com.aiphone.assistant.record.RecordingShortcut
 import com.aiphone.assistant.schedule.ScheduleReceiver
 import com.aiphone.assistant.schedule.Schedule
 import com.aiphone.assistant.schedule.ScheduleStore
@@ -743,6 +744,13 @@ private fun AppRoot(
         input = ""
         stopRequested = false
         OverlayBus.clearStop()
+
+        // 本地快捷指令：在发送框直接说「操作记录 / 开始录制」等，进录制页，不发给模型
+        if (RecordingShortcut.matches(task)) {
+            screen = Screen.RECORDING
+            toast = context.getString(R.string.recording_shortcut_opened)
+            return
+        }
 
         // ---- 上下文策略 ----
         // 判断"这一段上下文还算不算数"：按策略决定是接着用还是重开。
