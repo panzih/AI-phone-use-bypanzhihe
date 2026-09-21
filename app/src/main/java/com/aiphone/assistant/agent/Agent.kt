@@ -471,7 +471,10 @@ class Agent(
                         }
 
                         // ---- 任务完成？ ----
-                        if (p.finished) {
+                        // 模型可能同一批既给 actions 又说 finished（语义是"做完这批
+                        // 动作任务就完成了"）。有动作时不能在这里结束，否则动作一个都
+                        // 不会执行；放去这批动作执行完之后再收尾（见循环末尾）。
+                        if (p.finished && p.actions.isEmpty()) {
                             val summary = p.summary.ifBlank { "模型判断任务已完成" }
                             logger?.line("任务结束：$summary", "任务")
                             listener.onEvent(EventKind.RESULT, summary, "完成")
@@ -772,11 +775,22 @@ class Agent(
 
             // 模型要这批之后看新画面：不在这步立刻截，只立旗标，
             // 下一步开头和新树同一瞬间截（见循环开头的 shotAfterPending）。
-            if (p.screenshotAfter) shotAfterPending = true
+            // 这批就是收尾（finished）时不立：任务马上结束、旗标没人消费。
+            if (p.screenshotAfter && !p.finished) shotAfterPending = true
 
             // ---- 回灌给模型 ----
             history.add(ChatTurn(ChatTurn.ASSISTANT, modelOutput))
             lastResult = resultText
+
+            // ---- 这批动作就是任务收尾（模型给动作的同时说 finished）----
+            // 动作已经逐个执行完，这里再正常结束，不再请求下一步。
+            if (p.finished) {
+                val summary = p.summary.ifBlank { "模型判断任务已完成" }
+                logger?.line("任务结束：$summary", "任务")
+                listener.onEvent(EventKind.RESULT, summary, "完成")
+                finish(true, summary)
+                return
+            }
         }
 
         finish(

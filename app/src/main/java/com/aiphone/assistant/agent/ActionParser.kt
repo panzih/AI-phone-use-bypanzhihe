@@ -280,10 +280,13 @@ object ActionParser {
         }
 
         if (finished) {
+            // 同批可能还带着动作（语义"做完这批就完成"）：动作必须保留，
+            // 由 Agent 先执行、再收尾，不能在这里清空成 emptyList()。
             return Parsed(
-                thought, emptyList(), needImage = false, finished = true,
+                thought, actions, needImage = false, finished = true,
                 summary = summary, raw = raw, nextHint = nextHint,
                 warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
+                screenshotAfter = screenshotAfter,
             )
         }
 

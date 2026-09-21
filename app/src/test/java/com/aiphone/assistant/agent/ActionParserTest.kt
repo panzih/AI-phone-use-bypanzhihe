@@ -83,4 +83,41 @@ class ActionParserTest {
         assertFalse(p.screenshotAfter)
         assertFalse(p.needImage)
     }
+
+    // ---- finished 与动作同批：修复"动作被跳过"的回归用例 ----
+
+    @Test
+    fun finished_withActions_keepsBoth() {
+        // 被修场景：同一批既给动作又说 finished（语义"做完这批就完成"）。
+        // 动作必须保留、finished 也为 true，由 Agent 先执行动作再收尾。
+        val p = ActionParser.parse(
+            """{"thought":"做完这批就完成","actions":[{"action":"tap","index":3}],
+               "finished":true,"summary":"已完成"}""",
+            w, h,
+        )
+        assertEquals(1, p.actions.size)
+        assertTrue(p.finished)
+    }
+
+    @Test
+    fun finished_withoutActions_staysEmpty() {
+        // 原行为：无动作直接说完成 → actions 空、finished true（立即收尾），别改坏
+        val p = ActionParser.parse(
+            """{"thought":"无需动作即完成","finished":true}""",
+            w, h,
+        )
+        assertTrue(p.actions.isEmpty())
+        assertTrue(p.finished)
+    }
+
+    @Test
+    fun actions_withoutFinished_notFinished() {
+        // 回归：给动作但不说完成 → finished false
+        val p = ActionParser.parse(
+            """{"thought":"先点一下","actions":[{"action":"tap","index":3}]}""",
+            w, h,
+        )
+        assertEquals(1, p.actions.size)
+        assertFalse(p.finished)
+    }
 }
