@@ -92,6 +92,14 @@ object ActionParser {
         val skillId: String? = null,
         /** 技能的参数，可能没有 */
         val skillArgs: JSONObject? = null,
+        /**
+         * 这批动作执行完、下一屏再要一张图。
+         *
+         * 和 [needImage] 的区别：needImage 是"这一屏看不懂、立刻给图"，
+         * screenshotAfter 是"动作我能给、但下一屏想看结果"——图在下一步
+         * 和新控件树一起给，不多一次往返。两个同给按 needImage 处理。
+         */
+        val screenshotAfter: Boolean = false,
     )
 
     /** 动作名白名单。不在这张表里的一律拒绝，绝不去执行。 */
@@ -182,6 +190,9 @@ object ActionParser {
             obj.optBoolean("need_screenshot", false) ||
             obj.optBoolean("needShot", false)
 
+        // 这批动作做完、下一屏再要一张图。只认这一个规范名，不加别名
+        var screenshotAfter = obj.optBoolean("screenshot_after", false)
+
         // 要调用技能：字段名模型可能写成好几种，都认
         val skillId = sequenceOf("use_skill", "skill", "call_skill", "useSkill")
             .map { obj.optString(it, "").trim() }
@@ -241,6 +252,17 @@ object ActionParser {
         if (topAction == "finish" || topAction == "done") finished = true
         if (topAction in FAIL_NAMES) failed = true
 
+        // ---- screenshot_after 归一化（构造 Parsed 之前）----
+        // 它的语义是"这批动作之后"，所以这批没动作时它不成立。
+        if (needImage) {
+            screenshotAfter = false // 和 need_image 同给 → need_image 优先
+        } else if (actions.isEmpty()) {
+            screenshotAfter = false
+            // 没动作、也没在要技能：意图其实就是想看图，退化成立即要图，
+            // 别落到下面那条"空转"警告上
+            if (skillId == null) needImage = true
+        }
+
         // failed 优先于 finished：两个都给了的话，宁可报"没做成"，
         // 也不要谎报成功
         if (failed) {
@@ -292,6 +314,7 @@ object ActionParser {
             warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
             skillId = skillId,
             skillArgs = skillArgs,
+            screenshotAfter = screenshotAfter,
         )
     }
 
