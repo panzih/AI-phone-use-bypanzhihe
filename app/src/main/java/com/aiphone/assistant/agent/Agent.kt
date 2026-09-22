@@ -140,6 +140,14 @@ class Agent(
     private var foregroundYielded = false
 
     /**
+     * 本次任务里 Agent 是否已经成功建过副屏（建屏成功即置位），销毁后清位。
+     *
+     * 兜底失败路径：建屏成功、但整栈迁移和副屏重开都失败、直接返回时，
+     * 通道还没切（isVirtualDisplay 仍 false），finish() 也不能漏销毁副屏。
+     */
+    private var vdCreatedByAgent = false
+
+    /**
      * 端侧意图执行器（无状态）。模型显式下发 dismiss_dialog 时，
      * 用它在当前页面找安全关闭按钮；端侧不做自主前置决策。
      */
@@ -861,6 +869,7 @@ class Agent(
             listener.onEvent(EventKind.ERROR, msg, "副屏")
             return false
         }
+        vdCreatedByAgent = true
 
         // 3) 整栈迁移；失败则降级为「重开应用」
         val keptStack = moveStack(taskId, vdId)
@@ -868,7 +877,11 @@ class Agent(
             logger?.line("整栈迁移失败，将重开应用（临时内容可能丢失）", "副屏")
             listener.onEvent(EventKind.THOUGHT, "迁移失败，正在副屏重开应用 …", "副屏")
             if (!reopenOnDisplay(pkg, vdId)) {
-                val msg = "在副屏重开应用也失败了，留在主屏继续。"
+                // 副屏已建好、应用又被 force-stop：立即销毁副屏，不必等任务结束
+                val dr = ShizukuBridge.destroyDisplay(ctx)
+                vdCreatedByAgent = false
+                val tail = if (dr >= 0) "（副屏已收回）" else "（副屏没收回，可到副屏调试页手动销毁）"
+                val msg = "在副屏重开应用也失败了，应用已被关闭，需要重新打开$tail。"
                 logger?.error(msg, "副屏")
                 listener.onEvent(EventKind.ERROR, msg, "副屏")
                 return false
@@ -878,6 +891,7 @@ class Agent(
         // 4) 校验：整栈迁移时该 task 确实到了新 display
         if (keptStack && !verifyTaskOnDisplay(taskId, vdId)) {
             logger?.line("迁移后校验没通过，继续按副屏模式跑", "副屏")
+            listener.onEvent(EventKind.RESULT, "没在副屏找到该应用，可能显示为空屏", "副屏")
         }
 
         // 5) 主屏回桌面（必须在切通道**前**，HOME 走主屏无障碍）
@@ -926,7 +940,10 @@ class Agent(
         val out = ShizukuBridge.run(controller.appContext, "dumpsys activity activities")
         val idx = out.indexOf("Display #$displayId")
         if (idx < 0) return false
-        return out.substring(idx).contains(" t$taskId}")
+        // 只在该 display 段内匹配，右界到下一个 Display 段，防跨段误判"已迁过去"
+        val next = out.indexOf("Display #", idx + 1)
+        val seg = if (next < 0) out.substring(idx) else out.substring(idx, next)
+        return seg.contains(" t$taskId}")
     }
 
     /**
@@ -1164,10 +1181,11 @@ class Agent(
     }
 
     private suspend fun finish(success: Boolean, message: String) {
-        // 收尾：若还在副屏，切回无障碍并销毁副屏，不留残屏（0.8.0 验收⑤）
-        if (controller.isVirtualDisplay) {
-            controller.exitVirtualDisplay()
+        // 收尾：只要还在副屏、或建过副屏（哪怕迁移失败提前返回），都销毁，不留残屏（0.8.0 验收⑤）
+        if (controller.isVirtualDisplay || vdCreatedByAgent) {
+            if (controller.isVirtualDisplay) controller.exitVirtualDisplay()
             val dr = ShizukuBridge.destroyDisplay(controller.appContext)
+            vdCreatedByAgent = false
             logger?.line(
                 if (dr >= 0) "副屏已随任务结束销毁" else "副屏销毁没成功（$dr），可到副屏调试页手动销毁",
                 "副屏",
