@@ -66,6 +66,16 @@
         </intent>
 
         <!--
+          默认桌面 launcher 用 CATEGORY_HOME（它自己不带 LAUNCHER）。
+          不声明的话，queryIntentActivities(CATEGORY_HOME) 会被包可见性过滤：
+          launcher3 看不到，只返回 Settings 的 FallbackHome，导致桌面识别错误（0.8.3）。
+        -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+
+        <!--
           Shizuku 的包名必须显式声明。
 
           上面那个 intent 只覆盖"有桌面入口的应用"，对 Shizuku 不生效。

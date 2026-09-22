@@ -2,6 +2,7 @@ package com.aiphone.assistant.a11y
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
@@ -59,15 +60,113 @@ class AutoService : AccessibilityService() {
         Recorder.selfPackage = packageName
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "无障碍服务已连接")
+        homePackages = resolveHomePackages()
+        imePackages = resolveImePackages()
+        Log.i(TAG, "无障碍服务已连接，桌面候选：$homePackages，输入法：$imePackages")
     }
+
+    /**
+     * 全部可见桌面（launcher）包名，onServiceConnected 解析一次缓存。
+     * 用集合而非"挑一个默认"（R2）：真机可能有多个第三方桌面、priority 相同时
+     * 取任意一个会认错；FallbackHome、双桌面、切桌面都能自然覆盖。
+     */
+    @Volatile
+    private var homePackages: Set<String> = emptySet()
+
+    /** 回到桌面的起始时间（epoch ms）；0 = 当前不在桌面（0.8.3 自动切副屏用） */
+    @Volatile
+    private var desktopSinceMsField: Long = 0L
+
+    /** 最近一个非桌面 WINDOW_STATE_CHANGED 的包（用来锁定"回桌面前在哪个 app"，R4） */
+    @Volatile
+    private var lastForegroundPkg: String? = null
+
+    /** 这次回桌面之前所在的 app 包（R4：证明回桌面是从目标 app 切走的） */
+    @Volatile
+    private var pkgBeforeDesktop: String? = null
+
+    /** 当前启用的输入法包名（R4：键盘窗口不是"前台 app"，要从 lastForegroundPkg 排除） */
+    @Volatile
+    private var imePackages: Set<String> = emptySet()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // AI 主动操作时是"轮询截图"模式，不依赖事件驱动。
         // 但「操作记录」要靠事件知道用户点了什么 —— 录制没开始时
         // Recorder 第一件事就是 return，所以这里的开销可以忽略。
         event?.let { Recorder.onEvent(it) }
+        event?.let { trackDesktop(it) }
     }
+
+    /**
+     * 解析全部可见桌面包名（R2：集合，不挑"默认"）。
+     * CATEGORY_HOME 的 queryIntentActivities 候选即所有桌面；flags=0 两个都返回
+     * （MATCH_DEFAULT_ONLY 实测会漏）。排除纸盒自己。Manifest <queries> 已声明 HOME。
+     */
+    private fun resolveHomePackages(): Set<String> = runCatching {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        packageManager.queryIntentActivities(intent, 0)
+            .map { it.activityInfo.packageName }
+            .filter { it != packageName }
+            .toSet()
+    }.getOrDefault(emptySet())
+
+    /**
+     * 当前启用的输入法包名（R4）。键盘（IME）也会发 WINDOW_STATE_CHANGED，
+     * 但它不是"前台 app"，记录"回桌面前在哪个 app"时必须排除，否则用户输入后
+     * 键盘残留、按 HOME 会把来路误记成输入法。onServiceConnected 取一次缓存。
+     */
+    private fun resolveImePackages(): Set<String> = runCatching {
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as android.view.inputmethod.InputMethodManager
+        imm.enabledInputMethodList.map { it.serviceInfo.packageName }.toSet()
+    }.getOrDefault(emptySet())
+
+    /**
+     * 跟踪"是否回到桌面"，Agent.interruption() 只读这个内存时间、零额外 binder。
+     *
+     * R1：只认 [TYPE_WINDOW_STATE_CHANGED]——其他事件（systemui 状态栏时钟会
+     * 周期性发事件、A1 实验统计到 14 个）一律不碰计时，否则在桌面停着也会被
+     * 反复清零、防抖永远攒不满。
+     * 护栏3：桌面 [TYPE_VIEW_CLICKED]（用户点图标开 app）把计时重置。
+     */
+    private fun trackDesktop(event: AccessibilityEvent) {
+        if (homePackages.isEmpty()) return
+        val pkg = event.packageName?.toString() ?: return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> when {
+                homePackages.contains(pkg) -> {
+                    // R4：记下"回桌面前在哪个 app"，直接证明这次回桌面的来路
+                    pkgBeforeDesktop = lastForegroundPkg
+                    if (desktopSinceMsField == 0L) {
+                        desktopSinceMsField = System.currentTimeMillis()
+                        Log.i(TAG, "检测到回桌面（$pkg），此前 app：$pkgBeforeDesktop")
+                    }
+                }
+                else -> {
+                    // 输入法窗口只是键盘覆盖层，不算"前台 app"（R4）
+                    if (pkg !in imePackages) lastForegroundPkg = pkg
+                    if (desktopSinceMsField != 0L) Log.i(TAG, "离开桌面（$pkg）")
+                    desktopSinceMsField = 0L
+                }
+            }
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                // 用户在桌面上点图标 → 要开别的 app，取消这一次待触发（护栏3）
+                if (homePackages.contains(pkg) && desktopSinceMsField != 0L) {
+                    desktopSinceMsField = 0L
+                    Log.i(TAG, "在桌面点击（$pkg），取消自动切副屏")
+                }
+            }
+        }
+    }
+
+    /** 回到桌面的起始时间（epoch ms）；0 = 当前不在桌面 */
+    fun desktopSinceMs(): Long = desktopSinceMsField
+
+    /** 这次回桌面之前所在的 app 包（R4，供 Agent 判定回桌面是否从目标 app 切走） */
+    fun packageBeforeDesktop(): String? = pkgBeforeDesktop
+
+    /** 该包是不是桌面（供 Agent 过滤目标 app，R2 用集合判定） */
+    fun isHomePackage(pkg: String?): Boolean = pkg != null && homePackages.contains(pkg)
 
     override fun onInterrupt() {
         Log.w(TAG, "无障碍服务被中断")

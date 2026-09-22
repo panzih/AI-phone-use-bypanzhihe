@@ -1,6 +1,7 @@
 package com.aiphone.assistant.agent
 
 import com.aiphone.assistant.ChannelController
+import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.a11y.UiNode
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.llm.ChatTurn
@@ -147,6 +148,21 @@ class Agent(
      */
     private var vdCreatedByAgent = false
 
+    // ---- 0.8.3 回桌面自动切副屏 ----
+    /** AI 最近在操作的目标 app 包名（过滤纸盒/桌面） */
+    private var lastTargetPkg: String? = null
+    /** 目标 app 的 taskId（包名变化时 dumpsys 一次缓存） */
+    private var lastTargetTaskId: Int = -1
+    /** 目标 app 最近在前台的时间，用于"够不够新"判定 */
+    private var lastTargetAtMs: Long = 0L
+    /** Agent 自己按 HOME 的时间，之后短时间内不自动触发 */
+    private var selfHomeAtMs: Long = 0L
+    /** 自动迁移失败后的冷却截止时间 */
+    private var autoMoveCooldownUntilMs: Long = 0L
+    /** 自动切副屏使能（主屏 + Shizuku READY），每步刷新一次、interruption 只读它 */
+    @Volatile
+    private var autoSwitchArmed = false
+
     /**
      * 端侧意图执行器（无状态）。模型显式下发 dismiss_dialog 时，
      * 用它在当前页面找安全关闭按钮；端侧不做自主前置决策。
@@ -157,6 +173,12 @@ class Agent(
         // 新任务开头无条件清掉上一轮可能残留的通道切换请求，兜住所有入口
         OverlayBus.clearMoveToVirtualDisplay()
         OverlayBus.clearReturnFromVd()
+        // 0.8.3 自动切副屏的推断状态也随新任务重置
+        lastTargetPkg = null
+        lastTargetTaskId = -1
+        lastTargetAtMs = 0L
+        selfHomeAtMs = 0L
+        autoMoveCooldownUntilMs = 0L
 
         // ---- 1. 通道就绪？ ----
         val problem = controller.probe()
@@ -257,6 +279,7 @@ class Agent(
                 if (it.first > 0 && it.second > 0) { w = it.first; h = it.second }
             }
             val foreground = withContext(Dispatchers.IO) { controller.currentPackage() }
+            updateLastTarget(foreground)
 
             // 刷新「切到副屏」按钮：仅主屏模式 + Shizuku READY 时可点
             refreshMoveButton()
@@ -274,6 +297,12 @@ class Agent(
                 OverlayBus.clearReturnFromVd()
                 if (back) continue
             }
+
+            // 每步刷新一次自动切副屏使能（主屏 + Shizuku READY），interruption() 只读内存、零 binder
+            autoSwitchArmed = !controller.isVirtualDisplay &&
+                ShizukuBridge.state(controller.appContext) == ShizukuBridge.State.READY
+            // 用户回桌面 + 400ms 防抖：自动把目标 app 迁到副屏（0.8.3）
+            if (autoDesktopSwitchReady() && handleAutoMoveToVirtualDisplay()) continue
 
             // 读控件树。这次**不藏悬浮窗** —— 我们自己的节点已经在
             // 解析层按包名过滤掉了，没必要为它闪一下。
@@ -702,6 +731,15 @@ class Agent(
                         switchPendingCount = p.actions.size - i
                         break
                     }
+                    WaitOutcome.AUTO_DESKTOP_SWITCH -> {
+                        if (handleAutoMoveToVirtualDisplay()) {
+                            switchPendingCount = p.actions.size - i
+                        } else {
+                            results.add("自动切副屏未成功（已交回云端）")
+                            switchPendingCount = p.actions.size - i
+                        }
+                        break
+                    }
                     WaitOutcome.DONE -> {}
                 }
 
@@ -726,6 +764,15 @@ class Agent(
                             switchPendingCount = p.actions.size - i - 1
                             break
                         }
+                        WaitOutcome.AUTO_DESKTOP_SWITCH -> {
+                            val moved = handleAutoMoveToVirtualDisplay()
+                            results.add(
+                                if (moved) "$single → 已自动切到副屏"
+                                else "$single → 自动切副屏未成功（已交回云端）"
+                            )
+                            switchPendingCount = p.actions.size - i - 1
+                            break
+                        }
                     }
                 } else if (action.kind == TouchKind.DISMISS_DIALOG) {
                     // 云端显式下发：端侧在当前页面找安全关闭按钮，找到就点、
@@ -733,13 +780,20 @@ class Agent(
                     // 云端，本批后续预排动作暂不执行（break）
                     logger?.line("  $single", "执行")
                     results.add(handleDismissDialog())
-                    if (interruption() == WaitOutcome.SWITCH_REQUESTED) {
-                        // dismiss 等待期间用户切了通道：后续动作交给切换流程（0.8.2）
-                        switchPendingCount = p.actions.size - i - 1
-                    } else {
-                        val skipped = p.actions.size - i - 1
-                        if (skipped > 0) {
-                            results.add("dismiss_dialog 后的 $skipped 个动作本轮未执行（已交回云端）")
+                    when (interruption()) {
+                        WaitOutcome.SWITCH_REQUESTED ->
+                            // dismiss 等待期间用户切了通道：后续动作交给切换流程（0.8.2）
+                            switchPendingCount = p.actions.size - i - 1
+                        WaitOutcome.AUTO_DESKTOP_SWITCH -> {
+                            val moved = handleAutoMoveToVirtualDisplay()
+                            if (moved) results.add("已自动切到副屏")
+                            switchPendingCount = p.actions.size - i - 1
+                        }
+                        else -> {
+                            val skipped = p.actions.size - i - 1
+                            if (skipped > 0) {
+                                results.add("dismiss_dialog 后的 $skipped 个动作本轮未执行（已交回云端）")
+                            }
                         }
                     }
                     break
@@ -795,11 +849,23 @@ class Agent(
                                 switchPendingCount = p.actions.size - i - 1
                                 break
                             }
+                            WaitOutcome.AUTO_DESKTOP_SWITCH -> {
+                                val moved = handleAutoMoveToVirtualDisplay()
+                                results.add(
+                                    if (moved) "$single → 已自动切到副屏"
+                                    else "$single → 自动切副屏未成功（已交回云端）"
+                                )
+                                switchPendingCount = p.actions.size - i - 1
+                                break
+                            }
                             WaitOutcome.DONE -> {}
                         }
                         // 启动后仍没切走（包名错/启动失败）才补 HOME，
                         // 避免下一步模型读到纸盒自己的界面。
                         verifyLeftAfterOpenApp()
+                        // open_app 与后续 sleep 常在同一批：步开头记的还是旧前台，
+                        // 这里补记新目标，否则同批 sleep 中回桌面拿不到目标（0.8.3）
+                        updateLastTarget(withContext(Dispatchers.IO) { controller.currentPackage() })
                         logger?.line("  $single → 已执行", "执行")
                         results.add("$single → 已执行")
                     } else if (next?.kind == TouchKind.WAIT) {
@@ -818,6 +884,15 @@ class Agent(
                             }
                             WaitOutcome.SWITCH_REQUESTED -> {
                                 results.add("$single → 因切换通道中止")
+                                switchPendingCount = p.actions.size - i - 1
+                                break
+                            }
+                            WaitOutcome.AUTO_DESKTOP_SWITCH -> {
+                                val moved = handleAutoMoveToVirtualDisplay()
+                                results.add(
+                                    if (moved) "$single → 已自动切到副屏"
+                                    else "$single → 自动切副屏未成功（已交回云端）"
+                                )
                                 switchPendingCount = p.actions.size - i - 1
                                 break
                             }
@@ -887,20 +962,15 @@ class Agent(
      *
      * @return true 已切到副屏；false 没切（原因已给用户看，留在主屏继续）
      */
+    /**
+     * 手动「切到副屏」：用户点了悬浮按钮。从主屏顶部任务拿目标，
+     * 再走 [performMoveToVirtualDisplay]。
+     */
     private suspend fun handleMoveToVirtualDisplay(): Boolean {
-        val ctx = controller.appContext
         if (controller.isVirtualDisplay) {
             logger?.line("已经在副屏运行，忽略重复的切换请求", "副屏")
             return false
         }
-        // 切之前先抓主屏物理尺寸（副屏照抄它），不依赖 run 的局部 w/h
-        val mainSize = controller.screenSize()?.takeIf { it.first > 0 && it.second > 0 }
-        if (mainSize == null) {
-            logger?.error("迁移失败：拿不到主屏分辨率。", "副屏")
-            return false
-        }
-
-        // 1) 主屏顶部任务的包名 + taskId
         val top = currentMainScreenTask()
         if (top == null) {
             val msg = "迁移失败：没能从系统读到当前前台任务（taskId）。"
@@ -915,8 +985,59 @@ class Agent(
             listener.onEvent(EventKind.THOUGHT, msg, "副屏")
             return false
         }
+        return performMoveToVirtualDisplay(taskId, pkg, automatic = false)
+    }
 
-        // 2) 建副屏（ShellService 内部已有则复用）
+    /**
+     * 自动迁出（0.8.3）：用户回桌面、顶部已是桌面，目标用缓存的 lastTarget*。
+     * 迁移前校验缓存 taskId、不在则按包名重解析；两层都拿不到就不迁、加冷却。
+     */
+    private suspend fun handleAutoMoveToVirtualDisplay(): Boolean {
+        val pkg = lastTargetPkg
+        if (pkg.isNullOrBlank()) {
+            markAutoMoveFailed("没有记录到要操作的目标应用")
+            return false
+        }
+        // 护栏2：触发后、动手前最后复核——前台已离开桌面（新 app 被切到前台）
+        // 就中止本次迁移、进冷却、不建屏。currentPackage 为 null（切换中）则不拦。
+        val nowFg = withContext(Dispatchers.IO) { controller.currentPackage() }
+        if (nowFg != null && AutoService.get()?.isHomePackage(nowFg) != true) {
+            markAutoMoveFailed("已离开桌面（$nowFg）")
+            return false
+        }
+        var taskId = lastTargetTaskId
+        if (taskId < 0 || !taskExists(taskId)) taskId = resolveTaskIdForPackage(pkg)
+        if (taskId < 0) {
+            markAutoMoveFailed("没找到 $pkg 的任务栈（可手动点切到副屏）")
+            return false
+        }
+        return performMoveToVirtualDisplay(taskId, pkg, automatic = true)
+    }
+
+    /** 自动迁移没成：记日志 + 冷却，避免停在桌面被反复尝试。 */
+    private fun markAutoMoveFailed(reason: String) {
+        logger?.line("检测到回到桌面，但$reason，本次不自动迁移", "副屏")
+        autoMoveCooldownUntilMs = System.currentTimeMillis() + AUTO_FAIL_COOLDOWN_MS
+    }
+
+    /**
+     * 建副屏 → 整栈迁移（失败重开）→ 校验 → 主屏回桌面 → 切副屏通道。
+     * 手动（[handleMoveToVirtualDisplay]）和自动（[handleAutoMoveToVirtualDisplay]）共用。
+     */
+    private suspend fun performMoveToVirtualDisplay(
+        taskId: Int,
+        pkg: String,
+        automatic: Boolean,
+    ): Boolean {
+        val ctx = controller.appContext
+        // 切之前抓主屏物理尺寸（副屏照抄它）
+        val mainSize = controller.screenSize()?.takeIf { it.first > 0 && it.second > 0 }
+        if (mainSize == null) {
+            logger?.error("迁移失败：拿不到主屏分辨率。", "副屏")
+            return false
+        }
+
+        // 1) 建副屏（ShellService 内部已有则复用）
         OverlayBus.setPhase(AgentPhase.ACTING)
         val vdId = ShizukuBridge.createDisplay(ctx)
         if (vdId < 0) {
@@ -928,7 +1049,7 @@ class Agent(
         }
         vdCreatedByAgent = true
 
-        // 3) 整栈迁移；失败则降级为「重开应用」
+        // 2) 整栈迁移；失败则降级为「重开应用」
         val keptStack = moveStack(taskId, vdId)
         if (!keptStack) {
             logger?.line("整栈迁移失败，将重开应用（临时内容可能丢失）", "副屏")
@@ -941,24 +1062,94 @@ class Agent(
                 val msg = "在副屏重开应用也失败了，应用已被关闭，需要重新打开$tail。"
                 logger?.error(msg, "副屏")
                 listener.onEvent(EventKind.ERROR, msg, "副屏")
+                autoMoveCooldownUntilMs = System.currentTimeMillis() + AUTO_FAIL_COOLDOWN_MS
                 return false
             }
         }
 
-        // 4) 校验：整栈迁移时该 task 确实到了新 display
+        // 3) 校验：整栈迁移时该 task 确实到了新 display
         if (keptStack && !verifyTaskOnDisplay(taskId, vdId)) {
             logger?.line("迁移后校验没通过，继续按副屏模式跑", "副屏")
             listener.onEvent(EventKind.RESULT, "没在副屏找到该应用，可能显示为空屏", "副屏")
         }
 
-        // 5) 主屏回桌面（必须在切通道**前**，HOME 走主屏无障碍）
-        pressHomeToYield()
+        // 4) 主屏回桌面（必须在切通道前，HOME 走主屏无障碍）。
+        // R3：前台已是桌面就不再按 HOME——自动场景用户本就在桌面，再按会把
+        // “正在冷启动、还没发窗口事件”的 app 压回（反例2 真因）；手动场景才按。
+        val fgBeforeHome = withContext(Dispatchers.IO) { controller.currentPackage() }
+        if (AutoService.get()?.isHomePackage(fgBeforeHome) != true) {
+            pressHomeToYield()
+        }
 
-        // 6) 切通道（此刻无注入在进行）
+        // 5) 切通道（此刻无注入在进行）
         controller.enterVirtualDisplay(vdId, mainSize)
 
-        logger?.line("已切到副屏（display=$vdId），AI 改用截图 + 坐标操作", "副屏")
-        listener.onEvent(EventKind.ACTION, "已切到副屏运行", "副屏")
+        val lead = if (automatic) "已检测到你回到桌面，自动" else "已"
+        logger?.line("${lead}切到副屏（display=$vdId），AI 改用截图 + 坐标操作", "副屏")
+        listener.onEvent(EventKind.ACTION, "${lead}切到副屏运行", "副屏")
+        return true
+    }
+
+    /**
+     * 每步记录"AI 正在操作的目标 app"（0.8.3）。
+     * 包名便宜（一次 rootInActiveWindow）；包名变化时才 dumpsys 拿 taskId。
+     * 过滤纸盒自己和桌面。
+     */
+    private suspend fun updateLastTarget(pkg: String?) {
+        if (pkg.isNullOrBlank() || pkg == selfPackage) return
+        if (AutoService.get()?.isHomePackage(pkg) == true) return
+        if (pkg != lastTargetPkg) {
+            lastTargetPkg = pkg
+            lastTargetTaskId = resolveTaskIdForPackage(pkg)
+        }
+        lastTargetAtMs = System.currentTimeMillis()
+    }
+
+    /**
+     * 在主屏（Display #0）段里按包名找任务，取最后一个匹配（最近活跃）。
+     * 包名变化 / 缓存失效时调用，不在每步调用。
+     */
+    private suspend fun resolveTaskIdForPackage(pkg: String): Int {
+        val out = ShizukuBridge.run(controller.appContext, "dumpsys activity activities")
+        val start = out.indexOf("Display #0")
+        if (start < 0) return -1
+        val next = out.indexOf("Display #", start + 1)
+        val seg = if (next < 0) out.substring(start) else out.substring(start, next)
+        val ids = Regex("""${Regex.escape(pkg)}/\S+\s+t(\d+)""")
+            .findAll(seg).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
+        return ids.lastOrNull() ?: -1
+    }
+
+    /** 该 taskId 是否还在活动列表（迁移前校验缓存）。 */
+    private suspend fun taskExists(taskId: Int): Boolean {
+        val out = ShizukuBridge.run(controller.appContext, "dumpsys activity activities")
+        return out.contains(" t$taskId}")
+    }
+
+    /**
+     * 是否满足"自动切副屏"（0.8.3，Q3 六条）。interruption() 每 100ms 调、只读内存、零 binder。
+     * 推断意图、误判代价是凭空切屏，所以条件从严、宁可漏不可错。
+     */
+    private fun autoDesktopSwitchReady(): Boolean {
+        val now = System.currentTimeMillis()
+        // ① 主屏 + Shizuku READY（autoSwitchArmed 每步刷新）
+        if (!autoSwitchArmed) return false
+        // ② 目标包有效、非纸盒（桌面已在 updateLastTarget 过滤）
+        val pkg = lastTargetPkg ?: return false
+        if (pkg == selfPackage) return false
+        // ③ 目标 app 最近还在前台（够新）。
+        // R4：长 sleep 期间没有步边界刷新时间戳，30s 新鲜度会误挡；补一条因果
+        // 证明——这次回桌面就是从目标 app 切走的（packageBeforeDesktop==pkg）也成立。
+        val fresh = now - lastTargetAtMs <= TARGET_FRESH_MS
+        val fromTarget = AutoService.get()?.packageBeforeDesktop() == pkg
+        if (!fresh && !fromTarget) return false
+        // ④ 不在"自己刚按 HOME"的抑制窗口
+        if (selfHomeAtMs != 0L && now - selfHomeAtMs < SELF_HOME_SUPPRESS_MS) return false
+        // 失败冷却
+        if (now < autoMoveCooldownUntilMs) return false
+        // ⑤ 回桌面已持续 400ms（防抖，时间戳由无障碍事件写入）
+        val since = AutoService.get()?.desktopSinceMs() ?: 0L
+        if (since == 0L || now - since < DESKTOP_DEBOUNCE_MS) return false
         return true
     }
 
@@ -1225,13 +1416,15 @@ class Agent(
         withContext(Dispatchers.IO) {
             controller.execute(TAP_HOME) { px, py -> OverlayBus.pulse(px, py) }
         }
+        // 标记"自己刚按 HOME"，之后 SELF_HOME_SUPPRESS_MS 内不自动切副屏（0.8.3）
+        selfHomeAtMs = System.currentTimeMillis()
         // 临时值（固定等待），等 A1 / awaitStable 事件驱动落地后替换
         delay(FOREGROUND_YIELD_MS)
         foregroundYielded = true
     }
 
     /** 等待/稳定轮询的结果：正常完成 / 急停 / 通道切换请求（迁移或回迁） */
-    private enum class WaitOutcome { DONE, STOPPED, SWITCH_REQUESTED }
+    private enum class WaitOutcome { DONE, STOPPED, SWITCH_REQUESTED, AUTO_DESKTOP_SWITCH }
 
     /**
      * 统一的中断判定：急停优先于切换（两者不该同时出现）。
@@ -1241,6 +1434,7 @@ class Agent(
         isStopped() -> WaitOutcome.STOPPED
         OverlayBus.moveToVdRequested || OverlayBus.returnFromVdRequested ->
             WaitOutcome.SWITCH_REQUESTED
+        autoDesktopSwitchReady() -> WaitOutcome.AUTO_DESKTOP_SWITCH
         else -> WaitOutcome.DONE
     }
 
@@ -1530,6 +1724,16 @@ class Agent(
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
+
+        // ---- 0.8.3 自动切副屏 ----
+        /** 回到桌面后持续多久才认定是"用户真的回桌面"（防抖） */
+        const val DESKTOP_DEBOUNCE_MS = 900L
+        /** 目标 app 多少毫秒内还在前台才算"够新"，防止拿陈旧目标乱迁 */
+        const val TARGET_FRESH_MS = 30_000L
+        /** Agent 自己按 HOME 后多久内不自动触发（覆盖让开/补 HOME 过渡） */
+        const val SELF_HOME_SUPPRESS_MS = 1_500L
+        /** 自动迁移失败后的冷却，避免停在桌面被反复尝试 */
+        const val AUTO_FAIL_COOLDOWN_MS = 10_000L
 
         /**
          * 普通动作后等界面稳定的参数：
