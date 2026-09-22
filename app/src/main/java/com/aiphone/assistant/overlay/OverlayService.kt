@@ -67,9 +67,15 @@ class OverlayService : Service() {
     /** 含「切到副屏」+「急停」两个按钮的整块面板，坐标重叠判定用它 */
     private var buttonView: View? = null
 
-    /** 急停上方的「切到副屏」按钮 */
+    /** 急停上方的悬浮按钮（主屏时「切到副屏」、副屏时「切回主屏」） */
     private var moveButton: View? = null
     private var moveLabel: TextView? = null
+
+    /**
+     * 按钮当前方向：true = 副屏模式（点它回迁）、false = 主屏模式（点它切副屏）。
+     * 由 Agent 经 updateMoveButton 同步，Service 不自己拿 isVirtualDisplay 猜。
+     */
+    private var moveBackMode = false
 
     /**
      * 点击水波层。全屏、不可触摸、只在有脉冲时绘制。
@@ -417,8 +423,13 @@ class OverlayService : Service() {
             isEnabled = false
             moveButton = this
             setOnClickListener {
-                OverlayBus.requestMoveToVirtualDisplay()
-                label.text = "准备切换 ..." // 即时反馈
+                if (moveBackMode) {
+                    OverlayBus.requestReturnFromVd()
+                    label.text = "准备切回 ..." // 即时反馈
+                } else {
+                    OverlayBus.requestMoveToVirtualDisplay()
+                    label.text = "准备切换 ..." // 即时反馈
+                }
                 isEnabled = false
             }
         }
@@ -469,17 +480,22 @@ class OverlayService : Service() {
     // ------------------------------------------------------------------
 
     /**
-     * 更新「切到副屏」按钮：启用（蓝底）/ 禁用（灰底，带原因）。
+     * 更新悬浮按钮：方向、文案、可点与否由 Agent 给定。
+     * 启用且主屏 = 蓝；启用且副屏 = 绿；禁用 = 灰。
      */
-    fun updateMoveButton(enabled: Boolean, reason: String?) {
+    fun updateMoveButton(enabled: Boolean, text: String, backMode: Boolean) {
         main.post {
             val btn = moveButton ?: return@post
             val label = moveLabel ?: return@post
+            moveBackMode = backMode
             btn.isEnabled = enabled
-            label.text = if (enabled || reason == null) "切到副屏" else "切到副屏（$reason）"
-            (btn.background as? GradientDrawable)?.setColor(
-                Color.parseColor(if (enabled) "#1976D2" else "#616161")
-            )
+            label.text = text
+            val color = when {
+                !enabled -> "#616161"
+                backMode -> "#43A047"
+                else -> "#1976D2"
+            }
+            (btn.background as? GradientDrawable)?.setColor(Color.parseColor(color))
         }
     }
 

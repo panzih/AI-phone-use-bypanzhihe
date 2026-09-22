@@ -48,6 +48,14 @@ class ChannelController(private val context: Context) {
     val isVirtualDisplay: Boolean get() = mode == Mode.VIRTUAL_DISPLAY && display != null
 
     /**
+     * 副屏 displayId；不在副屏模式时为 null。
+     * 回迁第一步先把它抓进局部变量 —— [exitVirtualDisplay] 会把 display 置 null，
+     * 之后就读不到了。
+     */
+    val virtualDisplayId: Int?
+        get() = if (mode == Mode.VIRTUAL_DISPLAY) display?.displayId else null
+
+    /**
      * 切到副屏模式。
      *
      * @param displayId 由 VirtualDisplayManager 建屏后推断出来的 id

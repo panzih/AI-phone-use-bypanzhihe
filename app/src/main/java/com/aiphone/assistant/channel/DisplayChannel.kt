@@ -52,7 +52,7 @@ import kotlinx.coroutines.withContext
  */
 class DisplayChannel(
     private val context: Context,
-    private val displayId: Int,
+    val displayId: Int,
     private val size: Pair<Int, Int>,
 ) : DeviceChannel {
 

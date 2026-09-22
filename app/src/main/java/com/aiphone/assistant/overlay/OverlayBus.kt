@@ -65,13 +65,31 @@ object OverlayBus {
     }
 
     /**
-     * 更新「切到副屏」按钮的可用状态。
-     *
-     * @param enabled 任务运行中且 Shizuku READY 且当前在主屏时为 true
-     * @param reason 不可用时给用户看的原因（"需要先启动 Shizuku"之类）
+     * 悬浮窗上按了「切回主屏」（副屏模式下那个绿按钮）。
+     * Agent 在下一步开头（动作间隙）处理它，和 moveToVdRequested 同一位置。
      */
-    fun updateMoveButton(enabled: Boolean, reason: String? = null) {
-        service?.updateMoveButton(enabled, reason)
+    @Volatile
+    var returnFromVdRequested: Boolean = false
+        private set
+
+    fun requestReturnFromVd() {
+        returnFromVdRequested = true
+    }
+
+    /** Agent 处理完（或判定不能处理）后清掉 */
+    fun clearReturnFromVd() {
+        returnFromVdRequested = false
+    }
+
+    /**
+     * 更新悬浮按钮：方向、文案、可点与否都由 Agent 决定，Service 不自己猜。
+     *
+     * @param enabled 可点为 true
+     * @param text 按钮上完整文案（"切到副屏"、"切到副屏（需 Shizuku）"、"切回主屏"）
+     * @param backMode true = 副屏模式（绿「切回主屏」）；false = 主屏模式（蓝「切到副屏」）
+     */
+    fun updateMoveButton(enabled: Boolean, text: String, backMode: Boolean = false) {
+        service?.updateMoveButton(enabled, text, backMode)
     }
 
     /**

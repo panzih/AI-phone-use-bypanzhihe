@@ -264,6 +264,13 @@ class Agent(
                 if (moved) continue
             }
 
+            // 用户按了「切回主屏」（副屏模式绿按钮）：动作间隙回迁；成功后从下一步起读主屏
+            if (OverlayBus.returnFromVdRequested) {
+                val back = handleReturnToMainScreen()
+                OverlayBus.clearReturnFromVd()
+                if (back) continue
+            }
+
             // 读控件树。这次**不藏悬浮窗** —— 我们自己的节点已经在
             // 解析层按包名过滤掉了，没必要为它闪一下。
             val tree = withContext(Dispatchers.IO) { controller.readUiTree() }
@@ -905,13 +912,94 @@ class Agent(
         return true
     }
 
+    // ------------------------------------------------------------------
+    // 切回主屏（0.8.1）
+    // ------------------------------------------------------------------
+
     /**
-     * 解析主屏（Display #0）顶部 resumed 任务：返回 (taskId, packageName)。
-     * 跑 `dumpsys activity activities`，只看 Display #0 段第一个 topResumedActivity。
+     * 把副屏上正在操作的 app 整栈迁回主屏，切回无障碍通道，再销毁副屏。
+     * [handleMoveToVirtualDisplay] 的反向。调用点同样在每步读控件树**之前**
+     * （动作间隙、没有注入在进行）。
+     *
+     * @return true 已切回主屏；false 没切（原因已给用户看，留在副屏继续）
      */
-    private suspend fun currentMainScreenTask(): Pair<Int, String>? {
+    private suspend fun handleReturnToMainScreen(): Boolean {
+        val ctx = controller.appContext
+        if (!controller.isVirtualDisplay) {
+            logger?.line("已经在主屏运行，忽略重复的回迁请求", "副屏")
+            return false
+        }
+        // exitVirtualDisplay 会把 display 置 null，先把 id 抓进局部
+        val vdId = controller.virtualDisplayId
+        if (vdId == null) {
+            val msg = "回迁失败：读不到副屏编号。"
+            logger?.error(msg, "副屏")
+            listener.onEvent(EventKind.ERROR, msg, "副屏")
+            return false
+        }
+
+        // 1) 副屏顶部任务的包名 + taskId（在已知 vdId 段里找，不猜"第一个非零段"）
+        val top = currentTaskOnDisplay(vdId)
+        if (top == null) {
+            val msg = "回迁失败：没能从副屏读到当前任务（taskId）。"
+            logger?.error(msg, "副屏")
+            listener.onEvent(EventKind.ERROR, msg, "副屏")
+            return false
+        }
+        val (taskId, pkg) = top
+
+        // 2) 先切回主屏无障碍（move-stack 走 shell、与通道无关；先切降级才自洽）
+        OverlayBus.setPhase(AgentPhase.ACTING)
+        controller.exitVirtualDisplay()
+
+        // 3) 整栈迁回主屏；失败降级为「主屏重开应用」
+        val keptStack = moveStack(taskId, 0)
+        if (!keptStack) {
+            logger?.line("整栈回迁失败，将在主屏重开应用（临时内容可能丢失）", "副屏")
+            listener.onEvent(EventKind.THOUGHT, "回迁失败，应用将被重开（临时内容可能丢失） …", "副屏")
+            if (!reopenOnDisplay(pkg, 0)) {
+                // 通道已回主屏、应用又被 force-stop：销毁副屏兜底，再报错
+                val dr = ShizukuBridge.destroyDisplay(ctx)
+                vdCreatedByAgent = false
+                val tail = if (dr >= 0) "（副屏已收回）" else "（副屏没收回，可到副屏调试页手动销毁）"
+                val msg = "在主屏重开应用也失败了，应用已被关闭，需要重新打开$tail。"
+                logger?.error(msg, "副屏")
+                listener.onEvent(EventKind.ERROR, msg, "副屏")
+                return false
+            }
+        }
+
+        // 4) 校验：任务确实回到主屏
+        if (!verifyTaskOnDisplay(taskId, 0)) {
+            logger?.line("回迁后校验没通过（主屏段没找到该任务）", "副屏")
+            listener.onEvent(EventKind.RESULT, "回迁可能没成功，主屏没找到该应用", "副屏")
+        }
+
+        // 5) 任务在主屏但没获焦（顶部还是桌面）：把已有 task 抬到前台，保留深层页
+        if (!isTopResumedOnDisplay(taskId, 0)) {
+            logger?.line("任务已回主屏但没在前台，尝试把它抬到前台", "副屏")
+            bringTaskToFront(taskId, pkg)
+        }
+
+        // 6) 任务确认回主屏后，销毁副屏、清位
+        val dr = ShizukuBridge.destroyDisplay(ctx)
+        vdCreatedByAgent = false
+        if (dr < 0) {
+            logger?.line("副屏没收回（$dr），可到副屏调试页手动销毁", "副屏")
+        }
+
+        logger?.line("已切回主屏（display=0），AI 恢复无障碍操作", "副屏")
+        listener.onEvent(EventKind.ACTION, "已切回主屏运行", "副屏")
+        return true
+    }
+
+    /**
+     * 解析指定 display 段顶部 resumed 任务：返回 (taskId, packageName)。
+     * 只看 Display #<displayId> 段第一个 topResumedActivity，右界到下一个 Display 段。
+     */
+    private suspend fun currentTaskOnDisplay(displayId: Int): Pair<Int, String>? {
         val out = ShizukuBridge.run(controller.appContext, "dumpsys activity activities")
-        val start = out.indexOf("Display #0")
+        val start = out.indexOf("Display #$displayId")
         if (start < 0) return null
         val next = out.indexOf("Display #", start + 1)
         val seg = if (next < 0) out.substring(start) else out.substring(start, next)
@@ -923,6 +1011,38 @@ class Agent(
         val taskId = m.groupValues[2].toIntOrNull() ?: return null
         return taskId to m.groupValues[1]
     }
+
+    /** 该 display 段的 topResumedActivity 是不是这个 task（判断回迁后有没有获焦）。 */
+    private suspend fun isTopResumedOnDisplay(taskId: Int, displayId: Int): Boolean {
+        val out = ShizukuBridge.run(controller.appContext, "dumpsys activity activities")
+        val idx = out.indexOf("Display #$displayId")
+        if (idx < 0) return false
+        val next = out.indexOf("Display #", idx + 1)
+        val seg = if (next < 0) out.substring(idx) else out.substring(idx, next)
+        val line = seg.lineSequence().firstOrNull { it.contains("topResumedActivity=ActivityRecord") }
+            ?: return false
+        return line.contains(" t$taskId}")
+    }
+
+    /**
+     * 把已存在的 task 抬到主屏前台、尽量不重建页面。
+     * 先试 `am task focus`；不行再 resolve launcher 组件、用 NEW_TASK 把现有 task 带上来
+     * （不带 CLEAR_TOP，投递给现有实例、保留深层页）。
+     */
+    private suspend fun bringTaskToFront(taskId: Int, pkg: String) {
+        val ctx = controller.appContext
+        val focusOut = ShizukuBridge.run(ctx, "am task focus $taskId")
+        delay(300)
+        if (focusOut.isBlank() && isTopResumedOnDisplay(taskId, 0)) return
+
+        val resolved = ShizukuBridge.run(ctx, "cmd package resolve-activity --brief $pkg")
+        val component = resolved.lineSequence().map { it.trim() }
+            .firstOrNull { it.startsWith("$pkg/") } ?: return
+        ShizukuBridge.run(ctx, "am start --display 0 -n $component -f 0x10000000")
+    }
+
+    /** 主屏（Display #0）顶部 resumed 任务：currentTaskOnDisplay 的特例。 */
+    private suspend fun currentMainScreenTask(): Pair<Int, String>? = currentTaskOnDisplay(0)
 
     /** 整栈迁移：`am display move-stack <taskId> <displayId>`。成功无输出。 */
     private suspend fun moveStack(taskId: Int, displayId: Int): Boolean {
@@ -964,19 +1084,23 @@ class Agent(
     }
 
     /**
-     * 刷新「切到副屏」按钮的可用状态。
-     * 主屏模式 + Shizuku READY 才可点；否则禁用并写明原因。
+     * 刷新悬浮按钮：
+     * 副屏模式 → 绿「切回主屏」可点；主屏模式 → 蓝「切到副屏」、仅 Shizuku READY 可点。
      */
     private suspend fun refreshMoveButton() {
         if (controller.isVirtualDisplay) {
-            OverlayBus.updateMoveButton(false, "已在副屏")
+            OverlayBus.updateMoveButton(true, "切回主屏", backMode = true)
             return
         }
         when (ShizukuBridge.state(controller.appContext)) {
-            ShizukuBridge.State.READY -> OverlayBus.updateMoveButton(true)
-            ShizukuBridge.State.NOT_INSTALLED -> OverlayBus.updateMoveButton(false, "需 Shizuku")
-            ShizukuBridge.State.NOT_RUNNING -> OverlayBus.updateMoveButton(false, "启动 Shizuku")
-            ShizukuBridge.State.NO_PERMISSION -> OverlayBus.updateMoveButton(false, "需授权")
+            ShizukuBridge.State.READY ->
+                OverlayBus.updateMoveButton(true, "切到副屏")
+            ShizukuBridge.State.NOT_INSTALLED ->
+                OverlayBus.updateMoveButton(false, "切到副屏（需 Shizuku）")
+            ShizukuBridge.State.NOT_RUNNING ->
+                OverlayBus.updateMoveButton(false, "切到副屏（启动 Shizuku）")
+            ShizukuBridge.State.NO_PERMISSION ->
+                OverlayBus.updateMoveButton(false, "切到副屏（需授权）")
         }
     }
 
