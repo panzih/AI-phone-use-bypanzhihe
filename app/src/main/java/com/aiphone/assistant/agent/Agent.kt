@@ -154,6 +154,10 @@ class Agent(
     private val localRuleEngine = LocalRuleEngine()
 
     suspend fun run(task: String) {
+        // 新任务开头无条件清掉上一轮可能残留的通道切换请求，兜住所有入口
+        OverlayBus.clearMoveToVirtualDisplay()
+        OverlayBus.clearReturnFromVd()
+
         // ---- 1. 通道就绪？ ----
         val problem = controller.probe()
         if (problem != null) {
@@ -684,26 +688,44 @@ class Agent(
 
             // ---- 逐个执行（执行 + 等界面稳定 + 动作后验证）----
             val results = ArrayList<String>(p.actions.size)
+            // 因切换通道而完全没执行（没进 results）的动作数；-1 表示没被切换中断
+            var switchPendingCount = -1
             for ((i, action) in p.actions.withIndex()) {
-                if (isStopped()) {
-                    finish(false, "你停止了任务（执行第 $step 步第 ${i + 1} 个动作之前）")
-                    return
+                // 动作间隙统一查中断：急停立刻收尾；切换请求 break、交本步 tail 留痕，
+                // 下一轮 for(step) 开头 261/268 处理迁移/回迁（0.8.2）
+                when (interruption()) {
+                    WaitOutcome.STOPPED -> {
+                        finish(false, "你停止了任务（执行第 $step 步第 ${i + 1} 个动作之前）")
+                        return
+                    }
+                    WaitOutcome.SWITCH_REQUESTED -> {
+                        switchPendingCount = p.actions.size - i
+                        break
+                    }
+                    WaitOutcome.DONE -> {}
                 }
 
                 val single = AgentPrompt.describe(action)
                 OverlayBus.update(step, maxSteps, overlayText(listOf(action)), p.nextHint)
                 val next = p.actions.getOrNull(i + 1)
 
-                // sleep 由这里自己做（协程 delay，可中途急停），不走通道 ——
+                // sleep 由这里自己做（协程 delay，可中途急停/切换），不走通道 ——
                 // 通道里的 Thread.sleep 会把整个线程按住。
                 if (action.kind == TouchKind.WAIT) {
                     OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
                     logger?.line("  $single", "执行")
-                    val completed = awaitWithStop(action.durationMs.toLong())
-                    results.add(if (completed) "$single → 已执行" else "$single → 被中断")
-                    if (!completed) {
-                        finish(false, "你停止了任务（等待中被叫停）")
-                        return
+                    when (awaitWithStop(action.durationMs.toLong())) {
+                        WaitOutcome.DONE -> results.add("$single → 已执行")
+                        WaitOutcome.STOPPED -> {
+                            results.add("$single → 被中断")
+                            finish(false, "你停止了任务（等待中被叫停）")
+                            return
+                        }
+                        WaitOutcome.SWITCH_REQUESTED -> {
+                            results.add("$single → 因切换通道中止")
+                            switchPendingCount = p.actions.size - i - 1
+                            break
+                        }
                     }
                 } else if (action.kind == TouchKind.DISMISS_DIALOG) {
                     // 云端显式下发：端侧在当前页面找安全关闭按钮，找到就点、
@@ -711,9 +733,14 @@ class Agent(
                     // 云端，本批后续预排动作暂不执行（break）
                     logger?.line("  $single", "执行")
                     results.add(handleDismissDialog())
-                    val skipped = p.actions.size - i - 1
-                    if (skipped > 0) {
-                        results.add("dismiss_dialog 后的 $skipped 个动作本轮未执行（已交回云端）")
+                    if (interruption() == WaitOutcome.SWITCH_REQUESTED) {
+                        // dismiss 等待期间用户切了通道：后续动作交给切换流程（0.8.2）
+                        switchPendingCount = p.actions.size - i - 1
+                    } else {
+                        val skipped = p.actions.size - i - 1
+                        if (skipped > 0) {
+                            results.add("dismiss_dialog 后的 $skipped 个动作本轮未执行（已交回云端）")
+                        }
                     }
                     break
                 } else {
@@ -757,10 +784,18 @@ class Agent(
                         // 冷启动慢（软件渲染/重 app）时，刚发出 open_app 就检查，
                         // 界面还停在纸盒会被误判“没切走”而补按 HOME。
                         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                        val after = awaitStable(TouchKind.OPEN_APP)
-                        if (after == null) {
-                            finish(false, "你停止了任务（等待中被叫停）")
-                            return
+                        val sr = awaitStable(TouchKind.OPEN_APP)
+                        when (sr.outcome) {
+                            WaitOutcome.STOPPED -> {
+                                finish(false, "你停止了任务（等待中被叫停）")
+                                return
+                            }
+                            WaitOutcome.SWITCH_REQUESTED -> {
+                                results.add("$single → 因切换通道中止")
+                                switchPendingCount = p.actions.size - i - 1
+                                break
+                            }
+                            WaitOutcome.DONE -> {}
                         }
                         // 启动后仍没切走（包名错/启动失败）才补 HOME，
                         // 避免下一步模型读到纸盒自己的界面。
@@ -775,20 +810,34 @@ class Agent(
                         // 等界面稳定（最后一个动作也等，等价原来的一批收尾），
                         // 拿到稳定指纹后做动作后验证、必要时一次重试
                         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                        val after = awaitStable(action.kind)
-                        if (after == null) {
-                            finish(false, "你停止了任务（等待中被叫停）")
-                            return
+                        val sr = awaitStable(action.kind)
+                        when (sr.outcome) {
+                            WaitOutcome.STOPPED -> {
+                                finish(false, "你停止了任务（等待中被叫停）")
+                                return
+                            }
+                            WaitOutcome.SWITCH_REQUESTED -> {
+                                results.add("$single → 因切换通道中止")
+                                switchPendingCount = p.actions.size - i - 1
+                                break
+                            }
+                            WaitOutcome.DONE ->
+                                results.add(verifyAction(action, single, beforeNodes, sr.fingerprint ?: ""))
                         }
-                        results.add(verifyAction(action, single, beforeNodes, after))
                     }
                 }
             }
 
-            val resultText = when (results.size) {
+            val baseText = when (results.size) {
                 0 -> "没有动作被执行"
                 1 -> results[0]
                 else -> "共 ${results.size} 个动作：" + results.joinToString("；")
+            }
+            // 半截批次留痕：标明因切换通道中止、还有多少动作没执行（0.8.2 验收）
+            val resultText = if (switchPendingCount > 0) {
+                "$baseText（因切换通道中止，剩余 $switchPendingCount 个动作未执行）"
+            } else {
+                baseText
             }
             logger?.recordStep(
                 step = step,
@@ -811,6 +860,7 @@ class Agent(
             // ---- 这批动作就是任务收尾（模型给动作的同时说 finished）----
             // 动作已经逐个执行完，这里再正常结束，不再请求下一步。
             if (p.finished) {
+                // 挂起的切换请求由 finish() 无条件清理，无需在此分支处理
                 val summary = p.summary.ifBlank { "模型判断任务已完成" }
                 logger?.line("任务结束：$summary", "任务")
                 listener.onEvent(EventKind.RESULT, summary, "完成")
@@ -1131,7 +1181,7 @@ class Agent(
         if (err != null) return "关闭弹窗：点击失败（$err）"
 
         val after = awaitStable(TouchKind.TAP)
-        if (after == null) return "关闭弹窗：等待中被中断"
+        if (after.outcome != WaitOutcome.DONE) return "关闭弹窗：等待中被中断"
         return "关闭弹窗：${r.reason}"
     }
 
@@ -1180,21 +1230,37 @@ class Agent(
         foregroundYielded = true
     }
 
+    /** 等待/稳定轮询的结果：正常完成 / 急停 / 通道切换请求（迁移或回迁） */
+    private enum class WaitOutcome { DONE, STOPPED, SWITCH_REQUESTED }
+
     /**
-     * 等待，但可以中途响应急停。
+     * 统一的中断判定：急停优先于切换（两者不该同时出现）。
+     * 切换请求 = 用户点了「切到副屏」或「切回主屏」。
+     */
+    private fun interruption(): WaitOutcome = when {
+        isStopped() -> WaitOutcome.STOPPED
+        OverlayBus.moveToVdRequested || OverlayBus.returnFromVdRequested ->
+            WaitOutcome.SWITCH_REQUESTED
+        else -> WaitOutcome.DONE
+    }
+
+    /**
+     * 等待，但可以中途响应急停 / 通道切换。
      *
      * 一次 `delay(10000)` 会让"按了急停却还要等十秒"变成常态，
-     * 所以拆成小段轮询。@return false 表示被叫停
+     * 所以拆成小段轮询；每段都顺手查切换请求，长 sleep 中也能立刻
+     * 切到副屏 / 切回主屏（0.8.2）。
      */
-    private suspend fun awaitWithStop(ms: Long): Boolean {
+    private suspend fun awaitWithStop(ms: Long): WaitOutcome {
         var left = ms
         while (left > 0) {
-            if (isStopped()) return false
+            val out = interruption()
+            if (out != WaitOutcome.DONE) return out
             val chunk = minOf(left, STOP_POLL_MS)
             delay(chunk)
             left -= chunk
         }
-        return !isStopped()
+        return interruption()
     }
 
     /** 这个动作要不要做“动作后验证”：第一版只验证最可靠的导航类点击/返回 */
@@ -1243,8 +1309,9 @@ class Agent(
             return "$single → 已执行但界面无变化，可能没点中（重试失败：$retryError）"
         }
         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-        val after2 = awaitStable(action.kind)
-        if (after2 == null) return "$single → 重试中被中断"
+        val r2 = awaitStable(action.kind)
+        if (r2.outcome != WaitOutcome.DONE) return "$single → 重试中被中断"
+        val after2 = r2.fingerprint ?: ""
         return if (after2 != before) {
             logger?.line("  $single → 重试后界面已变化", "执行")
             "$single → 已执行（首次未生效，重试后生效）"
@@ -1255,17 +1322,23 @@ class Agent(
     }
 
     /**
-     * 等当前界面稳定，可被急停打断。
+     * awaitStable 的结果：outcome 区分正常/急停/切换；DONE 时 fingerprint 有效。
+     */
+    private data class StableResult(
+        val outcome: WaitOutcome,
+        val fingerprint: String? = null,
+    )
+
+    /**
+     * 等当前界面稳定，可被急停 / 通道切换打断。
      *
      * 判据：`max(最小起步, 连续两次指纹相同)` 且不超过 hardCap —— 动作刚
      * 发出时界面还没开始变，立刻采样会误判“已稳定”，所以先等一个最小起步；
      * 之后每 [STABLE_POLL_MS] 取一次控件树算指纹，连续两次相同就认为界面
      * 停了。时钟/进度条这类每秒变字的页面可能永远不稳定，hardCap 是唯一
-     * 出口。全程走 [awaitWithStop]，急停能立刻打断。
-     *
-     * @return 稳定（或到 hardCap）时的页面指纹；null 表示被急停叫停
+     * 出口。全程走 [awaitWithStop]，急停 / 切换都能立刻打断（0.8.2）。
      */
-    private suspend fun awaitStable(kind: TouchKind): String? {
+    private suspend fun awaitStable(kind: TouchKind): StableResult {
         val start = System.nanoTime()
         fun elapsedMs() = (System.nanoTime() - start) / 1_000_000L
 
@@ -1274,27 +1347,29 @@ class Agent(
             else -> STABLE_MIN_MS to STABLE_HARD_MS
         }
 
-        // 最小起步（可急停），随后采第一次指纹
-        if (!awaitWithStop(minFloor)) return null
+        // 最小起步（可中断），随后采第一次指纹
+        val floor = awaitWithStop(minFloor)
+        if (floor != WaitOutcome.DONE) return StableResult(floor)
         var fp = PageFingerprint.fingerprint(
             withContext(Dispatchers.IO) { controller.parseNodes() }
         )
-        if (isStopped()) return null
+        interruption().let { if (it != WaitOutcome.DONE) return StableResult(it) }
 
         while (true) {
             // 轮询间隔（不越过 hardCap），再采样比对
             val waitMs = minOf(STABLE_POLL_MS, hardCap - elapsedMs())
-            if (!awaitWithStop(waitMs)) return null
+            val w = awaitWithStop(waitMs)
+            if (w != WaitOutcome.DONE) return StableResult(w)
 
             val newFp = PageFingerprint.fingerprint(
                 withContext(Dispatchers.IO) { controller.parseNodes() }
             )
-            if (isStopped()) return null
+            interruption().let { if (it != WaitOutcome.DONE) return StableResult(it) }
             // 连续两次指纹相同 → 稳定
-            if (newFp == fp) return newFp
+            if (newFp == fp) return StableResult(WaitOutcome.DONE, newFp)
             fp = newFp
             // 一直不稳定 → hardCap 兜底，返回当前指纹
-            if (elapsedMs() >= hardCap) return fp
+            if (elapsedMs() >= hardCap) return StableResult(WaitOutcome.DONE, fp)
         }
     }
 
@@ -1305,6 +1380,10 @@ class Agent(
     }
 
     private suspend fun finish(success: Boolean, message: String) {
+        // 无条件清掉挂起的通道切换请求，兜住所有终止路径（0.8.2 审阅加固）
+        OverlayBus.clearMoveToVirtualDisplay()
+        OverlayBus.clearReturnFromVd()
+
         // 收尾：只要还在副屏、或建过副屏（哪怕迁移失败提前返回），都销毁，不留残屏（0.8.0 验收⑤）
         if (controller.isVirtualDisplay || vdCreatedByAgent) {
             if (controller.isVirtualDisplay) controller.exitVirtualDisplay()

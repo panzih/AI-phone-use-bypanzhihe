@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 35      // 0.8.1：副屏→主屏手动回迁
-        versionName = "0.8.1"
+        versionCode = 36      // 0.8.2：长 sleep / 长动作可被通道切换与急停中断
+        versionName = "0.8.2"
     }
 
     /**
