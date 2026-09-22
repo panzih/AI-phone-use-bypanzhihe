@@ -49,6 +49,32 @@ object OverlayBus {
     }
 
     /**
+     * 悬浮窗上按了「切到副屏」。Agent 在下一步开头（动作间隙）处理它。
+     */
+    @Volatile
+    var moveToVdRequested: Boolean = false
+        private set
+
+    fun requestMoveToVirtualDisplay() {
+        moveToVdRequested = true
+    }
+
+    /** Agent 处理完（或判定不能处理）后清掉 */
+    fun clearMoveToVirtualDisplay() {
+        moveToVdRequested = false
+    }
+
+    /**
+     * 更新「切到副屏」按钮的可用状态。
+     *
+     * @param enabled 任务运行中且 Shizuku READY 且当前在主屏时为 true
+     * @param reason 不可用时给用户看的原因（"需要先启动 Shizuku"之类）
+     */
+    fun updateMoveButton(enabled: Boolean, reason: String? = null) {
+        service?.updateMoveButton(enabled, reason)
+    }
+
+    /**
      * 正在录制「操作记录」。
      *
      * 录制期间没有 Agent 在跑，悬浮窗上那个按钮的含义变成了"停止录制"，

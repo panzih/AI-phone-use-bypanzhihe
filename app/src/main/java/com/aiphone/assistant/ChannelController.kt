@@ -52,6 +52,9 @@ class ChannelController(private val context: Context) {
      *
      * @param displayId 由 VirtualDisplayManager 建屏后推断出来的 id
      */
+    /** 暴露 context：ShizukuBridge 是 object、调用它的方法要 context */
+    val appContext: android.content.Context get() = context
+
     fun enterVirtualDisplay(displayId: Int, size: Pair<Int, Int>) {
         display?.release()
         display = DisplayChannel(context, displayId, size)

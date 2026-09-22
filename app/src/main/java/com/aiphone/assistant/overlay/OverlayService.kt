@@ -65,6 +65,13 @@ class OverlayService : Service() {
     private var statusView: View? = null
     private var buttonView: View? = null
 
+    /** 急停按钮本体。坐标重叠判定用它（buttonView 现在是含两个按钮的面板） */
+    private var stopButtonHolder: View? = null
+
+    /** 急停上方的「切到副屏」按钮 */
+    private var moveButton: View? = null
+    private var moveLabel: TextView? = null
+
     /**
      * 点击水波层。全屏、不可触摸、只在有脉冲时绘制。
      *
@@ -224,7 +231,7 @@ class OverlayService : Service() {
         if (statusView != null) return
 
         val card = buildStatusCard()
-        val button = buildStopButton()
+        val button = buildButtonPanel()
         val ripple = RippleView(this)
 
         // 状态卡用**固定尺寸**，不用 WRAP_CONTENT。
@@ -372,6 +379,52 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * 底部按钮面板：上面「切到副屏」、下面「急停」，垂直排列。
+     * 一个窗口装两个按钮，天然保证「切到副屏」在急停正上方。
+     */
+    private fun buildButtonPanel(): View {
+        val move = buildMoveButton()
+        val stop = buildStopButton()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(move)
+            addView(
+                stop,
+                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) },
+            )
+        }
+    }
+
+    /** 急停上方的「切到副屏」按钮。默认禁用，由 Agent 按 Shizuku 状态开启 */
+    private fun buildMoveButton(): View {
+        val label = TextView(this).apply {
+            text = "切到副屏"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+        }
+        moveLabel = label
+        return LinearLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(Color.parseColor("#616161")) // 初始禁用灰
+            }
+            elevation = dp(6).toFloat()
+            addView(label)
+            isClickable = true
+            isEnabled = false
+            moveButton = this
+            setOnClickListener {
+                OverlayBus.requestMoveToVirtualDisplay()
+                label.text = "准备切换 ..." // 即时反馈
+                isEnabled = false
+            }
+        }
+    }
+
     /** 底部居中的红色急停按钮 */
     private fun buildStopButton(): View {
         val label = TextView(this).apply {
@@ -384,6 +437,7 @@ class OverlayService : Service() {
         stopLabel = label
 
         return LinearLayout(this).apply {
+            stopButtonHolder = this
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
                 setColor(Color.parseColor("#D32F2F"))
@@ -415,6 +469,21 @@ class OverlayService : Service() {
     // ------------------------------------------------------------------
     // 给 OverlayBus 调
     // ------------------------------------------------------------------
+
+    /**
+     * 更新「切到副屏」按钮：启用（蓝底）/ 禁用（灰底，带原因）。
+     */
+    fun updateMoveButton(enabled: Boolean, reason: String?) {
+        main.post {
+            val btn = moveButton ?: return@post
+            val label = moveLabel ?: return@post
+            btn.isEnabled = enabled
+            label.text = if (enabled || reason == null) "切到副屏" else "切到副屏（$reason）"
+            (btn.background as? GradientDrawable)?.setColor(
+                Color.parseColor(if (enabled) "#1976D2" else "#616161")
+            )
+        }
+    }
 
     /**
      * 显示 / 隐藏（截图和注入前后调）。
@@ -494,7 +563,7 @@ class OverlayService : Service() {
      * 用户才能看到"正在操作手机"。
      */
     fun overlapsStopButton(x: Int, y: Int): Boolean {
-        val v = buttonView ?: return false
+        val v = stopButtonHolder ?: return false
         if (v.visibility != View.VISIBLE) return false
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)

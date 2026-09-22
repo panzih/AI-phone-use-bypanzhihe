@@ -10,6 +10,7 @@ import com.aiphone.assistant.log.RunLogger
 import com.aiphone.assistant.overlay.AgentPhase
 import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.skill.SkillRegistry
+import com.aiphone.assistant.shell.ShizukuBridge
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
 import kotlinx.coroutines.Dispatchers
@@ -244,6 +245,16 @@ class Agent(
                 if (it.first > 0 && it.second > 0) { w = it.first; h = it.second }
             }
             val foreground = withContext(Dispatchers.IO) { controller.currentPackage() }
+
+            // 刷新「切到副屏」按钮：仅主屏模式 + Shizuku READY 时可点
+            refreshMoveButton()
+
+            // 用户按了「切到副屏」：在动作间隙完成迁移；成功后从下一步起读副屏
+            if (OverlayBus.moveToVdRequested) {
+                val moved = handleMoveToVirtualDisplay()
+                OverlayBus.clearMoveToVirtualDisplay()
+                if (moved) continue
+            }
 
             // 读控件树。这次**不藏悬浮窗** —— 我们自己的节点已经在
             // 解析层按包名过滤掉了，没必要为它闪一下。
@@ -800,8 +811,157 @@ class Agent(
     }
 
     // ------------------------------------------------------------------
-    // 内部
+    // 切到副屏（0.8.0）
     // ------------------------------------------------------------------
+
+    /**
+     * 把主屏上正在操作的 app 整栈迁到新建副屏，并切到副屏通道。
+     *
+     * 调用点在每步读控件树**之前**（动作间隙、没有注入在进行），
+     * 所以通道切换安全，不会在一次注入中途 release 旧通道。
+     *
+     * @return true 已切到副屏；false 没切（原因已给用户看，留在主屏继续）
+     */
+    private suspend fun handleMoveToVirtualDisplay(): Boolean {
+        val ctx = controller.appContext
+        if (controller.isVirtualDisplay) {
+            logger?.line("已经在副屏运行，忽略重复的切换请求", "副屏")
+            return false
+        }
+        // 切之前先抓主屏物理尺寸（副屏照抄它），不依赖 run 的局部 w/h
+        val mainSize = controller.screenSize()?.takeIf { it.first > 0 && it.second > 0 }
+        if (mainSize == null) {
+            logger?.error("迁移失败：拿不到主屏分辨率。", "副屏")
+            return false
+        }
+
+        // 1) 主屏顶部任务的包名 + taskId
+        val top = currentMainScreenTask()
+        if (top == null) {
+            val msg = "迁移失败：没能从系统读到当前前台任务（taskId）。"
+            logger?.error(msg, "副屏")
+            listener.onEvent(EventKind.ERROR, msg, "副屏")
+            return false
+        }
+        val (taskId, pkg) = top
+        if (pkg == selfPackage) {
+            val msg = "请先让 AI 打开要操作的应用，再切到副屏（现在前台还是纸盒自己）。"
+            logger?.line(msg, "副屏")
+            listener.onEvent(EventKind.THOUGHT, msg, "副屏")
+            return false
+        }
+
+        // 2) 建副屏（ShellService 内部已有则复用）
+        OverlayBus.setPhase(AgentPhase.ACTING)
+        val vdId = ShizukuBridge.createDisplay(ctx)
+        if (vdId < 0) {
+            val why = ShizukuBridge.lastError ?: "未知原因"
+            val msg = "建副屏失败，留在主屏继续：$why"
+            logger?.error(msg, "副屏")
+            listener.onEvent(EventKind.ERROR, msg, "副屏")
+            return false
+        }
+
+        // 3) 整栈迁移；失败则降级为「重开应用」
+        val keptStack = moveStack(taskId, vdId)
+        if (!keptStack) {
+            logger?.line("整栈迁移失败，将重开应用（临时内容可能丢失）", "副屏")
+            listener.onEvent(EventKind.THOUGHT, "迁移失败，正在副屏重开应用 …", "副屏")
+            if (!reopenOnDisplay(pkg, vdId)) {
+                val msg = "在副屏重开应用也失败了，留在主屏继续。"
+                logger?.error(msg, "副屏")
+                listener.onEvent(EventKind.ERROR, msg, "副屏")
+                return false
+            }
+        }
+
+        // 4) 校验：整栈迁移时该 task 确实到了新 display
+        if (keptStack && !verifyTaskOnDisplay(taskId, vdId)) {
+            logger?.line("迁移后校验没通过，继续按副屏模式跑", "副屏")
+        }
+
+        // 5) 主屏回桌面（必须在切通道**前**，HOME 走主屏无障碍）
+        pressHomeToYield()
+
+        // 6) 切通道（此刻无注入在进行）
+        controller.enterVirtualDisplay(vdId, mainSize)
+
+        logger?.line("已切到副屏（display=$vdId），AI 改用截图 + 坐标操作", "副屏")
+        listener.onEvent(EventKind.ACTION, "已切到副屏运行", "副屏")
+        return true
+    }
+
+    /**
+     * 解析主屏（Display #0）顶部 resumed 任务：返回 (taskId, packageName)。
+     * 跑 `dumpsys activity activities`，只看 Display #0 段第一个 topResumedActivity。
+     */
+    private suspend fun currentMainScreenTask(): Pair<Int, String>? {
+        val out = ShizukuBridge.run(controller.appContext, "dumpsys activity activities")
+        val start = out.indexOf("Display #0")
+        if (start < 0) return null
+        val next = out.indexOf("Display #", start + 1)
+        val seg = if (next < 0) out.substring(start) else out.substring(start, next)
+        val line = seg.lineSequence().firstOrNull { it.contains("topResumedActivity=ActivityRecord") }
+            ?: return null
+        // topResumedActivity=ActivityRecord{93e952e u0 com.android.settings/.SubSettings t190}
+        val m = Regex("""ActivityRecord\{\S+\s+\S+\s+([\w.]+)/\S+\s+t(\d+)\}""").find(line)
+            ?: return null
+        val taskId = m.groupValues[2].toIntOrNull() ?: return null
+        return taskId to m.groupValues[1]
+    }
+
+    /** 整栈迁移：`am display move-stack <taskId> <displayId>`。成功无输出。 */
+    private suspend fun moveStack(taskId: Int, displayId: Int): Boolean {
+        val out = ShizukuBridge.run(
+            controller.appContext,
+            "am display move-stack $taskId $displayId",
+        )
+        val ok = out.isBlank()
+        if (!ok) logger?.line("move-stack 输出：${out.trim()}", "副屏")
+        return ok
+    }
+
+    /** 校验 task 是否已经在指定 display 的段落里。 */
+    private suspend fun verifyTaskOnDisplay(taskId: Int, displayId: Int): Boolean {
+        val out = ShizukuBridge.run(controller.appContext, "dumpsys activity activities")
+        val idx = out.indexOf("Display #$displayId")
+        if (idx < 0) return false
+        return out.substring(idx).contains(" t$taskId}")
+    }
+
+    /**
+     * 降级：force-stop 后在副屏重开应用。
+     * 先 `cmd package resolve-activity` 拿启动组件，再 start 到副屏。
+     */
+    private suspend fun reopenOnDisplay(pkg: String, displayId: Int): Boolean {
+        val ctx = controller.appContext
+        ShizukuBridge.run(ctx, "am force-stop $pkg")
+        val resolved = ShizukuBridge.run(ctx, "cmd package resolve-activity --brief $pkg")
+        val component = resolved.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("$pkg/") }
+            ?: return false
+        val out = ShizukuBridge.startOnDisplay(ctx, component, displayId)
+        return out.isBlank() ||
+            (!out.contains("Error", true) && !out.contains("Exception", true))
+    }
+
+    /**
+     * 刷新「切到副屏」按钮的可用状态。
+     * 主屏模式 + Shizuku READY 才可点；否则禁用并写明原因。
+     */
+    private suspend fun refreshMoveButton() {
+        if (controller.isVirtualDisplay) {
+            OverlayBus.updateMoveButton(false, "已在副屏")
+            return
+        }
+        when (ShizukuBridge.state(controller.appContext)) {
+            ShizukuBridge.State.READY -> OverlayBus.updateMoveButton(true)
+            ShizukuBridge.State.NOT_INSTALLED -> OverlayBus.updateMoveButton(false, "需 Shizuku")
+            ShizukuBridge.State.NOT_RUNNING -> OverlayBus.updateMoveButton(false, "启动 Shizuku")
+            ShizukuBridge.State.NO_PERMISSION -> OverlayBus.updateMoveButton(false, "需授权")
+        }
+    }
 
     /**
      * 执行云端显式下发的“关闭弹窗”：端侧在当前页面找安全关闭按钮，
@@ -997,13 +1157,22 @@ class Agent(
         }
     }
 
-    private fun fail(message: String, label: String) {
+    private suspend fun fail(message: String, label: String) {
         logger?.error(message, label)
         listener.onEvent(EventKind.ERROR, message, label)
         finish(false, message)
     }
 
-    private fun finish(success: Boolean, message: String) {
+    private suspend fun finish(success: Boolean, message: String) {
+        // 收尾：若还在副屏，切回无障碍并销毁副屏，不留残屏（0.8.0 验收⑤）
+        if (controller.isVirtualDisplay) {
+            controller.exitVirtualDisplay()
+            val dr = ShizukuBridge.destroyDisplay(controller.appContext)
+            logger?.line(
+                if (dr >= 0) "副屏已随任务结束销毁" else "副屏销毁没成功（$dr），可到副屏调试页手动销毁",
+                "副屏",
+            )
+        }
         OverlayBus.setPhase(AgentPhase.IDLE)
         val total = promptTokens + completionTokens
         val cacheTotal = cacheHitTokens + cacheMissTokens
