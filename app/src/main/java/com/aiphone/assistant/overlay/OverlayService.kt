@@ -63,10 +63,9 @@ class OverlayService : Service() {
     private val main = Handler(Looper.getMainLooper())
 
     private var statusView: View? = null
-    private var buttonView: View? = null
 
-    /** 急停按钮本体。坐标重叠判定用它（buttonView 现在是含两个按钮的面板） */
-    private var stopButtonHolder: View? = null
+    /** 含「切到副屏」+「急停」两个按钮的整块面板，坐标重叠判定用它 */
+    private var buttonView: View? = null
 
     /** 急停上方的「切到副屏」按钮 */
     private var moveButton: View? = null
@@ -437,7 +436,6 @@ class OverlayService : Service() {
         stopLabel = label
 
         return LinearLayout(this).apply {
-            stopButtonHolder = this
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
                 setColor(Color.parseColor("#D32F2F"))
@@ -556,14 +554,15 @@ class OverlayService : Service() {
     }
 
     /**
-     * 这个坐标是不是压在底部急停按钮上。
+     * 这个坐标是不是压在底部按钮面板（「切到副屏」+「急停」）上。
      *
-     * 按钮是可触摸窗口，注入的点击落在它上面会被它吃掉。
-     * 只有真重叠时才需要把悬浮窗藏起来 —— 其余时候留着，
+     * 面板是可触摸窗口，注入的点击落在它上面会被它吃掉（点到急停还会把
+     * 自己的任务停掉、点到切副屏会中途凭空迁移）。两个按钮都要算，
+     * 只有真重叠时才把悬浮窗藏起来 —— 其余时候留着，
      * 用户才能看到"正在操作手机"。
      */
-    fun overlapsStopButton(x: Int, y: Int): Boolean {
-        val v = stopButtonHolder ?: return false
+    fun overlapsOverlayButtons(x: Int, y: Int): Boolean {
+        val v = buttonView ?: return false
         if (v.visibility != View.VISIBLE) return false
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)

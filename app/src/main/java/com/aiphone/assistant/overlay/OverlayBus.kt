@@ -117,15 +117,15 @@ object OverlayBus {
     }
 
     /**
-     * 某个坐标是不是落在底部那个急停按钮上。
+     * 某个坐标是不是落在底部按钮面板（「切到副屏」+「急停」）上。
      *
-     * 注入**点击**之前用得上：按钮是可触摸窗口，如果模型给的坐标正好
-     * 落在它上面，这一下会被按钮吃掉 —— 甚至点到"急停"把自己的任务停掉。
-     * 只有真重叠时才需要把悬浮窗藏起来，其余时候让它留着，
+     * 注入**点击**之前用得上：面板是可触摸窗口，如果模型给的坐标正好
+     * 落在它上面，这一下会被吃掉 —— 点到急停会停掉任务、点到切副屏会
+     * 中途迁移，两个按钮都要算。只有真重叠时才藏悬浮窗，其余时候让它留着，
      * 用户才能看到"正在操作手机"这个状态。
      */
-    fun overlapsStopButton(x: Int, y: Int): Boolean =
-        service?.overlapsStopButton(x, y) ?: false
+    fun overlapsOverlayButtons(x: Int, y: Int): Boolean =
+        service?.overlapsOverlayButtons(x, y) ?: false
 
     /**
      * 更新左上角的状态卡。

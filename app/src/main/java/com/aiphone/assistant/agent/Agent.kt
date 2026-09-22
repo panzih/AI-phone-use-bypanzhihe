@@ -727,7 +727,7 @@ class Agent(
                     // 注入前**只在真会撞上急停按钮时**才藏。
                     // 状态卡本身是 FLAG_NOT_TOUCHABLE，永远不会吃点击，
                     // 所以只需要担心按钮那一小块。
-                    val mustHide = touchesStopButton(action)
+                    val mustHide = touchesOverlayButtons(action)
                     if (mustHide) {
                         OverlayBus.hide()
                         delay(OVERLAY_SETTLE_MS)
@@ -995,7 +995,7 @@ class Agent(
         // 找到安全按钮：非 open_app，执行前先按需让开前台，避免点到纸盒自己
         yieldForegroundIfNeeded()
         val tap = TouchAction(TouchKind.TAP, targetIndex = target.index)
-        val mustHide = touchesStopButton(tap)
+        val mustHide = touchesOverlayButtons(tap)
         if (mustHide) {
             OverlayBus.hide()
             delay(OVERLAY_SETTLE_MS)
@@ -1220,17 +1220,17 @@ class Agent(
     }
 
     /**
-     * 这个动作的路径会不会压到底部急停按钮上。
+     * 这个动作的路径会不会压到底部按钮面板（「切到副屏」+「急停」）上。
      *
-     * 按钮只占底部中间一小块，绝大多数点击都碰不到它 ——
+     * 面板只占底部中间一小块，绝大多数点击都碰不到它 ——
      * 所以大多数步骤里悬浮窗可以一直留着，用户能看见"正在操作手机"。
      */
-    private fun touchesStopButton(action: TouchAction): Boolean {
-        if (OverlayBus.overlapsStopButton(action.x, action.y)) return true
-        // 滑动/拖拽/甩动要连终点一起看，路径可能横穿按钮
+    private fun touchesOverlayButtons(action: TouchAction): Boolean {
+        if (OverlayBus.overlapsOverlayButtons(action.x, action.y)) return true
+        // 滑动/拖拽/甩动要连终点一起看，路径可能横穿面板
         return when (action.kind) {
             TouchKind.SWIPE, TouchKind.FLICK, TouchKind.DRAG ->
-                OverlayBus.overlapsStopButton(action.x2, action.y2)
+                OverlayBus.overlapsOverlayButtons(action.x2, action.y2)
             else -> false
         }
     }
