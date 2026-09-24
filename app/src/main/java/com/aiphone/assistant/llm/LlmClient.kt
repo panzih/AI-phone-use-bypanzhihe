@@ -1,6 +1,7 @@
 package com.aiphone.assistant.llm
 
 import com.aiphone.assistant.data.ThinkingMode
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -194,6 +195,11 @@ class LlmClient(private val cfg: LlmConfig) {
             return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个。")
         }
 
+        // 公网明文 HTTP 警告：API Key 会明文经过网络。
+        // 本地/局域网地址（localhost、127.0.0.1、10.0.2.2、192.168.x.x、10.x.x.x、172.16-31.x.x）
+        // 是本地模型服务的常见场景，不警告。
+        warnIfPublicHttp(cfg.baseUrl)
+
         // 和上一次请求比对前缀。这一步很便宜（只比指纹），
         // 但它是"缓存为什么没命中"这个问题唯一能自己回答的部分
         val fingerprints = fingerprint(system, history)
@@ -257,6 +263,30 @@ class LlmClient(private val cfg: LlmConfig) {
             base.endsWith("/chat/completions") -> base
             base.endsWith("/v1") -> "$base/chat/completions"
             else -> "$base/v1/chat/completions"
+        }
+    }
+
+    /**
+     * 公网明文 HTTP 警告。
+     *
+     * 本地/局域网地址是本地模型服务的常见场景，不警告；
+     * 公网 http:// 地址会把 API Key 明文传出去，打一条 warning 提醒。
+     * 只在第一次遇到时打（用一个标志位，避免每步都刷屏）。
+     */
+    private var httpWarned = false
+
+    private fun warnIfPublicHttp(baseUrl: String) {
+        if (httpWarned) return
+        val url = baseUrl.trim().lowercase()
+        if (!url.startsWith("http://")) return
+        // 提取 host 部分
+        val host = url.removePrefix("http://").substringBefore('/').substringBefore(':')
+        val isLocal = host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2" ||
+            host.startsWith("192.168.") || host.startsWith("10.") ||
+            (host.startsWith("172.") && host.substringAfter("172.").substringBefore(".").toIntOrNull() in 16..31)
+        if (!isLocal) {
+            Log.w("LlmClient", "⚠️ 正在使用公网明文 HTTP 地址（$baseUrl），API Key 会明文经过网络。建议改用 HTTPS。")
+            httpWarned = true
         }
     }
 

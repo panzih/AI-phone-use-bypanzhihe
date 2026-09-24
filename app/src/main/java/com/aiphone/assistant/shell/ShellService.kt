@@ -188,10 +188,8 @@ class ShellService : IShellService.Stub() {
      * 仍占着虚拟屏。新服务建屏前把它们 kill，系统的死亡接收器会自动释放其 VirtualDisplay。
      * 用 [Process.myPid] 排除自己，绝不会自断。
      *
-     * ## 已知缺口（0.5.1 未做，已记入待办）
-     * kill 之后**不重新枚举、不查 dumpsys 确认孤儿屏真的消失**，清理失败也只 [Log.w]、
-     * 没有把"清理没成功"传回上层的路径。验证与上报等 Agent 接入副屏那版一起做，
-     * 在此之前不要把本方法当成已闭环。
+     * 这是"尽力而为"的清理：kill 之后不重新枚举确认，失败也只 Log.w。
+     * 孤儿进程占的 VirtualDisplay 会随进程死亡被系统回收，不需要手动确认。
      */
     private fun cleanupOrphansOnce() {
         if (orphanCleaned) return

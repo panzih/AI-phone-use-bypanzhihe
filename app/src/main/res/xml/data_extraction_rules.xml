@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  数据提取规则（Android 12+ 云备份 / 传输）。
+
+  allowBackup=false 只挡住 adb backup；Android 12 起的云备份和设备到设备
+  传输由这个文件控制。SharedPreferences 里存了 API Key，绝不能被备份走，
+  所以这里把所有数据都排除。
+
+  以后如果有需要备份的设置（比如思考模式偏好），可以单独加 <include>，
+  但 API Key 所在的 sp 文件必须永远在排除里。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+    </device-transfer>
+</data-extraction-rules>

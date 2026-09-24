@@ -1,0 +1,29 @@
+# ============================================================
+# 纸盒 —— release 混淆规则
+# ============================================================
+
+# ---------- 通用 ----------
+# 保留 Kotlin metadata（反射、序列化需要）
+-keep class kotlin.Metadata { *; }
+-keepattributes *Annotation*, InnerClasses, Signature, EnclosingMethod
+
+# 保留应用入口
+-keep class com.aiphone.assistant.MainActivity { *; }
+
+# ---------- Shizuku ----------
+# Shizuku 通过 binder 跨进程通信，混淆会断接口
+-keep class moe.shizuku.** { *; }
+-keep interface moe.shizuku.** { *; }
+-keep class rikka.shizuku.** { *; }
+
+# ---------- AIDL ----------
+-keep class com.aiphone.assistant.shell.IShellService { *; }
+
+# ---------- Compose ----------
+# Compose 库自带 consumer rules，这里只保留可能被反射用到的
+-keep class * extends androidx.compose.runtime.Composable
+
+# ---------- 调试时取消混淆（临时）----------
+# 开发阶段 release 也不混淆，方便排查问题。
+# 正式发布时把下面这行删掉，并充分测试。
+-dontobfuscate

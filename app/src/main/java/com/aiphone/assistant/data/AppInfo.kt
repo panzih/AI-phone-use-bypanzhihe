@@ -23,7 +23,7 @@ object AppInfo {
      * 仓库建好之后把地址填这里，比如
      * `https://github.com/你的用户名/纸盒`
      */
-    const val REPO_URL = ""
+    const val REPO_URL = "https://github.com/panzih/AI-phone-use-bypanzhihe"
 
     /**
      * 作者的 B 站主页。

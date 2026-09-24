@@ -2,7 +2,7 @@
 <!--
   网络安全配置。
 
-  ## 为什么必须放宽明文 HTTP
+  ## 为什么允许明文 HTTP
 
   Android 9（API 28）起默认禁止明文 HTTP，这是好事 ——
   但对我们这个工具是个硬伤：用户很可能把接口地址填成局域网里的
@@ -17,12 +17,12 @@
 
   允许明文意味着：如果用户把地址填成 http:// 开头的公网地址，
   **API Key 会以明文经过网络**。这是用户自己的选择 ——
-  地址是他手填的，我们能做的是在界面上把这件事说清楚。
+  地址是他手填的。LlmClient 里会对公网 HTTP 地址打警告日志，
+  提醒用户这有风险。
 
-  ## 真要分发时应该收紧
-
-  把 base-config 改成 cleartextTrafficPermitted="false"，
-  只给 localhost / 10.0.2.2 开口子。
+  Android 的 domain-config 不支持 IP 段白名单，所以没法只给
+  局域网开口子、公网强制 HTTPS —— 只能全局允许或全局禁止。
+  选全局允许是因为本地模型服务是这个应用的核心场景之一。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">

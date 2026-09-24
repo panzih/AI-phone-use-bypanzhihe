@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 38      // 0.8.4：设置整合（副屏收进设置）、急停小圆角、提示词版本戳、副屏控件树探针
-        versionName = "0.8.4"
+        versionCode = 39      // 0.8.5：仓库审查修复（备份禁用、公网HTTP警告、REPO_URL、release R8、旧注释清理）
+        versionName = "0.8.5"
     }
 
     /**
@@ -88,7 +88,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // 启用 R8（优化+裁剪）。proguard-rules.pro 里目前加了 -dontobfuscate，
+            // 开发阶段不实际混淆，只做代码裁剪；正式发布时去掉那行即可。
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
