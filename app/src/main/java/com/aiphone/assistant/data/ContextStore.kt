@@ -53,6 +53,15 @@ data class SavedContext(
      * 这段上下文里也只能继续用当初那一份（想用新的就清空上下文重开）。
      */
     val memorySnapshot: String = "",
+
+    /**
+     * 建这段上下文时的「提示词协议版本 / 模型名 / 技能目录」快照。
+     * 三者都进系统提示词、是缓存前缀的一部分；载入时任一对不上，
+     * 调用方按「新开上下文」处理（见 MainActivity）。
+     */
+    val promptVersion: String = "",
+    val modelName: String = "",
+    val skillCatalog: String = "",
 )
 
 /**
@@ -155,6 +164,9 @@ object ContextStore {
                 (0 until arr.length()).map { arr.optInt(it) }
             } ?: emptyList(),
             memorySnapshot = o.optString("memorySnapshot", ""),
+            promptVersion = o.optString("promptVersion", ""),
+            modelName = o.optString("modelName", ""),
+            skillCatalog = o.optString("skillCatalog", ""),
         )
     }.getOrNull()
 
@@ -166,6 +178,9 @@ object ContextStore {
         history: List<ChatTurn> = emptyList(),
         fingerprints: List<Int> = emptyList(),
         memorySnapshot: String = "",
+        promptVersion: String = "",
+        modelName: String = "",
+        skillCatalog: String = "",
     ) {
         runCatching {
             val kept = if (entries.size > MAX_ENTRIES) entries.takeLast(MAX_ENTRIES) else entries
@@ -208,6 +223,9 @@ object ContextStore {
                     fingerprints.forEach { put(it) }
                 })
                 put("memorySnapshot", memorySnapshot)
+                put("promptVersion", promptVersion)
+                put("modelName", modelName)
+                put("skillCatalog", skillCatalog)
             }
             file(context).writeText(o.toString())
         }.onFailure { AppLog.w("保存对话失败：${it.message}", "对话") }

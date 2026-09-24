@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 37      // 0.8.3：回桌面自动检测+防抖，自动建副屏迁出目标 app
-        versionName = "0.8.3"
+        versionCode = 38      // 0.8.4：设置整合（副屏收进设置）、急停小圆角、提示词版本戳、副屏控件树探针
+        versionName = "0.8.4"
     }
 
     /**

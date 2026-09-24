@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Visibility
@@ -102,7 +101,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onGotoAuth: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
-    onOpenVirtualDisplay: () -> Unit,
+    onShizukuClick: () -> Unit,
+    onProbeVirtualDisplay: () -> Unit,
     onClearContext: () -> Unit,
     onExportLogs: () -> Unit,
     onDeleteLogs: () -> Unit,
@@ -162,9 +162,10 @@ fun SettingsScreen(
                 AuthSection(
                     current = s.mode,
                     authorized = state.authorized,
+                    shizukuState = state.shizukuState,
                     onSelect = { onSettingsChange(s.copy(mode = it)) },
                     onGotoAuth = onGotoAuth,
-                    onOpenVirtualDisplay = onOpenVirtualDisplay,
+                    onShizukuClick = onShizukuClick,
                 )
             }
             item {
@@ -189,6 +190,14 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_clear_context),
                     subtitle = null,
                     onClick = onClearContext,
+                )
+            }
+
+            item {
+                ActionRow(
+                    title = "运行副屏探针",
+                    subtitle = "检查副屏能否读到控件树，结果写进日志",
+                    onClick = onProbeVirtualDisplay,
                 )
             }
 
@@ -404,9 +413,10 @@ private fun ThinkingModeSlider(
 private fun AuthSection(
     current: OperationMode,
     authorized: Boolean,
+    shizukuState: String,
     onSelect: (OperationMode) -> Unit,
     onGotoAuth: () -> Unit,
-    onOpenVirtualDisplay: () -> Unit,
+    onShizukuClick: () -> Unit,
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         DropdownRow(
@@ -415,6 +425,8 @@ private fun AuthSection(
             current = current,
             options = OperationMode.entries.toList(),
             optionLabel = { if (it.available) it.label else "${it.label}（未接入）" },
+            // 不可用的操作方式（ADB）只能看、不能选中
+            optionEnabled = { it.available },
             onSelect = onSelect,
             horizontalPadding = 0.dp,
         )
@@ -434,10 +446,11 @@ private fun AuthSection(
 
         Spacer(Modifier.height(4.dp))
 
-        NavigationRow(
-            title = stringResource(R.string.vd_title),
-            desc = stringResource(R.string.settings_vd_entry_desc),
-            onOpen = onOpenVirtualDisplay,
+        // 副屏是「通道」不是「权限」：不做跳页箭头，
+        // 在无障碍行正下方贴一行 Shizuku 状态，点一下按状态处理
+        VirtualDisplayStatusRow(
+            shizukuState = shizukuState,
+            onClick = onShizukuClick,
         )
     }
 }
@@ -517,45 +530,43 @@ private fun PermissionRow(
 }
 
 /**
- * 导航行 —— 点一下跳到对应设置页。
+ * 副屏状态行 —— 贴在「无障碍」行正下方。
  *
- * 用在「操作授权」里：副屏不是"授予权限"，而是进入它自己的页面，
- * 所以右侧不放授权状态、放一个箭头，排版与 [PermissionRow] 保持一致。
+ * 副屏是一条操作通道（Shizuku 高级通道），不是要用户授予的权限，
+ * 所以右侧不显示「去授权」按钮、也不做跳页箭头，只显示 Shizuku
+ * 当前状态；整行可点，点击后的动作由上层按状态决定。
  */
 @Composable
-private fun NavigationRow(
-    title: String,
-    desc: String?,
-    onOpen: () -> Unit,
+private fun VirtualDisplayStatusRow(
+    shizukuState: String,
+    onClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpen)
+            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = title,
+                text = stringResource(R.string.vd_title),
                 style = MaterialTheme.typography.bodyLarge,
             )
-            if (!desc.isNullOrBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = desc,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.settings_vd_entry_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         Spacer(Modifier.width(12.dp))
 
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        Text(
+            text = shizukuState.ifBlank { "—" },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -999,6 +1010,7 @@ private fun <T> DropdownRow(
     current: T,
     options: List<T>,
     optionLabel: (T) -> String,
+    optionEnabled: (T) -> Boolean = { true },
     onSelect: (T) -> Unit,
     horizontalPadding: androidx.compose.ui.unit.Dp = 16.dp,
 ) {
@@ -1036,6 +1048,8 @@ private fun <T> DropdownRow(
                 options.forEach { option ->
                     DropdownMenuItem(
                         text = { Text(optionLabel(option)) },
+                        // 不可用项灰显、点不动（防止把 mode 选成 ADB）
+                        enabled = optionEnabled(option),
                         onClick = {
                             onSelect(option)
                             open = false

@@ -32,6 +32,13 @@ import com.aiphone.assistant.touch.TouchKind
 object AgentPrompt {
 
     /**
+     * 提示词协议版本。改了系统提示词 / 动作协议就 +1。
+     * 与 modelName、skillCatalog 一起快照进上下文（见 ContextStore）：
+     * 载入旧上下文时任一对不上就按新开处理，避免旧协议历史静默失缓存。
+     */
+    const val VERSION = "1"
+
+    /**
      * 系统提示词。
      *
      * **去掉技能目录之后是纯静态的**，就是为了让前缀缓存稳定命中。

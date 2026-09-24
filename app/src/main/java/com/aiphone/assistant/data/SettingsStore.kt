@@ -23,7 +23,10 @@ class SettingsStore(context: Context) {
         apiKey = sp.getString(KEY_API_KEY, null) ?: DEFAULT.apiKey,
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
-        mode = OperationMode.fromId(sp.getString(KEY_MODE, null)),
+        customThinkingEnabled = sp.getBoolean(KEY_CUSTOM_THINKING, DEFAULT.customThinkingEnabled),
+        mode = OperationMode.fromId(sp.getString(KEY_MODE, null))
+            // 老配置可能存过不可用的 ADB：归一化回无障碍，别把用户卡在灰界面
+            .let { if (it.available) it else OperationMode.ACCESSIBILITY },
         maxSteps = sp.getInt(KEY_MAX_STEPS, DEFAULT.maxSteps),
         contextPolicy = ContextPolicy.fromId(sp.getString(KEY_CONTEXT_POLICY, null)),
         memoryEnabled = sp.getBoolean(KEY_MEMORY, DEFAULT.memoryEnabled),
@@ -37,6 +40,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_API_KEY, s.apiKey)
             .putString(KEY_MODEL, s.modelName)
             .putString(KEY_THINKING, s.thinking.id)
+            .putBoolean(KEY_CUSTOM_THINKING, s.customThinkingEnabled)
             .putString(KEY_MODE, s.mode.id)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
             .putString(KEY_CONTEXT_POLICY, s.contextPolicy.id)
@@ -57,6 +61,7 @@ class SettingsStore(context: Context) {
         const val KEY_API_KEY = "api_key"
         const val KEY_MODEL = "model_name"
         const val KEY_THINKING = "thinking_mode"
+        const val KEY_CUSTOM_THINKING = "custom_thinking_enabled"
         const val KEY_MODE = "operation_mode"
         // 曾经的全局「在副屏上操作」开关。现在是**逐条定时任务**的选项
         // （见 Schedule.useVirtualDisplay），这里不再读写 —— 老配置文件里

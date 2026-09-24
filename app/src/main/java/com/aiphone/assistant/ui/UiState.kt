@@ -67,6 +67,9 @@ data class MainUiState(
     /** 悬浮窗权限（SYSTEM_ALERT_WINDOW）。没有它就没有进度面板和急停按钮 */
     val overlayGranted: Boolean = false,
 
+    /** Shizuku 当前状态（给设置页「副屏」状态行用），例如「已就绪」 */
+    val shizukuState: String = "",
+
     /** 设置页显示的日志统计，例如 "共 3 次记录 · 1.2 MB" */
     val logStats: String = "",
 

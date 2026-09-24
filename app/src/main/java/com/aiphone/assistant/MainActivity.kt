@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.aiphone.assistant.agent.Agent
+import com.aiphone.assistant.agent.AgentPrompt
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.CarriedContext
@@ -56,6 +57,7 @@ import com.aiphone.assistant.schedule.ScheduleStore
 import com.aiphone.assistant.schedule.Scheduler
 import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.overlay.OverlayService
+import com.aiphone.assistant.shell.ShizukuBridge
 import com.aiphone.assistant.skill.SkillContext
 import com.aiphone.assistant.skill.SkillRegistry
 import com.aiphone.assistant.ui.LogEntry
@@ -65,7 +67,6 @@ import com.aiphone.assistant.ui.MacroSummary
 import com.aiphone.assistant.ui.MainUiState
 import com.aiphone.assistant.ui.RecordingScreen
 import com.aiphone.assistant.ui.ScheduleScreen
-import com.aiphone.assistant.ui.VirtualDisplayScreen
 import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
@@ -260,6 +261,9 @@ private fun AppRoot(
     var memoryStats by remember { mutableStateOf("") }
     var autoCapStats by remember { mutableStateOf("") }
 
+    /** Shizuku 当前状态（设置页「副屏」状态行用） */
+    var shizukuState by remember { mutableStateOf("") }
+
     /**
      * 本次任务是从上下文里的第几轮开始的。
      *
@@ -281,13 +285,40 @@ private fun AppRoot(
     var schedules by remember { mutableStateOf(ScheduleStore.loadAll(context)) }
     var exactAlarmGranted by remember { mutableStateOf(Scheduler.canScheduleExact(context)) }
 
-    // 对话从磁盘恢复：应用被系统回收、或者用户划掉重开之后，
-    // 只要上下文没被清掉，消息就应该还在 —— 否则用户看到的
-    // 和设置里选的对不上（选了"不限"却一开就空）
-    val savedContext = remember { ContextStore.load(context) }
+    // 当前技能目录（系统提示词的一部分）：用于和磁盘快照比对
+    val currentCatalog = remember {
+        SkillRegistry(
+            ctx = SkillContext(context.applicationContext, controller),
+            extra = MacroStore.loadAll(context),
+        ).catalog()
+    }
+
+    // 对话从磁盘恢复。提示词版本 / 模型名对不上才按新开处理
+    // （旧前缀已失效，接着用只会静默失缓存）。技能目录和记忆一样
+    // 是「冻结快照」：存下来、续接时沿用当初那一份，学了新技能
+    // 不会把旧上下文清掉（想用新技能就手动清空重开）。
+    val diskContext = remember { ContextStore.load(context) }
+    val savedContext = remember(diskContext) {
+        diskContext?.takeIf {
+            it.promptVersion == AgentPrompt.VERSION &&
+                it.modelName == settings.modelName
+        }
+    }
     val logs = remember {
         mutableStateListOf<LogEntry>().apply {
             addAll(savedContext?.entries ?: emptyList())
+            // 磁盘里有旧对话、却因版本不匹配被作废：留一条说明，
+            // 不然消息凭空消失像 bug
+            if (savedContext == null && diskContext?.entries?.isNotEmpty() == true) {
+                add(
+                    LogEntry(
+                        id = "prompt_reset_${System.currentTimeMillis()}",
+                        kind = LogKind.SYSTEM,
+                        text = "提示词版本变化，已开新上下文",
+                        label = "上下文",
+                    )
+                )
+            }
         }
     }
     val conversation = remember {
@@ -345,6 +376,15 @@ private fun AppRoot(
         )
     }
 
+    // 因提示词版本变化作废旧上下文时，往 run.log 也记一笔
+    LaunchedEffect(diskContext, savedContext) {
+        if (savedContext == null && diskContext?.entries?.isNotEmpty() == true &&
+            settings.saveLogs
+        ) {
+            AppLog.w("提示词版本或模型变化，旧上下文作废、已开新上下文", "上下文")
+        }
+    }
+
     // 对话变化之后落盘。600ms 防抖：一次任务会连续加十几条消息，
     // 每条都写一次文件没必要（而且这文件在"不限"档下会越来越大）
     //
@@ -361,6 +401,9 @@ private fun AppRoot(
             history = modelHistory,
             fingerprints = modelFingerprints,
             memorySnapshot = contextMemory,
+            promptVersion = AgentPrompt.VERSION,
+            modelName = settings.modelName,
+            skillCatalog = currentCatalog,
         )
     }
 
@@ -387,6 +430,7 @@ private fun AppRoot(
         macros = loadMacroSummaries(context)
         schedules = ScheduleStore.loadAll(context)
         exactAlarmGranted = Scheduler.canScheduleExact(context)
+        shizukuState = ShizukuBridge.state(context).label
     }
 
     /**
@@ -680,9 +724,8 @@ private fun AppRoot(
                     // 记忆总结也当成对话的一部分显示出来 ——
                     // 它确实是"助手在做的一件事"，藏起来用户只会觉得
                     // 软件莫名其妙多花了钱
-                    if (settings.memoryEnabled) {
-                        addLog(LogKind.THOUGHT, "正在整理这次任务的记忆 ...", "助手")
-                    }
+                    // 记忆归纳是后台动作：不再插「正在整理记忆」卡片，
+                    // 结果用轻 toast 提示（见 onDone）
                     memorizeAfterTask(
                         scope = scope,
                         context = context.applicationContext,
@@ -691,21 +734,11 @@ private fun AppRoot(
                         sinceTurn = taskTurnStart,
                         llm = llm,
                         onDone = { outcome ->
-                            addLog(
-                                when (outcome) {
-                                    is MemoryWriter.Outcome.Written -> LogKind.RESULT
-                                    is MemoryWriter.Outcome.NotWritten -> LogKind.SYSTEM
-                                },
-                                when (outcome) {
-                                    is MemoryWriter.Outcome.Written ->
-                                        "本次新增记忆：${outcome.title}"
-                                    is MemoryWriter.Outcome.NotWritten ->
-                                        // 把真实原因显示出来。以前这里是一句笼统的
-                                        // "没写入"，把主线程网络异常藏了整整一轮排查
-                                        "这次没写入记忆：${outcome.reason}"
-                                },
-                                "助手",
-                            )
+                            // 新增记忆给轻 toast、不占对话卡片；没写入是常态
+                            // （没什么可记），保持安静，原因仍在 run.log 可查
+                            if (outcome is MemoryWriter.Outcome.Written) {
+                                toast = "已新增记忆：${outcome.title}"
+                            }
                             refreshStats()
                         },
                     )
@@ -1044,16 +1077,6 @@ private fun AppRoot(
             onDeleteMacro = { id -> deleteMacro(id) },
         )
 
-        Screen.VIRTUAL_DISPLAY -> VirtualDisplayScreen(
-            onBack = { screen = Screen.SETTINGS },
-            onOpenMirror = { displayId ->
-                // 副屏画面单独开一个窗口显示（用户要的"独立小窗"效果）。
-                // 这里必须用 context.startActivity —— Composable 里够不到
-                // Activity 的成员方法（和之前 requestExactAlarm 踩的是同一个坑）
-                runCatching { context.startActivity(MirrorActivity.intent(context, displayId)) }
-            },
-        )
-
         Screen.SCHEDULES -> ScheduleScreen(
             state = MainUiState(
                 toast = toast,
@@ -1076,6 +1099,7 @@ private fun AppRoot(
                 memoryStats = memoryStats,
                 autoCapStats = autoCapStats,
                 appVersion = appVersion,
+                shizukuState = shizukuState,
                 toast = toast,
             ),
             onSettingsChange = { next ->
@@ -1093,7 +1117,30 @@ private fun AppRoot(
             onBack = { screen = Screen.CONTROL; toast = null },
             onGotoAuth = { onOpenAccessibilitySettings() },
             onOpenOverlaySettings = onOpenOverlaySettings,
-            onOpenVirtualDisplay = { screen = Screen.VIRTUAL_DISPLAY },
+            // 副屏状态行点击：按 Shizuku 当前状态处理
+            onShizukuClick = {
+                when (ShizukuBridge.state(context)) {
+                    ShizukuBridge.State.NO_PERMISSION -> ShizukuBridge.requestPermission()
+                    ShizukuBridge.State.NOT_INSTALLED ->
+                        toast = "请先安装 Shizuku 应用"
+                    ShizukuBridge.State.NOT_RUNNING ->
+                        toast = "请先打开 Shizuku、启动服务"
+                    ShizukuBridge.State.READY ->
+                        if (isRunning) {
+                            OverlayBus.requestMoveToVirtualDisplay()
+                            toast = "已请求切到副屏"
+                        } else {
+                            toast = "启动任务后回桌面即自动切副屏"
+                        }
+                }
+            },
+            onProbeVirtualDisplay = {
+                val result = com.aiphone.assistant.a11y.AutoService.get()
+                    ?.probeWindowsOnAllDisplays()
+                    ?: "无障碍服务未连接"
+                // toast 只显示摘要，完整结果在 run.log 里
+                toast = result.take(80) + if (result.length > 80) "…" else ""
+            },
             onClearContext = { clearContext() },
             onExportLogs = { exportLogs() },
             onDeleteLogs = { deleteLogs() },

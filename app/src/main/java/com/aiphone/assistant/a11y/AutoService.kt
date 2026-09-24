@@ -10,6 +10,8 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import com.aiphone.assistant.log.AppLog
 import com.aiphone.assistant.record.Recorder
 import com.aiphone.assistant.touch.GestureSpec
 import com.aiphone.assistant.touch.ScrollDirection
@@ -95,6 +97,7 @@ class AutoService : AccessibilityService() {
         // Recorder 第一件事就是 return，所以这里的开销可以忽略。
         event?.let { Recorder.onEvent(it) }
         event?.let { trackDesktop(it) }
+        event?.let { maybeProbeOnOtherDisplay(it) }
     }
 
     /**
@@ -297,6 +300,82 @@ class AutoService : AccessibilityService() {
     /** 解析成精简后的节点列表 */
     fun parseTree(screenWidth: Int, screenHeight: Int, limit: Int = 60): List<UiNode> =
         UiTreeParser.parse(readTree(), screenWidth, screenHeight, limit, ownPackage)
+
+    // ------------------------------------------------------------------
+    // 探针：跨所有 display（含虚拟副屏）读窗口，验证副屏能否拿控件树
+    // ------------------------------------------------------------------
+
+    /** 上次探针时间，防抖（副屏事件很密） */
+    @Volatile
+    private var lastProbeMs: Long = 0L
+
+    /**
+     * 事件来自非默认屏（虚拟副屏）时自动跑一次，3s 防抖。
+     *
+     * 注意：[AccessibilityEvent.getDisplayId] 是 API 33 才有的，
+     * minSdk=28，低于 33 的机器直接跳过，否则 onAccessibilityEvent
+     * 里会抛 NoSuchMethodError 把无障碍服务搞挂。
+     */
+    private fun maybeProbeOnOtherDisplay(event: AccessibilityEvent) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (event.displayId == android.view.Display.DEFAULT_DISPLAY) return
+        val now = System.currentTimeMillis()
+        if (now - lastProbeMs < 3_000) return
+        lastProbeMs = now
+        probeWindowsOnAllDisplays()
+    }
+
+    /**
+     * 探针：副屏到底能不能读到控件树。
+     *
+     * [AccessibilityService.getWindowsOnAllDisplays] 是 API 30+ 的公开方法，
+     * 返回 `SparseArray<List<AccessibilityWindowInfo>>`（key=displayId）。
+     * 普通 [getWindows] 只覆盖服务所在的那块屏，这个能看到虚拟副屏的窗口
+     * 和它们的 root 节点——这正是 0.7.0 当时没验证的点。
+     *
+     * 只读、不改任何行为。结果写日志，也返回字符串供设置页手动按钮 toast。
+     */
+    fun probeWindowsOnAllDisplays(): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return "探针：系统版本低于 Android 11，无 getWindowsOnAllDisplays"
+        }
+        return runCatching {
+            val all: android.util.SparseArray<List<AccessibilityWindowInfo>> =
+                getWindowsOnAllDisplays()
+            buildString {
+                appendLine("探针 getWindowsOnAllDisplays：共 ${all.size()} 块屏")
+                for (i in 0 until all.size()) {
+                    val displayId = all.keyAt(i)
+                    val ws = all.valueAt(i)
+                    appendLine("  display $displayId：${ws.size} 个窗口")
+                    for (w in ws) {
+                        val root = runCatching { w.root }.getOrNull()
+                        appendLine(
+                            "    ${windowTypeName(w.type)} " +
+                                "pkg=${root?.packageName ?: "—"} root=${if (root != null) "非空" else "空"}"
+                        )
+                    }
+                }
+            }.also {
+                Log.i(TAG, it.trim())
+                AppLog.i(it.trim(), "副屏探针")
+            }.trim()
+        }.getOrElse {
+            val msg = "探针 getWindowsOnAllDisplays 失败：${it.javaClass.simpleName} ${it.message}"
+            Log.w(TAG, msg)
+            AppLog.w(msg, "副屏探针")
+            msg
+        }
+    }
+
+    private fun windowTypeName(t: Int): String = when (t) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> "应用"
+        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "输入法"
+        AccessibilityWindowInfo.TYPE_SYSTEM -> "系统"
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "无障碍覆盖层"
+        AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "分屏分隔"
+        else -> "type$t"
+    }
 
     /**
      * 当前有输入焦点的节点。

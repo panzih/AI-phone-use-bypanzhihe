@@ -25,7 +25,9 @@ enum class OperationMode(
         id = "adb",
         label = "ADB / Shizuku",
         available = false,
-        note = "能截到银行/支付类页面（无障碍截不到），但无 root 时每次重启都要重新授权一次。当前版本还没接入。",
+        // 不写「能截银行页面」——那会和「副屏（Shizuku 通道）」的说法
+        // 自相矛盾（Shizuku 其实已经在用）。这条操作方式暂不可选
+        note = "暂未完成相关配置",
     );
 
     companion object {
