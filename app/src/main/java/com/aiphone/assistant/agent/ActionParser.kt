@@ -290,9 +290,16 @@ object ActionParser {
                 needImage -> {}
                 finished || failed -> {}
                 actions.isNotEmpty() -> {
-                    // 位置已经满了就先腾一个出来，别把末尾那个动作挤掉
-                    if (actions.size >= MAX_ACTIONS) actions.removeAt(actions.size - 1)
-                    actions.add(TouchAction(kind = TouchKind.CAPTURE))
+                    // 位置满了就**不加**：模型明确给的动作比"顺手看一眼"重要，
+                    // 挤掉末尾那个动作是静默丢动作 —— 比少一张图严重得多。
+                    if (actions.size < MAX_ACTIONS) {
+                        actions.add(TouchAction(kind = TouchKind.CAPTURE))
+                    } else {
+                        notes.add(
+                            "这批已经有 $MAX_ACTIONS 个动作，screenshot_after 没有追加" +
+                                "（不挤掉你给的动作）。想看画面就在下一批里写 capture。"
+                        )
+                    }
                 }
                 skillId == null -> needImage = true
             }

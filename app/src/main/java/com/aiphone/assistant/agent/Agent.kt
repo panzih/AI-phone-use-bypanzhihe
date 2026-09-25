@@ -973,10 +973,17 @@ class Agent(
                 else -> "共 ${results.size} 个动作：" + results.joinToString("；")
             }
             // 半截批次留痕：标明因切换通道中止、还有多少动作没执行（0.8.2 验收）
-            val resultText = if (switchPendingCount > 0) {
-                "$baseText（因切换通道中止，剩余 $switchPendingCount 个动作未执行）"
-            } else {
-                baseText
+            //
+            // ⚠️ 解析提示（`p.warning`）必须也拼进来。它里面是"你的参数被端侧改过"
+            // 这类事（最典型：sleep 超过 5000ms 没声明 long_wait，被夹短了）。
+            // 只写进日志的话模型永远不知道，下一次还会写同样的值 ——
+            // 这就是 0.9.0 当初漏掉的一环（写成"回灌"实际只在日志里）。
+            val resultText = buildString {
+                append(baseText)
+                if (switchPendingCount > 0) {
+                    append("（因切换通道中止，剩余 $switchPendingCount 个动作未执行）")
+                }
+                p.warning?.let { append("（解析提示：$it）") }
             }
             logger?.recordStep(
                 step = step,

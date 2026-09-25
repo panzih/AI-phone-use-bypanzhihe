@@ -117,6 +117,18 @@ class ActionParserTest {
     }
 
     @Test
+    fun screenshotAfter_whenActionsFull_doesNotDropAction() {
+        // 动作已经占满 MAX_ACTIONS 时，不为了"顺手看一眼"挤掉模型给的动作 ——
+        // 挤掉是静默丢动作，比少一张图严重
+        val many = (1..ActionParser.MAX_ACTIONS)
+            .joinToString(",") { """{"action":"tap","index":$it}""" }
+        val p = ActionParser.parse("""{"screenshot_after":true,"actions":[$many]}""", w, h)
+        assertEquals(ActionParser.MAX_ACTIONS, p.actions.size)
+        assertTrue(p.actions.all { it.kind == TouchKind.TAP })
+        assertTrue(p.warning!!.contains("没有追加"))
+    }
+
+    @Test
     fun screenshotAfter_withoutActions_fallsBackToNeedImage() {
         // 只说"动作后给图"却没动作：意图就是要图，退化成立即要图，
         // 不该落到"空转"警告

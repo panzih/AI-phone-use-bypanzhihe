@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 40      // 0.9.0：capture 截屏动作（JPEG 全分辨率）、技能目录冻结闭环、长等待要声明 long_wait、读不到元素列表的三种原因分开写、录制短语匹配放宽
-        versionName = "0.9.0"
+        versionCode = 41      // 0.9.1：全项目体检修复（主线程 IO、参数被改的回灌、换模型失效、满员丢动作）
+        versionName = "0.9.1"
     }
 
     /**

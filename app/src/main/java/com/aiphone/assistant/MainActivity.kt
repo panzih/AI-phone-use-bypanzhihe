@@ -406,18 +406,22 @@ private fun AppRoot(
     LaunchedEffect(logs.size, conversation.size, modelHistory, modelFingerprints, contextMemory, contextSkillCatalog) {
         if (logs.isEmpty() && conversation.size == 0 && modelHistory.isEmpty()) return@LaunchedEffect
         delay(600)
-        ContextStore.save(
-            context = context,
-            entries = logs.toList(),
-            turns = conversation.snapshot(),
-            lastActivityAt = conversation.lastActivityAt,
-            history = modelHistory,
-            fingerprints = modelFingerprints,
-            memorySnapshot = contextMemory,
-            promptVersion = AgentPrompt.VERSION,
-            modelName = settings.modelName,
-            skillCatalog = contextSkillCatalog,
-        )
+        // 落盘放 IO："不限"档下 conversation.json 能有几百 KB（历史留到 40 万字符），
+        // 主线程写它会在每次任务结束时顿一下
+        withContext(Dispatchers.IO) {
+            ContextStore.save(
+                context = context,
+                entries = logs.toList(),
+                turns = conversation.snapshot(),
+                lastActivityAt = conversation.lastActivityAt,
+                history = modelHistory,
+                fingerprints = modelFingerprints,
+                memorySnapshot = contextMemory,
+                promptVersion = AgentPrompt.VERSION,
+                modelName = settings.modelName,
+                skillCatalog = contextSkillCatalog,
+            )
+        }
     }
 
     fun refreshStats() {
@@ -1009,23 +1013,35 @@ private fun AppRoot(
         toast = context.getString(R.string.settings_clear_context_done)
     }
 
-    /** 导出：把所有 debug 相关的东西打成一个 zip，走系统分享面板 */
+    /**
+     * 导出：把所有 debug 相关的东西打成一个 zip，走系统分享面板。
+     *
+     * ⚠️ **必须在 IO 线程做。** 打包要遍历所有运行目录、压缩全部截图，
+     * 截图多的用户这里是**秒级**的活；放主线程就是一次实打实的 ANR 风险
+     * （界面卡住、系统弹"应用无响应"）。打完再回主线程弹分享面板。
+     */
     fun exportLogs() {
-        val f = LogExporter.exportEverything(context, buildDeviceSummary(context, settings))
-        if (f == null) {
-            toast = context.getString(R.string.settings_export_none)
-            return
+        scope.launch {
+            val f = withContext(Dispatchers.IO) {
+                LogExporter.exportEverything(context, buildDeviceSummary(context, settings))
+            }
+            if (f == null) {
+                toast = context.getString(R.string.settings_export_none)
+                return@launch
+            }
+            toast = context.getString(R.string.settings_export_done, f.name)
+            LogExporter.share(context, f, "纸盒日志")
         }
-        toast = context.getString(R.string.settings_export_done, f.name)
-        LogExporter.share(context, f, "纸盒日志")
     }
 
-    /** 删除日志：只清运行痕迹，不动记忆 / 技能 / 定时任务 */
+    /** 删除日志：只清运行痕迹，不动记忆 / 技能 / 定时任务（同样不能占主线程） */
     fun deleteLogs() {
-        val n = LogExporter.deleteAllLogs(context)
-        refreshStats()
-        toast = context.getString(R.string.log_delete_done)
-        if (n == 0) toast = context.getString(R.string.settings_export_none)
+        scope.launch {
+            val n = withContext(Dispatchers.IO) { LogExporter.deleteAllLogs(context) }
+            refreshStats()
+            toast = context.getString(R.string.log_delete_done)
+            if (n == 0) toast = context.getString(R.string.settings_export_none)
+        }
     }
 
     /**
@@ -1125,8 +1141,17 @@ private fun AppRoot(
                 toast = toast,
             ),
             onSettingsChange = { next ->
+                val modelChanged = next.modelName != settings.modelName
                 settings = next
                 store.save(next)
+                // 换模型 = 换掉系统提示词的第一句话（前缀的第 0 个 token）。
+                // 不清空的话，从这一步起整段历史全部按未命中计价 —— 只花钱、
+                // 不报错，日志里只看到命中率突然掉下去。所以这里主动清一次，
+                // 并在对话里留一条说明（消息凭空消失更像 bug）。
+                // 注：接口地址变了不影响提示词文本，不用清。
+                if (modelChanged && conversation.size > 0) {
+                    clearContextWithMarker("模型换成了 ${next.modelName}，上下文已重开")
+                }
                 if (next.saveLogs) {
                     AppLog.i(
                         "设置变更：通道=${next.mode.label} 模型=${next.modelName} " +
