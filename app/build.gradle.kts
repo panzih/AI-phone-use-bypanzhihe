@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 42      // 0.9.2：无障碍拦截挪到状态改动之前（被拒的发送不再清空输入、不再污染上下文）
-        versionName = "0.9.2"
+        versionCode = 43      // 0.9.3：换模型改为「冻结快照 + 发任务时比对」，不再每敲一个字就清一次上下文
+        versionName = "0.9.3"
     }
 
     /**

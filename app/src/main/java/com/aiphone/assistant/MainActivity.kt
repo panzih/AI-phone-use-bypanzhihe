@@ -378,6 +378,22 @@ private fun AppRoot(
         mutableStateOf(savedContext?.skillCatalog ?: currentCatalog)
     }
 
+    /**
+     * 这条上下文**建起来时用的模型名**。
+     *
+     * 和 [contextSkillCatalog] 是同一类东西：模型名进系统提示词的第一句，
+     * 也就是缓存前缀的第 0 个 token，换了就必须重开一段，否则从这一步起
+     * 整段历史全按未命中计价（只烧钱、不报错）。
+     *
+     * 但**判断的时机**不能放在设置页。模型名输入框每敲一个字都会走一次
+     * onSettingsChange，在那儿清上下文 = 用户打 "deepseek-reasoner" 就被
+     * 连清 17 次，每次还都落盘 + 遍历日志目录，对话里刷一屏"上下文已重开"。
+     * 所以这里冻结快照，真正比对放到 [submit] —— 那一刻才是它唯一有意义的时刻。
+     */
+    var contextModelName by remember {
+        mutableStateOf(savedContext?.modelName ?: settings.modelName)
+    }
+
     fun addLog(kind: LogKind, text: String, label: String? = null) {
         logs.add(
             LogEntry(
@@ -403,7 +419,7 @@ private fun AppRoot(
     //
     // 模型历史一起存：它和界面消息必须是**同一次**写入，否则两边会不一致
     // （见 modelHistory 的说明）
-    LaunchedEffect(logs.size, conversation.size, modelHistory, modelFingerprints, contextMemory, contextSkillCatalog) {
+    LaunchedEffect(logs.size, conversation.size, modelHistory, modelFingerprints, contextMemory, contextSkillCatalog, contextModelName) {
         if (logs.isEmpty() && conversation.size == 0 && modelHistory.isEmpty()) return@LaunchedEffect
         delay(600)
         // 落盘放 IO："不限"档下 conversation.json 能有几百 KB（历史留到 40 万字符），
@@ -418,7 +434,7 @@ private fun AppRoot(
                 fingerprints = modelFingerprints,
                 memorySnapshot = contextMemory,
                 promptVersion = AgentPrompt.VERSION,
-                modelName = settings.modelName,
+                modelName = contextModelName,
                 skillCatalog = contextSkillCatalog,
             )
         }
@@ -469,6 +485,8 @@ private fun AppRoot(
             ctx = SkillContext(context.applicationContext, controller),
             extra = MacroStore.loadAll(context),
         ).catalog()
+        // 模型名同理：新的一段按当前设置算，不然下一次任务会立刻又判定"换过模型"
+        contextModelName = settings.modelName
         ContextStore.clear(context)
         addLog(LogKind.SYSTEM, reason, context.getString(R.string.context_label))
         if (settings.saveLogs) AppLog.i("清空上下文（原有 $had 轮）：$reason", "上下文")
@@ -856,6 +874,22 @@ private fun AppRoot(
             )
         }
 
+        // 换过模型也要重开一段 —— 模型名是系统提示词的第一句，也就是缓存前缀的
+        // 第 0 个 token，换了之后整段历史都会按未命中计价（只烧钱、不报错，
+        // 日志里只看到命中率突然掉下去）。
+        //
+        // 判断放在这里而不是设置页，是因为设置页每敲一个字都会触发保存（见
+        // [contextModelName] 的注释）；而且只有"真的要发任务"这一刻才有意义 ——
+        // 用户改完又改回来，上下文就不用白丢。
+        if (contextModelName != settings.modelName) {
+            if (conversation.size > 0) {
+                clearContextWithMarker("模型换成了 ${settings.modelName}，上下文已重开")
+            } else {
+                // 还没有上下文可清，把快照跟上就行（不然会一直判定"换过模型"）
+                contextModelName = settings.modelName
+            }
+        }
+
         // 这一段是不是"新开的"：刚清过、或者本来就是空的
         val freshContext = conversation.size == 0
 
@@ -1153,17 +1187,13 @@ private fun AppRoot(
                 toast = toast,
             ),
             onSettingsChange = { next ->
-                val modelChanged = next.modelName != settings.modelName
                 settings = next
                 store.save(next)
-                // 换模型 = 换掉系统提示词的第一句话（前缀的第 0 个 token）。
-                // 不清空的话，从这一步起整段历史全部按未命中计价 —— 只花钱、
-                // 不报错，日志里只看到命中率突然掉下去。所以这里主动清一次，
-                // 并在对话里留一条说明（消息凭空消失更像 bug）。
-                // 注：接口地址变了不影响提示词文本，不用清。
-                if (modelChanged && conversation.size > 0) {
-                    clearContextWithMarker("模型换成了 ${next.modelName}，上下文已重开")
-                }
+                // 「换模型要清上下文」这件事**不在这里做** —— 这个回调每敲一个字
+                // 都会触发一次（输入框的 onValueChange 直接调它），在这儿清会
+                // 连清十几次（每次都落盘 + 遍历日志目录），对话里刷一屏"上下文已重开"。
+                // 改到 submit() 里比对 [contextModelName]，只在真正要发任务时清一次。
+                // 顺带一个好处：用户只是进设置点开看看再改回来，上下文不会白丢。
                 if (next.saveLogs) {
                     AppLog.i(
                         "设置变更：通道=${next.mode.label} 模型=${next.modelName} " +
