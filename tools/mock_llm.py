@@ -46,6 +46,17 @@
 
 模拟器里把「设置 → 模型 → 接口地址」填 http://10.0.2.2:8765
 （10.0.2.2 是安卓模拟器访问宿主机的固定地址）
+
+⚠️ BlueStacks 上不要用 `adb reverse` + 127.0.0.1 —— 实测它只建 TCP
+连接、不转发数据（服务端收到空流），应用侧报 `unexpected end of stream`。
+10.0.2.2 是通的。
+
+环境变量：
+
+    MOCK_DELAY=2      每次响应前等 2 秒（方便看一闪而过的悬浮窗）
+    MOCK_SCRIPT=...   full（默认）/ bounded
+    MOCK_DUMP=<路径>  把每次请求的完整 payload 追加落盘，便于 grep
+                      "端侧到底往消息里塞了什么"
 """
 
 import json
@@ -67,6 +78,10 @@ PORT = 8765
 # "一闪而过"的界面：
 #     MOCK_DELAY=2 python3 tools/mock_llm.py
 DELAY = float(os.environ.get("MOCK_DELAY", "0"))
+
+# 把每次请求的完整 payload 追加写到这个文件（不设就不写）。
+# 用来查"端侧到底往消息里塞了什么"，比如长等待的警告有没有回灌。
+DUMP_PATH = os.environ.get("MOCK_DUMP", "")
 
 # 每一轮要回的回复。最后一个发完就停在 finished 上。
 #
@@ -136,6 +151,23 @@ class Handler(BaseHTTPRequestHandler):
 
         n = state["n"]
         state["n"] += 1
+
+        # 把这一次的**完整请求体**原样落盘。
+        #
+        # 上面那些打印只看得到摘要（消息数、前缀、控件树片段），
+        # 而"端侧往消息里塞了什么"往往正是要验证的东西 ——
+        # 比如 long_wait 被夹紧后给模型的警告、技能返回的全文。
+        # 摘要看不出来，全量 payload 可以 grep。
+        #
+        #     MOCK_DUMP=/tmp/payloads.jsonl python3 tools/mock_llm.py
+        if DUMP_PATH:
+            try:
+                with open(DUMP_PATH, "a", encoding="utf-8") as f:
+                    f.write(f"===== 第 {n + 1} 次请求 =====\n")
+                    f.write(raw.decode("utf-8", "replace"))
+                    f.write("\n\n")
+            except Exception as e:
+                print(f"  [dump 失败] {e}")
 
         if DELAY > 0:
             time.sleep(DELAY)

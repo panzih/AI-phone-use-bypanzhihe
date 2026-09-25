@@ -165,6 +165,7 @@
     <string name="settings_about_license">开源协议</string>
     <string name="settings_about_repo">项目主页</string>
     <string name="settings_a11y_label">无障碍服务</string>
+    <string name="a11y_needed_toast">先开一下无障碍服务再发任务（输入框里的字给你留着）</string>
     <string name="settings_context_policy">上下文</string>
     <string name="settings_memory_enabled">开启记忆</string>
     <string name="settings_memory_enabled_desc">开了就每次任务结束后让 AI 归纳一条记忆，追加到记忆文件末尾（只增不减，多花一次纯文字的模型调用）。新开上下文时会自动带上；上下文没重开时，AI 可以自己调 recall_memory 技能查看</string>

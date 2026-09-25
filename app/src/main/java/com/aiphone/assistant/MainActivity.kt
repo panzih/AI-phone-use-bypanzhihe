@@ -799,6 +799,30 @@ private fun AppRoot(
     fun submit() {
         val task = input.trim()
         if (task.isBlank() || isRunning) return
+
+        // 主屏模式必须先连好无障碍服务。
+        //
+        // ⚠️ 这个检查必须放在**任何状态改动之前**，两个理由：
+        //
+        // 1. 放在后面时，没开无障碍就点发送会：先 `input = ""` 把用户打的字
+        //    清掉（他得重打一遍），再 `conversation.add()` 往历史里塞一条
+        //    任务消息。等他去开完无障碍再发一次，同一句话就进了上下文两遍。
+        //    真机上抓到的请求体确实是 [user 任务X][user 任务X][assistant …]。
+        // 2. 更不能挪回协程里 —— 先 startForegroundService 起悬浮窗、再在
+        //    拦截分支里 stop，服务来不及 startForeground 就被停，系统抛
+        //    ForegroundServiceDidNotStartInTimeException 把整个 app 搞崩。
+        //
+        // 返回时不清空输入框：用户刚打的字还在，开完无障碍直接再点发送即可。
+        if (!runOnVirtualDisplay && !com.aiphone.assistant.a11y.AutoService.isConnected) {
+            addLog(
+                LogKind.ERROR,
+                "还没开启无障碍服务。到「设置 → 操作授权 → 无障碍」里开一下再发任务。",
+                "无障碍未开启",
+            )
+            toast = context.getString(R.string.a11y_needed_toast)
+            return
+        }
+
         input = ""
         stopRequested = false
         OverlayBus.clearStop()
@@ -865,20 +889,8 @@ private fun AppRoot(
         scope.launch {
             isRunning = true
 
-            // 主屏模式必须先连好无障碍服务。这一步放在**任何服务启动之前**：
-            // 若先 startForegroundService 起了悬浮窗、再在拦截分支里 stop，
-            // 服务还没来得及 startForeground 就被停，系统会抛
-            // ForegroundServiceDidNotStartInTimeException，把整个 app 搞崩。
-            if (!runOnVirtualDisplay && !com.aiphone.assistant.a11y.AutoService.isConnected) {
-                addLog(
-                    LogKind.ERROR,
-                    "还没开启无障碍服务。到「设置 → 操作授权 → 无障碍」里开一下再发任务。",
-                    "无障碍未开启",
-                )
-                isRunning = false
-                progress = ""
-                return@launch
-            }
+            // 无障碍的连接检查已经提到 submit() 最前面了（见那里的注释：
+            // 放这儿会把用户输入清掉、还往上下文里多塞一条任务消息）。
 
             // 通知权限：拒绝也不拦流程，只是少了通知栏那个急停按钮
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
