@@ -156,11 +156,11 @@ class ShellService : IShellService.Stub() {
                 ?: return@synchronized lastFrameBytes ?: ByteArray(0)
             val img: Image? = reader.acquireLatestImage()
             if (img != null) {
-                val png = imageToPng(img)
+                val jpeg = imageToJpeg(img)
                 img.close()
-                if (png.isNotEmpty()) {
-                    lastFrameBytes = png
-                    return@synchronized png
+                if (jpeg.isNotEmpty()) {
+                    lastFrameBytes = jpeg
+                    return@synchronized jpeg
                 }
             }
             // 没有新帧（静态画面）就回退上一帧
@@ -273,8 +273,17 @@ class ShellService : IShellService.Stub() {
         return ctx
     }
 
-    /** Image（RGBA_8888，可能带 rowStride padding）转成 PNG 字节 */
-    private fun imageToPng(img: Image): ByteArray {
+    /**
+     * Image（RGBA_8888，可能带 rowStride padding）转成 JPEG 字节。
+     *
+     * 副屏模式**每一步都要带图**（读不到控件树，图是模型唯一的信息来源），
+     * 所以这里跟主通道一样压 JPEG：全分辨率、不缩放（一缩放模型给的坐标
+     * 就和提示词里的屏宽/屏高对不上），只换编码格式。
+     *
+     * 编码失败时退回 PNG：这段代码跑在 Shizuku 用户服务（app_process）里，
+     * 环境比普通 App 特殊，宁可图大一点也不能截不到 —— 截不到副屏就没法操作。
+     */
+    private fun imageToJpeg(img: Image): ByteArray {
         val plane = img.planes[0]
         val buf: ByteBuffer = plane.buffer
         val paddedW = plane.rowStride / plane.pixelStride
@@ -284,7 +293,12 @@ class ShellService : IShellService.Stub() {
         bmp.copyPixelsFromBuffer(buf)
         val fixed = if (paddedW != w) Bitmap.createBitmap(bmp, 0, 0, w, h) else bmp
         val out = ByteArrayOutputStream(w * h / 8)
-        fixed.compress(Bitmap.CompressFormat.PNG, 100, out)
+        val encoded = runCatching { fixed.compress(Bitmap.CompressFormat.JPEG, 82, out) }
+            .getOrDefault(false)
+        if (!encoded || out.size() == 0) {
+            out.reset()
+            fixed.compress(Bitmap.CompressFormat.PNG, 100, out)
+        }
         return out.toByteArray()
     }
 

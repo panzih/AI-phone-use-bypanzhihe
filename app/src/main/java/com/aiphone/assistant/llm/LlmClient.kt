@@ -64,15 +64,20 @@ data class LlmConfig(
  * 正确做法是让消息**逐字不变地**重复出现：图片跟着它所属的那条消息，
  * 之后每次请求都原样再发一遍。这样前缀才是真正只增不改的。
  *
- * 代价是每次请求的请求体里会带上之前用过的图片（一张 60~90KB 的 PNG，
- * base64 之后约 120KB）。但命中缓存的那部分便宜很多，
- * 而且图片是按需才要的（见 Agent 的 need_image），数量很少。
+ * 代价是每次请求的请求体里会带上之前用过的图片。所以图片是**全分辨率 JPEG**
+ * （q82，见 `AccessibilityChannel.screenshot()`）：全分辨率是为了让模型给的
+ * 坐标和提示词里承诺的屏宽/屏高一致，JPEG 是为了别让每一步都重发一张
+ * 1MB 级的 PNG。而且图片是按需才要的（capture / need_image），数量很少。
  */
 data class ChatTurn(
     val role: String,
     val text: String,
-    /** 这条消息附带的截图。之后每次请求都会原样重发 —— 这是缓存命中的前提 */
-    val imagePng: ByteArray? = null,
+    /**
+     * 这条消息附带的截图字节（正常是 JPEG；副屏那条路编码失败时会退回 PNG）。
+     * 之后每次请求都会原样重发 —— 这是缓存命中的前提，所以**不能重新编码**：
+     * 必须是同一份 byte[]。MIME 由 [mimeOf] 按字节头判断，不写死。
+     */
+    val imageBytes: ByteArray? = null,
 ) {
     companion object {
         const val USER = "user"
@@ -307,7 +312,7 @@ class LlmClient(private val cfg: LlmConfig) {
             messages.put(
                 JSONObject().apply {
                     put("role", turn.role)
-                    val image = turn.imagePng
+                    val image = turn.imageBytes
                     // 图片跟着它所属的那条消息，每次请求都原样重发。
                     // 这是前缀能被缓存命中的前提（见 ChatTurn 的说明）
                     if (image != null && image.isNotEmpty()) {
@@ -324,7 +329,7 @@ class LlmClient(private val cfg: LlmConfig) {
                                 put(
                                     "image_url",
                                     JSONObject().apply {
-                                        put("url", "data:image/png;base64,${b64(image)}")
+                                        put("url", "data:${mimeOf(image)};base64,${b64(image)}")
                                         put("detail", cfg.detail)
                                     },
                                 )
@@ -368,7 +373,7 @@ class LlmClient(private val cfg: LlmConfig) {
                 add(
                     t.role.hashCode() * 31 +
                         t.text.hashCode() * 7 +
-                        (t.imagePng?.let { System.identityHashCode(it) * 13 + it.size } ?: 0)
+                        (t.imageBytes?.let { System.identityHashCode(it) * 13 + it.size } ?: 0)
                 )
             }
         }
@@ -382,6 +387,20 @@ class LlmClient(private val cfg: LlmConfig) {
 
     private fun b64(bytes: ByteArray): String =
         android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+
+    /**
+     * 按字节头判断图片 MIME。
+     *
+     * 为什么不写死 `image/jpeg`：不同来源的编码不一定一样 —— 主通道是 JPEG，
+     * 副屏（跑在 Shizuku 用户服务里抓帧）优先 JPEG、编码失败会退回 PNG。
+     * MIME 声明错了会被多模态服务直接拒掉，而嗅探两个字节就够准。
+     */
+    private fun mimeOf(bytes: ByteArray): String =
+        if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()) {
+            "image/jpeg"
+        } else {
+            "image/png"
+        }
 
     // ------------------------------------------------------------------
     // 响应解析与报错翻译

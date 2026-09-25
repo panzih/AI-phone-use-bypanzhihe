@@ -136,6 +136,9 @@ class DisplayChannel(
                 // dismiss_dialog 在 Agent 层就转成 TAP，不会走到通道；兜底报错
                 TouchKind.DISMISS_DIALOG -> "内部错误：关闭弹窗未在端侧处理"
 
+                // capture 由 Agent 自己处理（截图不走通道），走到这里说明有 bug
+                TouchKind.CAPTURE -> "内部错误：截屏不该发到设备通道"
+
                 TouchKind.TAP -> {
                     onPoint?.invoke(action.x, action.y)
                     ok(AdbShell.tap(context, displayId, action.x, action.y), "点击")

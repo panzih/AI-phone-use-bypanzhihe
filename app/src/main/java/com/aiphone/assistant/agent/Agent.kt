@@ -32,9 +32,10 @@ import java.security.MessageDigest
  * ## 与上一版的三处不同
  *
  * **1. 默认不再每步发截图。**
- * 一张 1080x2400 的 PNG base64 之后一两兆，是整条链路里最贵的东西。
+ * 一张全分辨率截图 base64 之后是大头，是整条链路里最贵的东西。
  * 控件树已经能给出精确的元素编号，截图只在"这一屏说不清是什么"时
- * 才有价值 —— 所以改成由模型自己用 `need_image` 要。
+ * 才有价值 —— 所以改成由模型自己要：`need_image`（立即要，重问同一步）
+ * 或把 `capture` 放进动作序列（图随下一步发，不多一次往返）。
  *
  * **2. 一轮执行一批动作。**
  * 模型一次给出若干个动作，中间自动等界面稳定（页面指纹判据）；
@@ -66,6 +67,18 @@ class Agent(
     private val selfPackage: String,
     /** 技能注册表 —— 模型用 use_skill 主动要"屏幕上没有的信息" */
     private val skills: SkillRegistry,
+    /**
+     * **技能目录快照**（进系统提示词的**那一份**）。
+     *
+     * 必须用快照而不是 [skills] 的实时目录：系统提示词是前缀的第 0 个 token，
+     * 用户学会/删掉一个录制技能都会让实时目录变化 —— 那会让整段上下文的
+     * 缓存静默失效（只烧钱、不出错，日志里只能看到命中率掉下来）。
+     * 快照由调用方在**新开上下文时**固定，之后整段沿用；
+     * 技能**执行**仍然走实时注册表（新技能立刻能用，不影响前缀）。
+     *
+     * null = 调用方没给，退化成实时目录（仅用于测试和极端兜底）。
+     */
+    private val skillCatalogSnapshot: String? = null,
     /**
      * 用户的记忆。**只在上下文是新开的时候非空**。
      *
@@ -209,7 +222,7 @@ class Agent(
         // 上下文的缓存全废。所以记忆用的是调用方固定下来的那一份快照
         // （见 CarriedContext.memorySnapshot），这里不重新去读记忆文件。
         val system = AgentPrompt.system(
-            skills.catalog(),
+            skillCatalogSnapshot ?: skills.catalog(),
             memorySnapshot,
             modelName = settings.modelName,
         )
@@ -251,12 +264,12 @@ class Agent(
         // 而不是单独发一条 —— 这样整条对话是严格追加，缓存才命中得了。
         var lastResult: String? = null
 
-        // screenshot_after 的跨步旗标：上一批结束时只立布尔、不立刻截图
-        // （立刻截，图和下一步的树之间隔着 recordStep、可能不同步），
-        // 下一步开头和新树同一瞬间再截。
-        var shotAfterPending = false
+        // capture 动作截到的图：跨步携带，随**下一步**的 user 消息一起发。
+        // 不在截到的当下发，是因为图和"界面元素"必须来自同一瞬间 ——
+        // 早一步截的图配晚一步的树，模型会把坐标算到错的地方。
+        var pendingActionShot: ByteArray? = null
 
-        // 任务级图片计数：need_image 和 screenshot_after 共同消耗，
+        // 任务级图片计数：need_image 和 capture 共同消耗，
         // 超过 MAX_TOTAL_IMAGES 就不再给图（副屏自动图是刚需、不计入）。
         var totalImages = 0
 
@@ -333,6 +346,13 @@ class Agent(
             }
 
             val interruptions = buildList {
+                // 纸盒自己在前台：比"界面没变化"更根本的问题，先说它
+                if (foreground != null && foreground == selfPackage) {
+                    add(
+                        "现在前台是「纸盒」自己，不是用户要操作的应用。先用 open_app 打开目标应用" +
+                            "（包名不确定就先调 list_apps 查真实包名），不要在纸盒的界面上点击。"
+                    )
+                }
                 if (sameTree >= 2) {
                     add(
                         "界面元素和上一步完全一样，说明你上一批动作**没有生效**。" +
@@ -382,40 +402,31 @@ class Agent(
             var imageNote: String? = null
             var skillNote: String? = null
 
-            // ---- 上一批要求"动作后看新画面"：和这步的新树同一瞬间截图 ----
-            if (shotAfterPending) {
-                shotAfterPending = false // 无条件清，副屏（tree==null）也不残留
-                if (tree == null) {
-                    // 副屏每步自带 autoImage，动作后截图无意义、直接跳过
-                } else if (totalImages >= MAX_TOTAL_IMAGES) {
-                    // 任务级图上限：忽略，不附图
-                    logger?.line(
-                        "忽略 screenshot_after：已达本次任务图片上限（$MAX_TOTAL_IMAGES 张）",
-                        "截图",
-                    )
-                    lastResult = (lastResult?.let { "$it " } ?: "") +
-                        "（已达本次任务图片上限，这次没有动作后截图）"
-                } else {
-                    // 截图仪式与 need_image 一致：先让开纸盒、藏悬浮窗、截、再显示
-                    yieldForegroundIfNeeded()
-                    OverlayBus.setPhase(AgentPhase.SCREENSHOT)
-                    OverlayBus.hide()
-                    delay(OVERLAY_SETTLE_MS)
-                    val shot = withContext(Dispatchers.IO) { controller.captureFrame() }
-                    OverlayBus.show()
-                    if (shot == null || shot.isEmpty()) {
-                        val err = controller.lastScreenshotError() ?: "未知原因"
-                        logger?.error("动作后截图失败：$err", "截图")
-                        pendingImage = null
-                    } else {
-                        pendingImage = shot
-                        totalImages++
+            // ---- 上一步 capture 截到的图：和这步的界面元素一起发 ----
+            if (pendingActionShot != null) {
+                val shot = pendingActionShot
+                pendingActionShot = null // 无条件清，副屏 / 超限都不残留
+                when {
+                    // 副屏每步自带 autoImage，再附一张没有意义（而且是同一个画面）
+                    tree == null ->
+                        logger?.line("忽略 capture 的图：这一屏没有控件树，本步已自动带图", "截图")
+                    totalImages >= MAX_TOTAL_IMAGES -> {
                         logger?.line(
-                            "动作后截图：${w}x$h，${shot.size} 字节（上一批之后的新画面）",
+                            "忽略 capture 的图：已达本次任务图片上限（$MAX_TOTAL_IMAGES 张）",
                             "截图",
                         )
-                        logger?.saveScreenshot(step, shot)
-                        imageNote = "这是上一批动作之后的新画面。"
+                        lastResult = (lastResult?.let { "$it " } ?: "") +
+                            "（已达本次任务图片上限，上一步截的图没有发给你）"
+                    }
+                    shot.isEmpty() -> {
+                        val err = controller.lastScreenshotError() ?: "未知原因"
+                        logger?.error("capture 的图取不到了：$err", "截图")
+                    }
+                    else -> {
+                        pendingImage = shot
+                        imageNote = "这是你要的那张截图（capture）。"
+                        totalImages++
+                        logger?.line("capture 的图随本步发送：${shot.size} 字节", "截图")
                     }
                 }
             }
@@ -424,6 +435,15 @@ class Agent(
                 if (isStopped()) {
                     finish(false, "你停止了任务（第 $step 步，模型调用前）")
                     return
+                }
+
+                // 控件树为空时要说清是**哪一种**空 —— 副屏、纸盒自己在前台、
+                // 界面自绘，这三种情况模型该做的事完全不同（见 AgentPrompt 常量）
+                val noTreeReason = when {
+                    tree != null -> null
+                    controller.isVirtualDisplay -> AgentPrompt.NO_TREE_VIRTUAL_DISPLAY
+                    foreground != null && foreground == selfPackage -> AgentPrompt.NO_TREE_SELF
+                    else -> null // 兜底：AgentPrompt 里会用 DEFAULT_NO_TREE_REASON
                 }
 
                 val userText = AgentPrompt.stepMessage(
@@ -438,6 +458,7 @@ class Agent(
                     lastResult = lastResult,
                     imageNote = imageNote,
                     skillNote = skillNote,
+                    noTreeReason = noTreeReason,
                 )
 
                 // ⚠️ 必须把**实际发出去的这条消息**原样追加进 history ——
@@ -719,6 +740,9 @@ class Agent(
             val results = ArrayList<String>(p.actions.size)
             // 因切换通道而完全没执行（没进 results）的动作数；-1 表示没被切换中断
             var switchPendingCount = -1
+            // 本批截了几张图。一批最多一张：模型可能连写几个 capture，
+            // 但同一批里画面几乎没变，多截只是多花钱
+            var shotsThisBatch = 0
             for ((i, action) in p.actions.withIndex()) {
                 // 动作间隙统一查中断：急停立刻收尾；切换请求 break、交本步 tail 留痕，
                 // 下一轮 for(step) 开头 261/268 处理迁移/回迁（0.8.2）
@@ -772,6 +796,46 @@ class Agent(
                             )
                             switchPendingCount = p.actions.size - i - 1
                             break
+                        }
+                    }
+                } else if (action.kind == TouchKind.CAPTURE) {
+                    // 截屏**不走设备通道**（DeviceChannel.perform 不认识它）：
+                    // 藏悬浮窗 → 截图 → 显示，图交给**下一步**和新界面元素一起发。
+                    OverlayBus.setPhase(AgentPhase.SCREENSHOT)
+                    logger?.line("  $single", "执行")
+                    when {
+                        shotsThisBatch >= MAX_CAPTURE_PER_BATCH ->
+                            results.add("$single → 本批已经截过一张，这张跳过")
+
+                        // 副屏每步都会自动带一张图，再截就是同一个画面
+                        tree == null ->
+                            results.add("$single → 这一屏已自动带图，跳过")
+
+                        totalImages >= MAX_TOTAL_IMAGES ->
+                            results.add("$single → 已达本次任务图片上限（$MAX_TOTAL_IMAGES 张），未截图")
+
+                        else -> {
+                            // 和 need_image 同一套仪式：先让开纸盒、藏悬浮窗、截、再显示
+                            yieldForegroundIfNeeded()
+                            OverlayBus.hide()
+                            delay(OVERLAY_SETTLE_MS)
+                            val shot = withContext(Dispatchers.IO) { controller.captureFrame() }
+                            OverlayBus.show()
+                            if (shot == null || shot.isEmpty()) {
+                                val err = controller.lastScreenshotError() ?: "未知原因"
+                                logger?.error("  $single → 截图失败：$err", "执行")
+                                results.add("$single → 截图失败：$err")
+                            } else {
+                                // 计数留给"真正发出去"那一步（见 pendingActionShot 的消费）
+                                pendingActionShot = shot
+                                shotsThisBatch++
+                                logger?.saveScreenshot(step, shot)
+                                logger?.line(
+                                    "  $single → 已截（${shot.size} 字节），随下一步发送",
+                                    "执行",
+                                )
+                                results.add("$single → 已截图，随下一步发给你")
+                            }
                         }
                     }
                 } else if (action.kind == TouchKind.DISMISS_DIALOG) {
@@ -923,10 +987,8 @@ class Agent(
                 shot = null,
             )
 
-            // 模型要这批之后看新画面：不在这步立刻截，只立旗标，
-            // 下一步开头和新树同一瞬间截（见循环开头的 shotAfterPending）。
-            // 这批就是收尾（finished）时不立：任务马上结束、旗标没人消费。
-            if (p.screenshotAfter && !p.finished) shotAfterPending = true
+            // 要图这件事已经变成 actions 里的一个 capture 动作（见 ActionParser），
+            // 不再需要"这批结束时立一个旗标"的跨步机制了
 
             // ---- 回灌给模型 ----
             history.add(ChatTurn(ChatTurn.ASSISTANT, modelOutput))
@@ -1781,12 +1843,20 @@ class Agent(
         const val MAX_IMAGE_REQUESTS = 2
 
         /**
-         * 一次任务里 need_image + screenshot_after 总共最多给多少张图。
+         * 一次任务里 need_image + capture 总共最多给多少张图。
          *
          * 和 [MAX_IMAGE_REQUESTS]（同一轮内的限制）是两条维度：那个每轮重置、
          * 这个跨整段任务累计。副屏模式每步自动带的刚需图不计入这里。
          */
         const val MAX_TOTAL_IMAGES = 20
+
+        /**
+         * 一批动作里最多截几张图。
+         *
+         * 同一批动作之间的间隔只有几百毫秒，画面几乎没变；模型要是连写几个
+         * `capture`，多出来的那些纯粹是白花钱。第二张起只回一行说明。
+         */
+        const val MAX_CAPTURE_PER_BATCH = 1
 
         /**
          * 超限后模型还坚持要图/要技能，最多重试几次。

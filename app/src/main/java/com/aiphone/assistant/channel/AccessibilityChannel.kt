@@ -112,8 +112,14 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
         repeat(3) { attempt ->
             when (val r = svc.takeShot()) {
                 is AutoService.ShotResult.Ok -> {
+                    // **全分辨率** JPEG。两条都是硬要求：
+                    //   1. 绝对不缩放 —— 提示词里承诺的是"坐标范围 0..屏宽/屏高"，
+                    //      一缩放模型给的 x/y 就和真实屏幕对不上，点哪都偏。
+                    //   2. 用 JPEG 而不是 PNG —— 历史里的图**每次请求都要重发**，
+                    //      PNG 一张 1MB 级，base64 后更大；q82 的 JPEG 同样分辨率
+                    //      通常只有几十 KB，界面文字依然清楚。
                     val bytes = java.io.ByteArrayOutputStream().use { out ->
-                        r.bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                        r.bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out)
                         r.bitmap.recycle()
                         out.toByteArray()
                     }
@@ -225,6 +231,9 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
             when (action.kind) {
                 // dismiss_dialog 在 Agent 层就转成 TAP，不会走到通道；兜底报错
                 TouchKind.DISMISS_DIALOG -> "内部错误：关闭弹窗未在端侧处理"
+
+                // capture 由 Agent 自己处理（截图不走通道），走到这里说明有 bug
+                TouchKind.CAPTURE -> "内部错误：截屏不该发到设备通道"
 
                 TouchKind.TAP -> {
                     if (action.targetIndex > 0) {

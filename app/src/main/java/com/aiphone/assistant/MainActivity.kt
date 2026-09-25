@@ -285,7 +285,7 @@ private fun AppRoot(
     var schedules by remember { mutableStateOf(ScheduleStore.loadAll(context)) }
     var exactAlarmGranted by remember { mutableStateOf(Scheduler.canScheduleExact(context)) }
 
-    // 当前技能目录（系统提示词的一部分）：用于和磁盘快照比对
+    // 当前技能目录（系统提示词的一部分）：用于和磁盘快照比对、以及新开上下文时固定
     val currentCatalog = remember {
         SkillRegistry(
             ctx = SkillContext(context.applicationContext, controller),
@@ -293,7 +293,7 @@ private fun AppRoot(
         ).catalog()
     }
 
-    // 对话从磁盘恢复。提示词版本 / 模型名对不上才按新开处理
+    // 对话从磁盘恢复。提示词版本 / 模型名 / 技能目录任一对不上就按新开处理
     // （旧前缀已失效，接着用只会静默失缓存）。技能目录和记忆一样
     // 是「冻结快照」：存下来、续接时沿用当初那一份，学了新技能
     // 不会把旧上下文清掉（想用新技能就手动清空重开）。
@@ -301,7 +301,8 @@ private fun AppRoot(
     val savedContext = remember(diskContext) {
         diskContext?.takeIf {
             it.promptVersion == AgentPrompt.VERSION &&
-                it.modelName == settings.modelName
+                it.modelName == settings.modelName &&
+                it.skillCatalog == currentCatalog
         }
     }
     val logs = remember {
@@ -314,7 +315,7 @@ private fun AppRoot(
                     LogEntry(
                         id = "prompt_reset_${System.currentTimeMillis()}",
                         kind = LogKind.SYSTEM,
-                        text = "提示词版本变化，已开新上下文",
+                        text = "提示词版本 / 模型 / 技能目录变化，已开新上下文",
                         label = "上下文",
                     )
                 )
@@ -365,6 +366,18 @@ private fun AppRoot(
      */
     var contextMemory by remember { mutableStateOf(savedContext?.memorySnapshot ?: "") }
 
+    /**
+     * 这段上下文**系统提示词里用的那份技能目录快照**。
+     *
+     * 和 [contextMemory] 同理：系统提示词是前缀的第 0 个 token，它一变
+     * 整段上下文的缓存就全废。用户学会/删掉一个录制技能都会改实时目录，
+     * 所以这里固定住当初那一份 —— 技能**执行**仍走实时注册表（新技能立刻
+     * 可用），想知道提示词里也有新技能，就清空上下文重开一段。
+     */
+    var contextSkillCatalog by remember {
+        mutableStateOf(savedContext?.skillCatalog ?: currentCatalog)
+    }
+
     fun addLog(kind: LogKind, text: String, label: String? = null) {
         logs.add(
             LogEntry(
@@ -381,7 +394,7 @@ private fun AppRoot(
         if (savedContext == null && diskContext?.entries?.isNotEmpty() == true &&
             settings.saveLogs
         ) {
-            AppLog.w("提示词版本或模型变化，旧上下文作废、已开新上下文", "上下文")
+            AppLog.w("提示词版本 / 模型 / 技能目录变化，旧上下文作废、已开新上下文", "上下文")
         }
     }
 
@@ -390,7 +403,7 @@ private fun AppRoot(
     //
     // 模型历史一起存：它和界面消息必须是**同一次**写入，否则两边会不一致
     // （见 modelHistory 的说明）
-    LaunchedEffect(logs.size, conversation.size, modelHistory, modelFingerprints, contextMemory) {
+    LaunchedEffect(logs.size, conversation.size, modelHistory, modelFingerprints, contextMemory, contextSkillCatalog) {
         if (logs.isEmpty() && conversation.size == 0 && modelHistory.isEmpty()) return@LaunchedEffect
         delay(600)
         ContextStore.save(
@@ -403,7 +416,7 @@ private fun AppRoot(
             memorySnapshot = contextMemory,
             promptVersion = AgentPrompt.VERSION,
             modelName = settings.modelName,
-            skillCatalog = currentCatalog,
+            skillCatalog = contextSkillCatalog,
         )
     }
 
@@ -447,6 +460,11 @@ private fun AppRoot(
         modelHistory = emptyList()
         modelFingerprints = emptyList()
         contextMemory = ""
+        // 新开一段就用**当前**技能目录（学会技能后清空一次即可让提示词跟上）
+        contextSkillCatalog = SkillRegistry(
+            ctx = SkillContext(context.applicationContext, controller),
+            extra = MacroStore.loadAll(context),
+        ).catalog()
         ContextStore.clear(context)
         addLog(LogKind.SYSTEM, reason, context.getString(R.string.context_label))
         if (settings.saveLogs) AppLog.i("清空上下文（原有 $had 轮）：$reason", "上下文")
@@ -693,6 +711,9 @@ private fun AppRoot(
                 // 每次任务重新从文件加载：用户可能刚在「操作记录」里学会一个
                 extra = MacroStore.loadAll(context),
             ),
+            // 系统提示词吃的是**这段上下文开头的目录快照**，不是上面这份实时目录 ——
+            // 实时目录会随"学会/删掉技能"变化，那会让整段上下文的前缀缓存静默失效
+            skillCatalogSnapshot = carried.skillCatalog.ifBlank { currentCatalog },
             logger = logger,
             listener = object : Agent.Listener {
                 override fun onEvent(kind: Agent.EventKind, text: String, label: String?) {
@@ -823,12 +844,13 @@ private fun AppRoot(
         val carried = if (freshContext) {
             modelHistory = emptyList()
             modelFingerprints = emptyList()
-            CarriedContext(memorySnapshot = memory)
+            CarriedContext(memorySnapshot = memory, skillCatalog = contextSkillCatalog)
         } else {
             CarriedContext(
                 history = modelHistory,
                 fingerprints = modelFingerprints,
                 memorySnapshot = memory,
+                skillCatalog = contextSkillCatalog,
             )
         }
 

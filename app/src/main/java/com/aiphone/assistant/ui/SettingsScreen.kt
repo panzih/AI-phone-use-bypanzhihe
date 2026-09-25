@@ -188,7 +188,7 @@ fun SettingsScreen(
             item {
                 ActionRow(
                     title = stringResource(R.string.settings_clear_context),
-                    subtitle = null,
+                    subtitle = stringResource(R.string.settings_clear_context_sub),
                     onClick = onClearContext,
                 )
             }

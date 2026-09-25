@@ -35,9 +35,11 @@ import org.json.JSONObject
  * 内层每一条单独校验 —— **坏的那条丢掉，好的照常执行**，
  * 而不是因为一条写错就整轮作废。丢掉的会在 warning 里说明并回灌给模型。
  *
- * **2. `need_image` / `use_skill`。** 模型可以只要一张截图、或者只要调用一个技能，
- * 而不给动作。这不算"没解析出动作" —— Agent 会把结果取回来重新问它一次，
- * 而且这一轮不算一步。
+ * **2. `need_image` / `use_skill` / `capture`。** 模型可以只要一张截图、
+ * 或者只要调用一个技能，而不给动作。这不算"没解析出动作" —— Agent 会把
+ * 结果取回来重新问它一次，而且这一轮不算一步。
+ * `capture` 不一样：它是**动作序列里的一个元素**（可以夹在两步点击中间），
+ * 截到的图随下一步一起发，所以不多一次往返。
  */
 object ActionParser {
 
@@ -49,6 +51,19 @@ object ActionParser {
 
     /** 单次等待的上限，防止模型写出一个"等一小时"的手滑值 */
     const val MAX_SLEEP_MS = 60_000
+
+    /**
+     * **没声明 `long_wait` 时**允许的最长等待。
+     *
+     * 超过就夹到这个值，并回灌一行警告给模型。理由：系统本来就会在每个
+     * 动作之后自动等界面稳定（普通跳转 0.4~1.2s、开应用 1.5~2.5s），
+     * 所以 `sleep` 只有"倒计时/长加载"这种自动等待盖不住的情况才需要。
+     * 用户在真机上见过模型写「等待 25000ms」——那是纯粹白等，
+     * 还让急停要多等二十几秒才生效。
+     *
+     * [MAX_SLEEP_MS] 仍是硬上限：写了 long_wait 也不是想睡多久就睡多久。
+     */
+    const val MAX_SILENT_SLEEP_MS = 5_000
 
     /**
      * 解析结果。
@@ -92,14 +107,6 @@ object ActionParser {
         val skillId: String? = null,
         /** 技能的参数，可能没有 */
         val skillArgs: JSONObject? = null,
-        /**
-         * 这批动作执行完、下一屏再要一张图。
-         *
-         * 和 [needImage] 的区别：needImage 是"这一屏看不懂、立刻给图"，
-         * screenshotAfter 是"动作我能给、但下一屏想看结果"——图在下一步
-         * 和新控件树一起给，不多一次往返。两个同给按 needImage 处理。
-         */
-        val screenshotAfter: Boolean = false,
     )
 
     /** 动作名白名单。不在这张表里的一律拒绝，绝不去执行。 */
@@ -129,7 +136,10 @@ object ActionParser {
         put("close_popup", TouchKind.DISMISS_DIALOG)
     }
 
-    /** 这些"动作名"其实是"我要看截图"，不是真动作 */
+    /** 这些"动作名"其实是"我要看截图"，不是真动作。
+     *
+     *  只对**顶层老格式**（`{"action":"screenshot"}`）生效 ——
+     * 写在 `actions[]` 里的一律归一成 CAPTURE 动作，见 parse() 里的说明。 */
     private val IMAGE_REQUESTS = setOf(
         "screenshot", "screen_shot", "screencap", "look", "see", "view_image", "request_image",
     )
@@ -190,8 +200,8 @@ object ActionParser {
             obj.optBoolean("need_screenshot", false) ||
             obj.optBoolean("needShot", false)
 
-        // 这批动作做完、下一屏再要一张图。只认这一个规范名，不加别名
-        var screenshotAfter = obj.optBoolean("screenshot_after", false)
+        // 想在这批动作之后顺手看一眼（老字段，现在只做兼容）
+        val wantShotAfter = obj.optBoolean("screenshot_after", false)
 
         // 要调用技能：字段名模型可能写成好几种，都认
         val skillId = sequenceOf("use_skill", "skill", "call_skill", "useSkill")
@@ -203,12 +213,14 @@ object ActionParser {
         // ---- 收集原始动作条目 ----
         val items = ArrayList<JSONObject>()
         val arr: JSONArray? = obj.optJSONArray("actions")
+        // 老格式：单个动作直接写顶层。它和 actions[] 里的同名动作**语义不同**
+        // （见下面 IMAGE_REQUESTS 分支），所以要记住来源
+        val fromTopLevel = arr == null && obj.has("action")
         if (arr != null) {
             for (i in 0 until arr.length()) {
                 arr.optJSONObject(i)?.let { items.add(it) }
             }
         } else if (obj.has("action")) {
-            // 兼容旧格式：单个动作直接写在顶层
             items.add(obj)
         }
 
@@ -225,7 +237,21 @@ object ActionParser {
             val name = item.optString("action").trim().lowercase()
 
             if (name in IMAGE_REQUESTS) {
-                needImage = true
+                // 两种来源、两种处理：
+                //   actions[] 里写了 screenshot/look 这类名字 → 当成一个 capture
+                //     **动作**，保留它在序列里的位置（序列中间截的就是中间那一步
+                //     的画面，图随下一步发，不多一次往返）
+                //   顶层老格式 {"action":"screenshot"} → 仍按"立即要图"处理，
+                //     免得老历史/老脚本的行为变样
+                if (fromTopLevel) {
+                    needImage = true
+                    continue
+                }
+                if (actions.size >= MAX_ACTIONS) {
+                    notes.add("动作太多（给了 ${items.size} 个），只执行了前 $MAX_ACTIONS 个。")
+                    break
+                }
+                actions.add(TouchAction(kind = TouchKind.CAPTURE))
                 continue
             }
             if (name in FINISH_NAMES) {
@@ -241,7 +267,7 @@ object ActionParser {
                 break
             }
 
-            val problem = parseOne(item, name, actions, screenWidth, screenHeight)
+            val problem = parseOne(item, name, actions, notes, screenWidth, screenHeight)
             if (problem != null) {
                 notes.add("第 ${i + 1} 个动作被丢弃：$problem")
             }
@@ -252,15 +278,24 @@ object ActionParser {
         if (topAction == "finish" || topAction == "done") finished = true
         if (topAction in FAIL_NAMES) failed = true
 
-        // ---- screenshot_after 归一化（构造 Parsed 之前）----
-        // 它的语义是"这批动作之后"，所以这批没动作时它不成立。
-        if (needImage) {
-            screenshotAfter = false // 和 need_image 同给 → need_image 优先
-        } else if (actions.isEmpty()) {
-            screenshotAfter = false
-            // 没动作、也没在要技能：意图其实就是想看图，退化成立即要图，
-            // 别落到下面那条"空转"警告上
-            if (skillId == null) needImage = true
+        // ---- screenshot_after 归一化 ----
+        // 它的语义是"这批动作之后顺手看一眼"，和"在序列末尾放一个 capture"
+        // 完全等价。现在统一成后者：提示词里已经不再教这个字段，这里只为兼容
+        // 模型偶发的老写法。注意三条边界：
+        //   - 和 need_image 同给 → need_image 优先（立即给图，更直接）
+        //   - 这批就是收尾（finished / failed）→ 不加，任务马上结束没人消费它
+        //   - 没动作也没技能 → 意图就是看图，退化成立即要图，别落到"空转"警告
+        if (wantShotAfter) {
+            when {
+                needImage -> {}
+                finished || failed -> {}
+                actions.isNotEmpty() -> {
+                    // 位置已经满了就先腾一个出来，别把末尾那个动作挤掉
+                    if (actions.size >= MAX_ACTIONS) actions.removeAt(actions.size - 1)
+                    actions.add(TouchAction(kind = TouchKind.CAPTURE))
+                }
+                skillId == null -> needImage = true
+            }
         }
 
         // failed 优先于 finished：两个都给了的话，宁可报"没做成"，
@@ -286,7 +321,6 @@ object ActionParser {
                 thought, actions, needImage = false, finished = true,
                 summary = summary, raw = raw, nextHint = nextHint,
                 warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
-                screenshotAfter = screenshotAfter,
             )
         }
 
@@ -317,7 +351,6 @@ object ActionParser {
             warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
             skillId = skillId,
             skillArgs = skillArgs,
-            screenshotAfter = screenshotAfter,
         )
     }
 
@@ -327,11 +360,16 @@ object ActionParser {
      *
      * 时长和坐标都在这里夹紧 —— 越界的值一定是模型手滑，
      * 直接照着执行会点到界面外面去。
+     *
+     * 能执行但需要提醒模型的（比如"时长被夹短了"）不返回原因，
+     * 而是往 [notes] 里追加一行 —— 那行最后会拼进 warning 回灌给模型，
+     * 动作本身照常执行。
      */
     private fun parseOne(
         item: JSONObject,
         actionName: String,
         out: MutableList<TouchAction>,
+        notes: MutableList<String>,
         screenWidth: Int,
         screenHeight: Int,
     ): String? {
@@ -346,7 +384,8 @@ object ActionParser {
         val y = clamp(item.optInt("y", 0), screenHeight)
         val x2 = clamp(item.optInt("x2", 0), screenWidth)
         val y2 = clamp(item.optInt("y2", 0), screenHeight)
-        val duration = item.optInt("duration_ms", item.optInt("duration", 0))
+        // "ms" 是模型爱写的简写（duration_ms / duration 之外多认一个）
+        val duration = item.optInt("duration_ms", item.optInt("duration", item.optInt("ms", 0)))
         val text = item.optString("text", item.optString("content", ""))
         val pkg = item.optString("package", item.optString("package_name", ""))
 
@@ -382,10 +421,28 @@ object ActionParser {
         if (problem != null) return problem
 
         // sleep 没写时长就按默认值处理（不算错，不用回灌）
-        val ms = when (kind) {
+        var ms = when (kind) {
             TouchKind.WAIT -> duration.takeIf { it > 0 } ?: DEFAULT_SLEEP_MS
             else -> duration
         }.coerceIn(0, MAX_SLEEP_MS)
+
+        // 长等待必须显式声明：系统本来就会自动等界面稳定，写个 25 秒的 sleep
+        // 多半是白等，还会拖慢急停的响应。声明了 long_wait 的照办（但仍受
+        // MAX_SLEEP_MS 硬上限约束），没声明的夹短并告诉他一声。
+        if (kind == TouchKind.WAIT && ms > MAX_SILENT_SLEEP_MS) {
+            val declared = item.optBoolean("long_wait", false) || item.optBoolean("longWait", false)
+            if (declared) {
+                val note = item.optString("note", item.optString("reason", "")).trim()
+                notes.add("等待 ${ms}ms" + if (note.isBlank()) "" else "（$note）")
+            } else {
+                notes.add(
+                    "等待 ${ms}ms 未声明 long_wait，已按 ${MAX_SILENT_SLEEP_MS}ms 执行。" +
+                        "系统已自动等界面稳定，确实需要长等（倒计时/长加载）" +
+                        "就加 \"long_wait\": true 并在 note 里说明原因。"
+                )
+                ms = MAX_SILENT_SLEEP_MS
+            }
+        }
 
         out.add(
             TouchAction(

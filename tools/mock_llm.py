@@ -5,31 +5,36 @@
 它按顺序返回一串预设回复，专门覆盖新协议的边界情况。
 **注意：索引是"第几次 HTTP 请求"，不是"第几步"** —— 要图和调技能都会
 多产生一次请求（这一轮不算一步），所以下面的注释把两者都标出来了。
+`capture` 则是**动作**，不额外产生请求（图随下一步走）。
 
-    请求1  一批 3 个动作（点 2 → 显式 sleep 10s → 点 5）
+    请求1  一批 3 个动作（点 2 → 显式 sleep 1.5s → 点 5）
            —— 验证"一轮一批动作"，以及显式 sleep 顶掉默认间隔
-    请求2  need_image=true（不给动作）
-           —— 验证按需截图
-    请求3  看完图后给动作（旧的单动作格式 + markdown 围栏）
+    请求2  {"action":"capture"} 夹在一批里
+           —— 验证 capture 归一化：图随**下一步**发，步骤不因此多一次往返
+    请求3  need_image=true（不给动作）
+           —— 验证按需截图：这一轮不算一步，会立刻带图重问
+    请求4  看完图后给动作（旧的单动作格式 + markdown 围栏）
            —— 验证防御性解析和向后兼容
-    请求4  use_skill="list_skills"
+    请求5  use_skill="list_skills"
            —— 验证"按需取技能说明文档"
-    请求5  use_skill="list_apps"
+    请求6  use_skill="list_apps"
            —— 验证技能调用：系统应把已安装应用 + 包名回灌给模型
-    请求6  用拿到的包名 open_app
+    请求7  用拿到的包名 open_app
            —— 验证技能结果确实留在上下文里、能被用上
-    请求7  连点两次 + 中间 sleep 1ms
+    请求8  连点两次 + 中间 sleep 1ms
            —— 模拟双击
-    请求8  actions 里混一个编造的动作名（shell）和一个合法动作
+    请求9  actions 里混一个编造的动作名（shell）和一个合法动作
            —— 验证白名单：坏的那条丢掉、好的照常执行
-    请求9  坐标越界
+    请求10 坐标越界
            —— 验证夹紧
-    请求10 finished=true
+    请求11 sleep 25000 但没声明 long_wait
+           —— 验证长等待夹到 5000ms 并把警告回灌给模型（0.9.0 的新规则）
+    请求12 finished=true
            —— 验证正常收尾
 
 关键看服务端这边的几行输出：
 
-    带图的消息: N        ← 请求 1 是 0（默认不发图）；之后**会一直增长**，
+    带图的消息: N        ← 请求 1~2 是 0（默认不发图）；之后**会一直增长**，
                            这是对的（图跟着消息留在历史里，缓存才命中）
     前缀复用  : X / Y 条   ✅ 前缀完整保留 ← 这个必须是"完整"，否则说明
                            请求构造把历史改动了，缓存会大面积落空
@@ -79,34 +84,40 @@ if SCRIPT == "bounded":
 else:
     # 完整剧本：覆盖各种边界情况
     SCRIPTED = [
-        # 请求1  一批 3 个动作（点 2 → 显式 sleep 10s → 点 5）
+        # 请求1  一批 3 个动作（点 2 → 显式 sleep 1.5s → 点 5）
         #        —— 验证"一轮一批动作"，以及显式 sleep 顶掉默认间隔
-        '{"thought":"先点一下，等10秒，再点一下","actions":[{"action":"tap","x":200,"y":200},{"action":"sleep","ms":10000},{"action":"tap","x":500,"y":500}]}',
-        # 请求2  need_image=true（不给动作）
+        '{"thought":"先点一下，等一下，再点一下","actions":[{"action":"tap","x":200,"y":200},{"action":"sleep","duration_ms":1500},{"action":"tap","x":500,"y":500}]}',
+        # 请求2  capture 夹在一批动作里
+        #        —— 验证 capture：截图随下一步发，不额外多一次往返
+        '{"thought":"点完之后想看一眼前一屏","actions":[{"action":"tap","x":100,"y":100},{"action":"capture"}]}',
+        # 请求3  need_image=true（不给动作）
         #        —— 验证按需截图
         '{"thought":"我需要看截图","need_image": true}',
-        # 请求3  看完图后给动作（旧的单动作格式 + markdown 围栏）
+        # 请求4  看完图后给动作（旧的单动作格式 + markdown 围栏）
         #        —— 验证防御性解析和向后兼容
         '```json\n{"thought":"看到了，点这个按钮","action":"tap","x":300,"y":400}\n```',
-        # 请求4  use_skill="list_skills"
+        # 请求5  use_skill="list_skills"
         #        —— 验证"按需取技能说明文档"
         '{"thought":"我想看看有哪些技能","use_skill":"list_skills"}',
-        # 请求5  use_skill="list_apps"
+        # 请求6  use_skill="list_apps"
         #        —— 验证技能调用：系统应把已安装应用 + 包名回灌给模型
         '{"thought":"我想看看有哪些应用","use_skill":"list_apps"}',
-        # 请求6  用拿到的包名 open_app
+        # 请求7  用拿到的包名 open_app
         #        —— 验证技能结果确实留在上下文里、能被用上
         '{"thought":"打开设置应用","actions":[{"action":"open_app","package":"com.android.settings"}]}',
-        # 请求7  连点两次 + 中间 sleep 1ms
+        # 请求8  连点两次 + 中间 sleep 1ms
         #        —— 模拟双击
-        '{"thought":"双击这个位置","actions":[{"action":"tap","x":100,"y":100},{"action":"sleep","ms":1},{"action":"tap","x":100,"y":100}]}',
-        # 请求8  actions 里混一个编造的动作名（shell）和一个合法动作
+        '{"thought":"双击这个位置","actions":[{"action":"tap","x":100,"y":100},{"action":"sleep","duration_ms":1},{"action":"tap","x":100,"y":100}]}',
+        # 请求9  actions 里混一个编造的动作名（shell）和一个合法动作
         #        —— 验证白名单：坏的那条丢掉、好的照常执行
         '{"thought":"执行几个操作","actions":[{"action":"shell","cmd":"ls"},{"action":"tap","x":200,"y":200}]}',
-        # 请求9  坐标越界
+        # 请求10 坐标越界
         #        —— 验证夹紧
         '{"thought":"点一下屏幕外面","actions":[{"action":"tap","x":9999,"y":9999}]}',
-        # 请求10 finished=true
+        # 请求11 长等待但没声明 long_wait
+        #        —— 验证夹到 5000ms，并把"要声明 long_wait"回灌给模型
+        '{"thought":"等页面加载","actions":[{"action":"sleep","duration_ms":25000},{"action":"tap","x":300,"y":300}]}',
+        # 请求12 finished=true
         #        —— 验证正常收尾
         '{"thought":"任务完成了","finished":true}',
     ]
@@ -174,7 +185,6 @@ class Handler(BaseHTTPRequestHandler):
               ("   ✅ 前缀完整保留" if prev_len and prefix == prev_len else
                "   ⚠️ 前缀被打断" if prev_len else ""))
         print(f"  模型      : {model}")
-        print(f"  消息数    : {len(messages)}")
         # 注意：带图的消息数会随步数**增长**，这是正常的 ——
         # 图片跟着它所属的那条消息一直留在历史里，是缓存能命中的前提。
         # 以前"只给最后一条挂图"，历史里的图被丢掉，导致前缀从第一条

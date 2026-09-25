@@ -204,6 +204,24 @@ enum class TouchKind(
         needsPoint = false,
         needsDuration = false,
     ),
+
+    /**
+     * 端侧截屏（云端模型显式下发）。
+     *
+     * 和「要一张图」那件事的关系：**图永远不替代控件树**。它只是给模型
+     * 多一路信息来源，位置可以在一批动作的中间 —— 截到的图随**下一步**
+     * 和新的控件树一起发，所以不多一次往返。
+     *
+     * 它不走设备通道（`DeviceChannel.perform` 不认识它）：执行前藏悬浮窗、
+     * 调 captureFrame()、再显示悬浮窗，全部在 Agent 里完成。
+     */
+    CAPTURE(
+        id = "capture",
+        label = "截屏",
+        description = "截一张当前画面，随下一步一起发给模型（图不替代界面元素列表）",
+        needsPoint = false,
+        needsDuration = false,
+    ),
     ;
 
     companion object {

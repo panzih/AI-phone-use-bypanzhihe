@@ -116,7 +116,9 @@ class RunLogger internal constructor(
         return synchronized(lock) {
             if (closed) return null
             runCatching {
-                val f = File(shotDir, "step_%02d.png".format(step))
+                // 扩展名跟着通道给的实际编码走：无障碍截图是全分辨率 JPEG
+                // （旧版本曾存 PNG，日志目录里可能两种混着，按内容看即可）
+                val f = File(shotDir, "step_%02d.jpg".format(step))
                 f.writeBytes(bytes)
                 screenshotCount++
                 f

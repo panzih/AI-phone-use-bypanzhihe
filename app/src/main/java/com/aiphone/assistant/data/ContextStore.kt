@@ -67,17 +67,24 @@ data class SavedContext(
 /**
  * 从上一段上下文里带过来的东西。
  *
- * 两个字段是配套的：
- *   [history]   —— 发给模型的历史（见 [SavedContext.history]）
- *   [fingerprints] —— 上一次请求的指纹链，用来判断前缀有没有被我们自己改动
+ * 三个字段是一整套：
+ *   [history]        —— 发给模型的历史（见 [SavedContext.history]）
+ *   [fingerprints]   —— 上一次请求的指纹链，用来判断前缀有没有被我们自己改动
+ *   [skillCatalog]   —— **这段上下文系统提示词里用的那一份技能目录**
  *
- * 两者分开存是因为指纹比原文小几个数量级；而"没有指纹"就等于
+ * 分开存是因为指纹比原文小几个数量级；而"没有指纹"就等于
  * 下一次请求无从比对，前缀复用率那行日志永远是 0/0。
+ *
+ * [skillCatalog] 单独拿出来传，是为了让**系统提示词**吃的是快照而不是
+ * 实时目录 —— 用户学会/删掉一个录制技能都会改实时目录，而系统提示词
+ * 是前缀的第 0 个 token，一变整段上下文的缓存就静默失效（只烧钱不出错）。
+ * 技能**执行**仍然走实时注册表，所以新技能立刻能用。
  */
 data class CarriedContext(
     val history: List<ChatTurn> = emptyList(),
     val fingerprints: List<Int> = emptyList(),
     val memorySnapshot: String = "",
+    val skillCatalog: String = "",
 ) {
     val isEmpty: Boolean get() = history.isEmpty()
 }

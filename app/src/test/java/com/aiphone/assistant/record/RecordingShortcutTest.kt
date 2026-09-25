@@ -31,6 +31,28 @@ class RecordingShortcutTest {
         ).forEach { assertTrue(it, RecordingShortcut.matches(it)) }
     }
 
+    // 2b. 带水词（刚才的 / 我的）→ 仍命中。这是 0.9.0 放宽的那一类
+    @Test
+    fun `带水词_命中`() {
+        listOf(
+            "帮我整理一下刚才的操作记录",
+            "整理一下我的操作记录",
+            "刚才的操作记录",
+            "我要看我的操作记录",
+            "帮我看看刚才那个操作记录",
+        ).forEach { assertTrue(it, RecordingShortcut.matches(it)) }
+    }
+
+    // 2c. 水词 + 真任务混在句子里 → **不**命中（放宽的边界就在这里）
+    @Test
+    fun `水词加真任务_不命中`() {
+        listOf(
+            "整理一下操作记录里提到的联系人然后发给我妈",
+            "帮我打开操作记录页面看看昨天的",
+            "把操作记录整理成文档发到我的邮箱",
+        ).forEach { assertFalse(it, RecordingShortcut.matches(it)) }
+    }
+
     // 3. 正常任务（哪怕提到操作、记录）→ 不误伤
     @Test
     fun `正常任务_不命中`() {
