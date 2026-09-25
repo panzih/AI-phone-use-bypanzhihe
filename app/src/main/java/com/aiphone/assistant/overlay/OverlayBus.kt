@@ -30,6 +30,14 @@ enum class AgentPhase(val label: String, val color: Int) {
 
 object OverlayBus {
 
+    /**
+     * 回迁原因的两个取值。定义在这里而不是 Agent 里 —— 存的是这边的字段，
+     * 两边各写一份字面量迟早会对不上（而"对不上"的表现是冷却期静默失效，
+     * 只会在真机上表现为"屏幕自己来回搬"，很难查）。
+     */
+    const val REASON_MANUAL = "用户手动"
+    const val REASON_AUTO_RETURN = "纸盒回到前台"
+
     /** 服务实例。没起悬浮窗时是 null，所有方法都做了空判断 */
     @Volatile
     var service: OverlayService? = null
@@ -72,13 +80,56 @@ object OverlayBus {
     var returnFromVdRequested: Boolean = false
         private set
 
-    fun requestReturnFromVd() {
+    /**
+     * 这次回迁是谁要的 —— 只用于日志。
+     *
+     * 手动（悬浮钮）和自动（纸盒回前台）走的是同一条路，但排查问题时
+     * 必须能分清"是用户按的"还是"我们自己搬的"，否则日志里只有一串
+     * 「已切回主屏」看不出因果。
+     */
+    @Volatile
+    var returnFromVdReason: String = REASON_MANUAL
+        private set
+
+    fun requestReturnFromVd(reason: String = REASON_MANUAL) {
+        returnFromVdReason = reason
         returnFromVdRequested = true
     }
 
     /** Agent 处理完（或判定不能处理）后清掉 */
     fun clearReturnFromVd() {
         returnFromVdRequested = false
+    }
+
+    /**
+     * 「自动回迁」的冷却截止时刻（epoch ms）。
+     *
+     * 为什么需要它（防乒乓，HANDOFF §9.4）：
+     *
+     *   用户按 HOME 回桌面 → 自动切副屏 → 用户点开纸盒看进度 → 自动回迁主屏
+     *   → 用户又按 HOME → 又切副屏 → ……
+     *
+     * 每一次单看都合理，连起来就是自己搬来搬去、还在日志里刷屏。
+     * 所以自动回迁成功后设一个 30 秒的静默期，期间不再自动触发。
+     * **只压自动**，用户手动按悬浮钮任何时候都有效。
+     *
+     * 放在 OverlayBus 而不是 Agent 里，是因为触发方（MainActivity 的
+     * ON_RESUME）和执行方（Agent）互相拿不到对方的实例，而这两个都是
+     * 单例可达的。
+     */
+    @Volatile
+    private var autoReturnSuppressUntilMs: Long = 0L
+
+    fun suppressAutoReturnFor(ms: Long) {
+        autoReturnSuppressUntilMs = System.currentTimeMillis() + ms
+    }
+
+    fun autoReturnSuppressed(): Boolean =
+        System.currentTimeMillis() < autoReturnSuppressUntilMs
+
+    /** 任务开始时清掉冷却，否则上一轮留下的静默期会压住这一轮 */
+    fun clearAutoReturnSuppression() {
+        autoReturnSuppressUntilMs = 0L
     }
 
     /**

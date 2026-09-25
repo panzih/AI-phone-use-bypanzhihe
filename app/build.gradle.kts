@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 45      // 0.9.5：副屏探针补上「系统已知的屏」对比 —— 单看「共 N 块屏」会读错
-        versionName = "0.9.5"
+        versionCode = 46      // 0.9.6（批 3）：需求 F —— 纸盒回前台自动回迁主屏 + 统一 onChannelSwitched
+        versionName = "0.9.6"
     }
 
     /**

@@ -16,6 +16,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -658,11 +659,58 @@ private fun AppRoot(
     val hostActivity = LocalContext.current as? ComponentActivity
 
     var resumeTick by remember { mutableIntStateOf(0) }
+
+    /**
+     * 最近一次「纸盒被切到后台」的时刻（epoch ms）；0 = 没进过后台 / 已被消费。
+     *
+     * 批 3 的自动回迁要靠它区分两种 ON_RESUME：
+     *   - 任务刚启动 / 配置变化引起的那次 → 前面没有过 ON_STOP，不该回迁
+     *   - 用户从别处**回到**纸盒 → 前面有一次 ON_STOP，这才算"他要用主屏了"
+     * 只看 ON_RESUME 的话，刚切到副屏就会被立刻搬回主屏。
+     */
+    var backgroundedAtMs by remember { mutableLongStateOf(0L) }
+
+    /**
+     * 批 3（需求 F）：纸盒回到前台 → 把跑在副屏上的任务自动搬回主屏。
+     *
+     * **只发请求，不在这里迁移。** 真正的迁移由 Agent 在**动作间隙**做
+     * （`handleReturnToMainScreen()`，0.8.1 已真机验证过）。理由：注入中途
+     * 换通道会把一次点击劈成两半、而且换屏后旧编号全作废。
+     *
+     * 判据（HANDOFF §9.4）：
+     *   1. 任务在跑
+     *   2. 当前通道确实是副屏
+     *   3. resume 后等 600ms 仍在同一状态（防抖：排除悬浮窗/多任务列表这类瞬态 resume）
+     *   4. 不在自动回迁的 30s 冷却里（防乒乓）
+     */
+    fun requestAutoReturnIfNeeded() {
+        if (!isRunning || !controller.isVirtualDisplay) return
+        if (OverlayBus.autoReturnSuppressed()) return
+        scope.launch {
+            delay(Agent.AUTO_RETURN_DEBOUNCE_MS)
+            // 等完还在同一状态才算数 —— 中途任务结束 / 已经切回来了就放弃
+            if (!isRunning || !controller.isVirtualDisplay) return@launch
+            if (OverlayBus.autoReturnSuppressed()) return@launch
+            OverlayBus.requestReturnFromVd(OverlayBus.REASON_AUTO_RETURN)
+        }
+    }
+
     val hostLifecycle = hostActivity?.lifecycle
     DisposableEffect(hostLifecycle) {
         val observer = hostLifecycle?.let {
             LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME) resumeTick++
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> {
+                        resumeTick++
+                        val leftAt = backgroundedAtMs
+                        backgroundedAtMs = 0L
+                        if (leftAt > 0) requestAutoReturnIfNeeded()
+                    }
+                    Lifecycle.Event.ON_STOP -> {
+                        backgroundedAtMs = System.currentTimeMillis()
+                    }
+                    else -> Unit
+                }
             }
         }
         if (hostLifecycle != null && observer != null) hostLifecycle.addObserver(observer)
@@ -880,6 +928,9 @@ private fun AppRoot(
         input = ""
         stopRequested = false
         OverlayBus.clearStop()
+        // 批 3：上一轮任务留下的「自动回迁冷却」会压住这一轮，开新任务时清掉。
+        // （冷却只在同一次任务内用来防乒乓，跨任务没有意义）
+        OverlayBus.clearAutoReturnSuppression()
 
         // 本地快捷指令：在发送框直接说「操作记录 / 开始录制」等，进录制页，不发给模型
         if (RecordingShortcut.matches(task)) {

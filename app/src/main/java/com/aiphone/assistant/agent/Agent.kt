@@ -154,6 +154,33 @@ class Agent(
     private var foregroundYielded = false
 
     /**
+     * 刚换过通道，等下一轮开头把「界面变了没有」那套判据清零。
+     *
+     * 为什么不做成直接调一个函数去清：`lastTreeHash` / `sameTree` / `lastSig` /
+     * `repeatAction` 都是 [run] 里的**局部变量**，外面够不到。所以这里留个信标，
+     * 由循环自己在开头消费 —— 那里正好是它们都在作用域内的位置。
+     */
+    private var channelSwitchedTo: String? = null
+
+    /**
+     * 每次通道迁移**成功后必须调用**，否则会误报"界面没变化、你的动作没生效"。
+     *
+     * 原因：换屏后第一次读到的控件树必然和上一屏不同，但指纹比对只认
+     * "和上一次相同"，不认"换屏了"。更坑的是切回来的时候 —— 如果两边
+     * 刚好是同一个界面（比如都是桌面），指纹一致，就会判定 AI 的动作没用，
+     * 然后注入一段"换一种方式"的提示，把模型带偏。
+     *
+     * 所以换通道时把整套判据清零：[foregroundYielded]（换屏后要重新考虑
+     * 让不让位）、指纹与重复动作计数（下一轮开头消费）、并在对话里留一行
+     * 说明 —— 编号体系是**逐屏**的，换了屏旧编号就全作废了。
+     */
+    private suspend fun onChannelSwitched(to: String) {
+        foregroundYielded = false
+        channelSwitchedTo = to
+        refreshMoveButton()
+    }
+
+    /**
      * 本次任务里 Agent 是否已经成功建过副屏（建屏成功即置位），销毁后清位。
      *
      * 兜底失败路径：建屏成功、但整栈迁移和副屏重开都失败、直接返回时，
@@ -309,6 +336,21 @@ class Agent(
                 val back = handleReturnToMainScreen()
                 OverlayBus.clearReturnFromVd()
                 if (back) continue
+            }
+
+            // 刚换过通道：把「界面变了没有」那一整套判据清零（见 onChannelSwitched）。
+            // 放在这里是因为 lastTreeHash / sameTree / lastSig / repeatAction
+            // 都是**本轮 run() 的局部变量**，只有这个位置够得到它们。
+            channelSwitchedTo?.let { to ->
+                channelSwitchedTo = null
+                lastTreeHash = 0
+                sameTree = 0
+                lastSig = ""
+                repeatAction = 0
+                // 编号是**逐屏**的：换了屏，上一步那些 [3][7] 全作废。
+                // 不说清楚的话，模型会拿旧编号去点新屏，看起来像"点错了"。
+                lastResult = "已切换到$to，之前的界面元素编号作废，请重新看本屏的列表"
+                logger?.line(lastResult, "通道")
             }
 
             // 每步刷新一次自动切副屏使能（主屏 + Shizuku READY），interruption() 只读内存、零 binder
@@ -1156,6 +1198,7 @@ class Agent(
         val lead = if (automatic) "已检测到你回到桌面，自动" else "已"
         logger?.line("${lead}切到副屏（display=$vdId），AI 改用截图 + 坐标操作", "副屏")
         listener.onEvent(EventKind.ACTION, "${lead}切到副屏运行", "副屏")
+        onChannelSwitched("副屏")
         return true
     }
 
@@ -1298,8 +1341,12 @@ class Agent(
             logger?.line("副屏没收回（$dr），可到副屏调试页手动销毁", "副屏")
         }
 
-        logger?.line("已切回主屏（display=0），AI 恢复无障碍操作", "副屏")
+        val why = OverlayBus.returnFromVdReason
+        logger?.line("已切回主屏（display=0），AI 恢复无障碍操作（原因：$why）", "副屏")
         listener.onEvent(EventKind.ACTION, "已切回主屏运行", "副屏")
+        // 自动触发的那次要进 30s 静默期，否则会和"按 HOME 自动切副屏"打成乒乓球
+        if (why != RETURN_REASON_MANUAL) OverlayBus.suppressAutoReturnFor(AUTO_RETURN_COOLDOWN_MS)
+        onChannelSwitched("主屏")
         return true
     }
 
@@ -1829,6 +1876,21 @@ class Agent(
          * 纯粹是烧 token。步数上限现在是"不限"，所以这条兜底必须存在。
          */
         const val STUCK_LIMIT = 5
+
+        /** `OverlayBus.returnFromVdReason` 的"用户手动"取值，用来区分要不要进冷却（批 3） */
+        const val RETURN_REASON_MANUAL = OverlayBus.REASON_MANUAL
+
+        /**
+         * 「自动回迁」成功后的静默期（批 3，防乒乓）。
+         *
+         * 30 秒是 HANDOFF §9.4 定的：足够长到用户点开纸盒看一眼、再自己按 HOME
+         * 回桌面时不会立刻又被搬回去；又短到"用户真的想继续在副屏上跑"时
+         * 不至于等太久。**只压自动**，手动按悬浮钮不受影响。
+         */
+        const val AUTO_RETURN_COOLDOWN_MS = 30_000L
+
+        /** 纸盒回前台后等这么久再自动回迁，避免 ON_RESUME 抖动误触发（批 3） */
+        const val AUTO_RETURN_DEBOUNCE_MS = 600L
 
         /** 连续几次解析不出动作就停 */
         const val MAX_PARSE_FAILS = 5
