@@ -58,3 +58,6 @@ keystore.properties
 
 # 本机备份的完整开发历史（见 else/README.md）
 *.bundle
+
+# 桥接 LLM 的收发目录（运行时产物，不入库）
+.bridge/
