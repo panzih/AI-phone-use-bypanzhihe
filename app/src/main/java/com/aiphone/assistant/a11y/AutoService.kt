@@ -183,6 +183,7 @@ class AutoService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        runCatching { probeExecutor.shutdownNow() }
         super.onDestroy()
     }
 
@@ -310,6 +311,22 @@ class AutoService : AccessibilityService() {
     private var lastProbeMs: Long = 0L
 
     /**
+     * 探针专用的后台线程。
+     *
+     * [probeWindowsOnAllDisplays] 对**每个窗口**读一次 `w.root`，那是跨进程
+     * 同步调用（IPC 到 system_server），窗口一多就是几十毫秒起步。而它的自动
+     * 调用点 [maybeProbeOnOtherDisplay] 在 [onAccessibilityEvent] 里 ——
+     * **主线程**上；无障碍事件回调是有超时的，在主线程里同步等一串 IPC 会
+     * 拖慢整条事件管线（事件积压、服务被判卡住）。
+     *
+     * 单线程 + 守护线程：探针之间天然串行（3s 防抖已经压住了频率），
+     * 服务销毁时也不用等它。
+     */
+    private val probeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "副屏探针").apply { isDaemon = true }
+    }
+
+    /**
      * 事件来自非默认屏（虚拟副屏）时自动跑一次，3s 防抖。
      *
      * 注意：[AccessibilityEvent.getDisplayId] 是 API 33 才有的，
@@ -322,7 +339,10 @@ class AutoService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (now - lastProbeMs < 3_000) return
         lastProbeMs = now
-        probeWindowsOnAllDisplays()
+        // 扔后台线程 —— 见 [probeExecutor] 的注释：这里在主线程上，
+        // 而探针要串行读一堆窗口的 root（跨进程）。探针只写日志、不改行为，
+        // 晚几十毫秒出结果完全没关系。
+        runCatching { probeExecutor.execute { probeWindowsOnAllDisplays() } }
     }
 
     /**

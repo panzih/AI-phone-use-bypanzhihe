@@ -44,14 +44,14 @@ object Scheduler {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        // 今天这个点已经过了就顺延
+        // 今天这个点已经过了就顺延一天。
+        //
+        // 「每天重复」和「只跑一次」在这里是**同一个动作**：都顺延到明天。
+        // 单次任务这样处理是刻意的 —— 否则用户刚设完（时间已过）就会立刻
+        // 触发一次，看着像"设完自己跑了"。两者只有**响过之后**才分道扬镳：
+        // 重复的会再登记下一次，单次的就此结束（见 ScheduleReceiver）。
         if (cal.timeInMillis <= from) {
-            if (schedule.repeatDaily) {
-                cal.add(Calendar.DAY_OF_YEAR, 1)
-            } else {
-                // 只跑一次且今天已过点：顺延到明天，避免"设完就立刻触发"
-                cal.add(Calendar.DAY_OF_YEAR, 1)
-            }
+            cal.add(Calendar.DAY_OF_YEAR, 1)
         }
         return cal.timeInMillis
     }

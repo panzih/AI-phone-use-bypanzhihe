@@ -440,30 +440,66 @@ private fun AppRoot(
         }
     }
 
+    /**
+     * 刷新设置页底部那几行统计。
+     *
+     * ⚠️ **重活必须离开主线程。** 这个方法挂在「每次回到前台」的
+     * LaunchedEffect 上，也在 clearContextWithMarker 里被调 —— 也就是说
+     * 每次切回纸盒、每次清上下文都会跑一遍。而它里面有几处是**递归遍历目录**：
+     *
+     *   AppLog.listRuns + walkTopDown()   每次运行一个目录，逐个文件取 length
+     *   AutoCapture.count / totalBytes    同上
+     *   MemoryStore.stats                 读记忆文件
+     *
+     * 开了「保存截图」之后，一个跑了十几步的任务就是十几个文件；历史攒多了
+     * 这里是几百次 stat 调用。放在主线程上就是每次回前台顿一下。
+     *
+     * 所以拆成两半：便宜且需要立刻反映的（定时任务、Shizuku 状态、宏列表）
+     * 同步做完；要遍历目录的扔 IO 线程，算完再回主线程更新 state。
+     * 代价是那三行统计会晚十几毫秒才刷新 —— 值得。
+     */
     fun refreshStats() {
-        val runs = AppLog.listRuns(context)
-        val total = runs.sumOf { run -> run.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
-        logStats = context.getString(R.string.settings_log_stats, runs.size, formatBytes(total))
-        val (memCount, memChars) = MemoryStore.stats(context)
-        memoryStats = if (memCount > 0) {
-            context.getString(R.string.settings_memory_stats, memCount, formatBytes(memChars.toLong()))
-        } else {
-            ""
-        }
-        val capCount = AutoCapture.count(context)
-        autoCapStats = if (capCount > 0) {
-            context.getString(
-                R.string.log_autocap_stats,
-                capCount,
-                formatBytes(AutoCapture.totalBytes(context)),
-            )
-        } else {
-            ""
-        }
         macros = loadMacroSummaries(context)
         schedules = ScheduleStore.loadAll(context)
         exactAlarmGranted = Scheduler.canScheduleExact(context)
         shizukuState = ShizukuBridge.state(context).label
+
+        scope.launch {
+            val snapshot = withContext(Dispatchers.IO) {
+                val runs = AppLog.listRuns(context)
+                val total = runs.sumOf { run ->
+                    run.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                }
+                val log = context.getString(
+                    R.string.settings_log_stats, runs.size, formatBytes(total)
+                )
+
+                val (memCount, memChars) = MemoryStore.stats(context)
+                val mem = if (memCount > 0) {
+                    context.getString(
+                        R.string.settings_memory_stats, memCount,
+                        formatBytes(memChars.toLong())
+                    )
+                } else {
+                    ""
+                }
+
+                val capCount = AutoCapture.count(context)
+                val cap = if (capCount > 0) {
+                    context.getString(
+                        R.string.log_autocap_stats,
+                        capCount,
+                        formatBytes(AutoCapture.totalBytes(context)),
+                    )
+                } else {
+                    ""
+                }
+                Triple(log, mem, cap)
+            }
+            logStats = snapshot.first
+            memoryStats = snapshot.second
+            autoCapStats = snapshot.third
+        }
     }
 
     /**
@@ -1224,11 +1260,18 @@ private fun AppRoot(
                 }
             },
             onProbeVirtualDisplay = {
-                val result = com.aiphone.assistant.a11y.AutoService.get()
-                    ?.probeWindowsOnAllDisplays()
-                    ?: "无障碍服务未连接"
-                // toast 只显示摘要，完整结果在 run.log 里
-                toast = result.take(80) + if (result.length > 80) "…" else ""
+                // 探针要逐个窗口读 root（跨进程同步调用），不能压在主线程上 ——
+                // 按钮点下去会直接卡住界面。扔 IO 线程，回来了再弹 toast。
+                // 完整结果同时会写进 run.log（见 AutoService.probeWindowsOnAllDisplays）。
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        com.aiphone.assistant.a11y.AutoService.get()
+                            ?.probeWindowsOnAllDisplays()
+                            ?: "无障碍服务未连接"
+                    }
+                    // toast 只显示摘要，完整结果在 run.log 里
+                    toast = result.take(80) + if (result.length > 80) "…" else ""
+                }
             },
             onClearContext = { clearContext() },
             onExportLogs = { exportLogs() },
