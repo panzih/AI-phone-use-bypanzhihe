@@ -353,6 +353,19 @@ class AutoService : AccessibilityService() {
      * 普通 [getWindows] 只覆盖服务所在的那块屏，这个能看到虚拟副屏的窗口
      * 和它们的 root 节点——这正是 0.7.0 当时没验证的点。
      *
+     * ## ⚠️ 「共 N 块屏」这个数字单看会读错（2026-09-26 实测踩到）
+     *
+     * 它**只列出有窗口的屏**，不是"系统里有几块屏"。实测：用
+     * `settings put global overlay_display_devices "900x1600/320"` 建出
+     * display 2（类型 OVERLAY），此时副屏上一个窗口都没有 ——
+     * 探针报的是「共 **1** 块屏」，看起来像"无障碍看不到副屏"，
+     * 其实只是那块屏是空的。
+     *
+     * 所以这里额外把 **DisplayManager 知道的全部屏**列出来做对比：
+     *   - 两边一致        → 无障碍看得见的屏和系统一致，副屏真没窗口
+     *   - 系统有、探针没有 → 再往副屏上放个窗口复测一次；还是看不到，
+     *                       才能下"副屏窗口不会交给无障碍"的结论
+     *
      * 只读、不改任何行为。结果写日志，也返回字符串供设置页手动按钮 toast。
      */
     fun probeWindowsOnAllDisplays(): String {
@@ -363,7 +376,7 @@ class AutoService : AccessibilityService() {
             val all: android.util.SparseArray<List<AccessibilityWindowInfo>> =
                 getWindowsOnAllDisplays()
             buildString {
-                appendLine("探针 getWindowsOnAllDisplays：共 ${all.size()} 块屏")
+                appendLine("探针 getWindowsOnAllDisplays：共 ${all.size()} 块屏（只含有窗口的）")
                 for (i in 0 until all.size()) {
                     val displayId = all.keyAt(i)
                     val ws = all.valueAt(i)
@@ -375,6 +388,31 @@ class AutoService : AccessibilityService() {
                                 "pkg=${root?.packageName ?: "—"} root=${if (root != null) "非空" else "空"}"
                         )
                     }
+                }
+
+                // ---- 和系统已知的屏对比（见上面注释：这个对比才是结论的依据）----
+                val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+                val systemDisplays = runCatching {
+                    dm?.displays?.map { it.displayId to it.name }.orEmpty()
+                }.getOrDefault(emptyList())
+                val seen = (0 until all.size()).map { all.keyAt(it) }
+
+                appendLine(
+                    "系统共 ${systemDisplays.size} 块屏：" +
+                        systemDisplays.joinToString(" / ") { "display ${it.first}(${it.second})" }
+                )
+                val missing = systemDisplays.map { it.first }.filter { it !in seen }
+                if (missing.isEmpty()) {
+                    appendLine("对比：无障碍看到的屏和系统一致 —— 没有「看不到」的屏。")
+                } else {
+                    appendLine(
+                        "对比：display ${missing.joinToString(",")} 在系统里存在、" +
+                            "无障碍却没拿到它们的窗口。"
+                    )
+                    appendLine(
+                        "    注意：这**不等于**无障碍读不到副屏 —— 也可能是那块屏上" +
+                            "还没有任何窗口。往副屏上放个界面再跑一次探针才能定论。"
+                    )
                 }
             }.also {
                 Log.i(TAG, it.trim())
