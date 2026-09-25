@@ -44,6 +44,8 @@ keystore.properties
 .idea/
 *.iml
 .DS_Store
+# AI 助手的工作区数据（工作日志、技能等），不是工程的一部分
+.workbuddy/
 
 # ---------- 临时文件 ----------
 *.log
