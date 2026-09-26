@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 46      // 0.9.6（批 3）：需求 F —— 纸盒回前台自动回迁主屏 + 统一 onChannelSwitched
-        versionName = "0.9.6"
+        versionCode = 47      // 0.9.7：需求F自然路径 + FGS崩溃 + 模型卡住重发 + 导出日志 + 减少等待/端侧分析
+        versionName = "0.9.7"
     }
 
     /**
@@ -97,6 +97,17 @@ android {
             )
             if (hasReleaseKey) {
                 signingConfig = signingConfigs.getByName("release")
+            } else {
+                // 没有发布密钥时**退回开发者签名**（用户 2026-09-26 的明确要求：
+                // 不需要正式发布签名，用开发者签名即可）。
+                //
+                // 这样 clone 下来的人 `assembleRelease` 就能拿到一个**能装**的包，
+                // 而不是 unsigned 产物 —— 后者对使用者毫无意义。
+                //
+                // ⚠️ 代价写在明面上：调试密钥签的包**不能覆盖安装**任何用别的密钥
+                // 签过的同名应用，也绝不能当"官方正式版"对外分发。
+                // 真要正式发版，配好 keystore.properties 即可自动切回 release 签名。
+                signingConfig = signingConfigs.getByName("debug")
             }
         }
     }
