@@ -181,4 +181,7 @@
     <string name="settings_memory_stats">记忆：%1$d 条 · %2$s</string>
     <string name="settings_export_none">还没有日志可导出</string>
     <string name="settings_export_done">已生成：%1$s</string>
+    <string name="settings_export_working">正在打包…</string>
+    <string name="settings_export_failed">导出失败：%1$s</string>
+    <string name="settings_export_share_failed">已打包好，但分享面板没打开：%1$s（再点一次试试）</string>
 </resources>

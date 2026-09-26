@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -866,8 +867,23 @@ private fun LogSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            OutlinedButton(onClick = onExportLogs, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.settings_export_logs_button))
+            OutlinedButton(
+                onClick = onExportLogs,
+                // 打包期间禁用 + 换文案。日志大时这一步是分钟级的，
+                // 不给交代的话用户只会觉得按钮失灵
+                enabled = !state.exporting,
+                modifier = Modifier.weight(1f),
+            ) {
+                if (state.exporting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.settings_export_working))
+                } else {
+                    Text(stringResource(R.string.settings_export_logs_button))
+                }
             }
             OutlinedButton(
                 onClick = { confirmDelete = true },

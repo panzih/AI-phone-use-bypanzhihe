@@ -1,5 +1,6 @@
 package com.aiphone.assistant.log
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
@@ -68,8 +69,10 @@ object LogExporter {
      * 都被吃掉，报错只说 "Unclosed comment"。这段注释本身就是踩过之后的说明。
      *
      * @param summary 设备/设置概览的文本，由调用方拼（它才拿得到 AppSettings）
+     * @return 成功是打包好的 zip；失败带**原始异常** —— 调用方要把原因显示给用户，
+     *         不能再退化成一句"没有日志可导出"
      */
-    fun exportEverything(context: Context, summary: String): File? {
+    fun exportEverything(context: Context, summary: String): Result<File> {
         val runs = AppLog.listRuns(context)
         val diagDir = File(AppLog.logRoot(context), "diag")
         val autocap = AutoCapture.dir(context)
@@ -116,7 +119,13 @@ object LogExporter {
             }
             pruneOldExports(context)
             out
-        }.getOrNull()
+        }.onFailure {
+            // 打包失败必须留痕。以前这里直接返回 null、原因被吞掉，
+            // 界面上只显示一句"还没有日志可导出" —— 明明有日志，
+            // 却告诉用户没有，等于把这个功能变成哑的（真踩过）。
+            android.util.Log.w("LogExporter", "打包日志失败：$it", it)
+            out.delete()
+        }
     }
 
     private fun addText(zos: ZipOutputStream, name: String, text: String) {
@@ -197,24 +206,64 @@ object LogExporter {
      * 需要 manifest 里注册 FileProvider（authority = <包名>.fileprovider），
      * 否则收不到这个 Uri —— 直接传 file:// 会在 Android 7 以上抛
      * FileUriExposedException 崩掉。
+     *
+     * ## ⚠️ 为什么必须同时塞 clipData
+     *
+     * 只 `putExtra(EXTRA_STREAM, uri)` + `FLAG_GRANT_READ_URI_PERMISSION`
+     * 在 **Android 15（API 35）上不够**。实测 logcat：
+     *
+     * ```
+     * W/Bundle: Key android.intent.extra.STREAM expected ArrayList<Uri> but
+     *           value was of a different type. The default value <null> was
+     *           returned.   ← 系统解析不出我们给的那个 Uri
+     * W/ContentProviderHelper: Permission Denial: opening provider
+     *           …FileProvider from …com.android.intentresolver…  ← 面板自己没权限
+     * W/ChooserPreview: … call Intent#setClipData() to ensure that the
+     *           sharesheet is given permission.
+     * ```
+     *
+     * 系统是按 **ClipData** 来算"这次要授给谁哪些 Uri"的；EXTRA_STREAM 里
+     * 放的是单个 Parcelable Uri，新的授权提取路径拿不到它，于是授权清单是空的。
+     * 表现就是：面板弹出来了、也能选中微信，**但对方打开文件时报没有权限** ——
+     * 用户看到的是"导出了但发不出去"。所以 clipData 是必须的，不是可选项。
+     *
+     * @return null = 面板已经拉起来了；非 null = 拉不起来的中文原因（要显示给用户）
      */
-    fun share(context: Context, file: File, subject: String) {
-        runCatching {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file,
-            )
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, subject)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            val chooser = Intent.createChooser(send, "导出日志").apply {
+    fun share(context: Context, file: File, subject: String): String? = runCatching {
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            // 邮件类应用会把 SUBJECT 当标题，留着
+            putExtra(Intent.EXTRA_SUBJECT, subject)
+            // 授权清单的来源。少了这行，接收方读不到文件（见上面那段）
+            clipData = ClipData.newUri(context.contentResolver, subject, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(send, "导出日志").apply {
+            // 面板自己也要这份权限：它要读文件生成预览，而且
+            // 最终的授权是从面板这一层再往下发的
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            // ⚠️ 从 Activity 里发起时**不能**加 NEW_TASK。
+            // 加了之后分享面板会在一个**独立任务**里打开，实测的后果是
+            // 面板和它上面的应用来回抢焦点（logcat 里能看到
+            // TopTaskTracker 连着把 taskId=253 → 255 顶上最前），
+            // 部分 ROM 上直接表现为"点了没反应"。
+            // 只有手里是 application context（没有 Activity 可挂）时才需要它。
+            if (context !is android.app.Activity) {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(chooser)
         }
+        context.startActivity(chooser)
+        null
+    }.getOrElse {
+        // 以前这里是空的 runCatching —— 失败等于什么都没发生，
+        // 用户点完只看到按钮没反应，无从判断是哪个环节的问题
+        android.util.Log.w("LogExporter", "拉起分享面板失败：$it", it)
+        it.message ?: it.javaClass.simpleName
     }
 }

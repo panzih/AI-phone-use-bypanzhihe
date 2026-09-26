@@ -256,6 +256,9 @@ private fun AppRoot(
     var settings by remember { mutableStateOf(store.load()) }
     var isRunning by remember { mutableStateOf(false) }
     var stopRequested by remember { mutableStateOf(false) }
+    // 正在打包日志。日志大的时候打包是分钟级的活，界面必须有个交代，
+    // 否则用户连点几下都只看到"没反应"，只能认为按钮坏了
+    var exporting by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(AutoService.isConnected) }
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var logStats by remember { mutableStateOf("") }
@@ -1133,16 +1136,37 @@ private fun AppRoot(
      * （界面卡住、系统弹"应用无响应"）。打完再回主线程弹分享面板。
      */
     fun exportLogs() {
+        // 防重入：连点会并发打好几份 zip（尤其是日志大的时候，
+        // 第一份还没打完第二份又开跑），白烧 IO 还可能撞同一个文件名
+        if (exporting) return
+        exporting = true
+
         scope.launch {
-            val f = withContext(Dispatchers.IO) {
-                LogExporter.exportEverything(context, buildDeviceSummary(context, settings))
+            try {
+                val r = withContext(Dispatchers.IO) {
+                    LogExporter.exportEverything(context, buildDeviceSummary(context, settings))
+                }
+                r.onSuccess { f ->
+                    // 打包成功**不弹提示**：系统分享面板本身就是反馈，
+                    // 而且紧接着 startActivity 会把界面切走 ——
+                    // 这时候塞一条 Snackbar 用户根本看不见。
+                    // 只有"面板没拉起来"才需要说话。
+                    val why = LogExporter.share(context, f, "纸盒日志")
+                    if (why != null) {
+                        toast = context.getString(R.string.settings_export_share_failed, why)
+                    }
+                }.onFailure { t ->
+                    // 失败说清楚是哪一步、为什么。原来这里只会显示
+                    // "还没有日志可导出" —— 明明有日志却说没有，
+                    // 用户拿着这句话没法做任何判断
+                    toast = context.getString(
+                        R.string.settings_export_failed,
+                        t.message ?: t.javaClass.simpleName,
+                    )
+                }
+            } finally {
+                exporting = false
             }
-            if (f == null) {
-                toast = context.getString(R.string.settings_export_none)
-                return@launch
-            }
-            toast = context.getString(R.string.settings_export_done, f.name)
-            LogExporter.share(context, f, "纸盒日志")
         }
     }
 
@@ -1250,6 +1274,7 @@ private fun AppRoot(
                 autoCapStats = autoCapStats,
                 appVersion = appVersion,
                 shizukuState = shizukuState,
+                exporting = exporting,
                 toast = toast,
             ),
             onSettingsChange = { next ->
