@@ -243,6 +243,15 @@ fun SettingsScreen(
                 )
             }
 
+            item {
+                SwitchRow(
+                    title = stringResource(R.string.settings_local_dismiss),
+                    subtitle = stringResource(R.string.settings_local_dismiss_desc),
+                    checked = s.localDialogDismiss,
+                    onCheckedChange = { onSettingsChange(s.copy(localDialogDismiss = it)) },
+                )
+            }
+
             item { SectionDivider() }
 
             // ================= 日志 =================

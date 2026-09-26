@@ -95,6 +95,8 @@
 
     <string name="log_delete">删除日志</string>
     <string name="settings_export_logs_button">导出日志</string>
+    <string name="settings_local_dismiss">端侧自动清弹窗</string>
+    <string name="settings_local_dismiss_desc">广告、更新提示这类挡路弹窗，端侧当场关掉，不用等模型看一眼再决定——省一次往返。授权页和支付页一律不碰。</string>
     <string name="log_delete_confirm_title">删除所有日志？</string>
     <string name="log_delete_confirm_body">会删掉运行日志、诊断日志和自动截图。记忆、学到的技能和定时任务不受影响。这个操作不能撤销。</string>
     <string name="log_delete_done">日志已删除</string>

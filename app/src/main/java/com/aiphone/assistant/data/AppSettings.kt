@@ -250,6 +250,20 @@ data class AppSettings(
 
     /** 每步截图落盘 */
     val saveScreenshots: Boolean = true,
+
+    /**
+     * 端侧自动关掉挡路的无副作用弹窗。
+     *
+     * 开着的时候，每步读界面之前端侧会先用本地规则看一眼：如果页面是个
+     * 广告/更新/引导类弹窗，且有「稍后 / 跳过 / 取消」这类**不产生任何进展**
+     * 的关闭按钮，就当场点掉 —— 模型看到的是清理干净的页面，
+     * 省掉整整一轮「模型看到弹窗 → 下发关闭 → 再看一遍」。
+     *
+     * 安全闸是硬的，不受这个开关影响：授权页、支付页、带副作用按钮的页面
+     * 端侧一律不碰（见 LocalRuleEngine）。关掉它就退回原来的行为：
+     * 必须模型显式下发 dismiss_dialog 才动。
+     */
+    val localDialogDismiss: Boolean = true,
 ) {
     /** 界面上显示用的打码 Key，中间用星号 */
     val maskedApiKey: String

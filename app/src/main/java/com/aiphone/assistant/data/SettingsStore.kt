@@ -32,6 +32,7 @@ class SettingsStore(context: Context) {
         memoryEnabled = sp.getBoolean(KEY_MEMORY, DEFAULT.memoryEnabled),
         saveLogs = sp.getBoolean(KEY_SAVE_LOGS, DEFAULT.saveLogs),
         saveScreenshots = sp.getBoolean(KEY_SAVE_SHOTS, DEFAULT.saveScreenshots),
+        localDialogDismiss = sp.getBoolean(KEY_LOCAL_DISMISS, DEFAULT.localDialogDismiss),
     )
 
     fun save(s: AppSettings) {
@@ -47,6 +48,7 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_MEMORY, s.memoryEnabled)
             .putBoolean(KEY_SAVE_LOGS, s.saveLogs)
             .putBoolean(KEY_SAVE_SHOTS, s.saveScreenshots)
+            .putBoolean(KEY_LOCAL_DISMISS, s.localDialogDismiss)
             .apply()
     }
 
@@ -71,5 +73,6 @@ class SettingsStore(context: Context) {
         const val KEY_MEMORY = "memory_enabled"
         const val KEY_SAVE_LOGS = "save_logs"
         const val KEY_SAVE_SHOTS = "save_screenshots"
+        const val KEY_LOCAL_DISMISS = "local_dialog_dismiss"
     }
 }

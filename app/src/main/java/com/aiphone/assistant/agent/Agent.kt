@@ -156,6 +156,15 @@ class Agent(
     private var foregroundYielded = false
 
     /**
+     * 这次任务里端侧**主动**关掉弹窗的次数。
+     *
+     * 只在 [dismissBlockingDialogLocally] 里自增，用来止损：正常任务遇不到
+     * 几个弹窗；真碰上"关掉又弹出来"的循环时，靠 [LOCAL_DISMISS_LIMIT] 收手，
+     * 把判断交回模型（那种情况多半该换个做法，而不是继续关）。
+     */
+    private var localDismissCount = 0
+
+    /**
      * 刚换过通道，等下一轮开头把「界面变了没有」那套判据清零。
      *
      * 为什么不做成直接调一个函数去清：`lastTreeHash` / `sameTree` / `lastSig` /
@@ -360,6 +369,15 @@ class Agent(
                 ShizukuBridge.state(controller.appContext) == ShizukuBridge.State.READY
             // 用户回桌面 + 400ms 防抖：自动把目标 app 迁到副屏（0.8.3）
             if (autoDesktopSwitchReady() && handleAutoMoveToVirtualDisplay()) continue
+
+            // ---- 端侧先清一遍挡路的无副作用弹窗 ----
+            // 放在读控件树**之前**：这样模型拿到的是清理干净的页面，
+            // 不会为一个广告弹窗白花一步，也不用为它多走一轮网络。
+            // 安全闸在 LocalRuleEngine 里，端侧只挪开挡路的东西、不推进任务。
+            dismissBlockingDialogLocally()?.let { note ->
+                lastResult = note
+                listener.onEvent(EventKind.THOUGHT, note, "端侧处理")
+            }
 
             // 读控件树。这次**不藏悬浮窗** —— 我们自己的节点已经在
             // 解析层按包名过滤掉了，没必要为它闪一下。
@@ -994,7 +1012,9 @@ class Agent(
                         // 冷启动慢（软件渲染/重 app）时，刚发出 open_app 就检查，
                         // 界面还停在纸盒会被误判“没切走”而补按 HOME。
                         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                        val sr = awaitStable(TouchKind.OPEN_APP)
+                        // 带上目标包名：本地"前台是不是它了"的判据全靠它，
+                        // 有它才知道什么时候可以不再等（见 awaitStable）
+                        val sr = awaitStable(TouchKind.OPEN_APP, targetPkg = action.packageName)
                         when (sr.outcome) {
                             WaitOutcome.STOPPED -> {
                                 finish(false, "你停止了任务（等待中被叫停）")
@@ -1030,9 +1050,14 @@ class Agent(
                         results.add("$single → 已执行")
                     } else {
                         // 等界面稳定（最后一个动作也等，等价原来的一批收尾），
-                        // 拿到稳定指纹后做动作后验证、必要时一次重试
+                        // 拿到稳定指纹后做动作后验证、必要时一次重试。
+                        // 把**动作前**的指纹一起传进去：有它才能在起步期就判断
+                        // "界面开始变了没有"，从而提前放行（见 awaitStable）
                         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-                        val sr = awaitStable(action.kind)
+                        val sr = awaitStable(
+                            action.kind,
+                            beforeFp = beforeNodes?.let { PageFingerprint.fingerprint(it) },
+                        )
                         when (sr.outcome) {
                             WaitOutcome.STOPPED -> {
                                 finish(false, "你停止了任务（等待中被叫停）")
@@ -1516,12 +1541,37 @@ class Agent(
      * 找到就点、找不到（或涉及授权/支付）就不操作，结果交回云端。
      * @return 回灌给模型、写进结果列表的一行
      */
-    private suspend fun handleDismissDialog(): String {
+    /** 一次"按本地规则关弹窗"的结果 */
+    private data class DismissOutcome(val acted: Boolean, val note: String)
+
+    /**
+     * 模型显式下发 `dismiss_dialog` 时走这条：结论一律回灌给模型。
+     */
+    private suspend fun handleDismissDialog(): String = dismissByLocalRules("云端").note
+
+    /**
+     * 按本地规则找无副作用的关闭按钮并点掉。
+     *
+     * ## 为什么端侧可以自己决定这件事
+     *
+     * 这个动作**不产生任何任务进展**，只把挡路的东西挪开。原来必须
+     * 「模型看到弹窗 → 下发 dismiss_dialog → 再看到清理后的页面」——
+     * 一来一回是整整一轮网络 + 模型推理（通常 1~3 秒），
+     * 而这一步要做的判断本地全都有：词表和安全闸本来就在 [LocalRuleEngine] 里，
+     * 端侧执行和模型下发走的是**同一个函数**，不是两套逻辑。
+     *
+     * 安全闸一条都没松：授权/支付页不碰、带副作用词的不点、
+     * 通用关闭词只在稀疏页面才动。端侧**依然不自主推进任务** ——
+     * 它只负责把挡路的挪开，做什么仍旧由模型决定。
+     *
+     * @param source 只用于日志："云端"= 模型要求的，"端侧"= 每步开头主动清场
+     */
+    private suspend fun dismissByLocalRules(source: String): DismissOutcome {
         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-        val nodes = withContext(Dispatchers.IO) { controller.parseNodes() } ?: emptyList()
+        val nodes = controller.parseNodes()
         val r = localRuleEngine.findSafeDismiss(nodes)
         val target = r.target
-            ?: return "关闭弹窗：${r.reason}（未操作）"
+            ?: return DismissOutcome(false, "关闭弹窗：${r.reason}（未操作）")
 
         // 找到安全按钮：非 open_app，执行前先按需让开前台，避免点到纸盒自己
         yieldForegroundIfNeeded()
@@ -1531,15 +1581,43 @@ class Agent(
             OverlayBus.hide()
             delay(OVERLAY_SETTLE_MS)
         }
-        val err = withContext(Dispatchers.IO) {
-            controller.execute(tap) { px, py -> OverlayBus.pulse(px, py) }
-        }
+        val err = controller.execute(tap) { px, py -> OverlayBus.pulse(px, py) }
         if (mustHide) OverlayBus.show()
-        if (err != null) return "关闭弹窗：点击失败（$err）"
+        if (err != null) return DismissOutcome(false, "关闭弹窗：点击失败（$err）")
 
-        val after = awaitStable(TouchKind.TAP)
-        if (after.outcome != WaitOutcome.DONE) return "关闭弹窗：等待中被中断"
-        return "关闭弹窗：${r.reason}"
+        logger?.line("[$source] ${r.reason}", "弹窗")
+        val after = awaitStable(TouchKind.TAP, beforeFp = PageFingerprint.fingerprint(nodes))
+        if (after.outcome != WaitOutcome.DONE) {
+            return DismissOutcome(false, "关闭弹窗：等待中被中断")
+        }
+        return DismissOutcome(true, "关闭弹窗：${r.reason}")
+    }
+
+    /**
+     * 每步读界面**之前**，端侧主动清一遍无副作用的挡路弹窗。
+     *
+     * 这是"多用本地分析"最划算的一处：命中时直接省掉一整次模型往返，
+     * 而且模型看到的是**已经清理干净的页面**，不会为一个广告弹窗浪费一步。
+     *
+     * 上限 [LOCAL_DISMISS_LIMIT] 是一次任务内的总次数：正常任务遇不到几个弹窗，
+     * 真遇到"关掉又弹出来"的循环时，靠它止损，不至于把整趟任务耗在这上面
+     * （那种情况下模型多半该换个做法，而不是继续关）。
+     *
+     * @return 给模型看的一行说明；null = 没动任何东西
+     */
+    private suspend fun dismissBlockingDialogLocally(): String? {
+        if (!settings.localDialogDismiss) return null
+        if (localDismissCount >= LOCAL_DISMISS_LIMIT) return null
+        if (isStopped()) return null
+
+        val o = dismissByLocalRules("端侧")
+        if (!o.acted) return null
+        localDismissCount++
+        logger?.line(
+            "端侧自动关掉挡路弹窗（本次任务第 $localDismissCount 次），模型无需为此花一步",
+            "弹窗",
+        )
+        return o.note
     }
 
     /**
@@ -1576,7 +1654,14 @@ class Agent(
         pressHomeToYield()
     }
 
-    /** 按 HOME 把纸盒让到后台，并等界面切走。 */
+    /**
+     * 按 HOME 把纸盒让到后台，并等界面切走。
+     *
+     * 等待方式改成了**轮询前台包名**。之前是固定 `delay(600)`：HOME 一般
+     * 100~200ms 就生效了，固定等 600ms 每次白扔 400ms —— 而"让开"一趟任务里
+     * 要发生很多次（每次截图、每次操作非纸盒界面之前）。
+     * [FOREGROUND_YIELD_MS] 保留原值，现在当**上限**用：真卡住了也不会比原来等更久。
+     */
     private suspend fun pressHomeToYield() {
         OverlayBus.setPhase(AgentPhase.ACTING)
         withContext(Dispatchers.IO) {
@@ -1584,9 +1669,21 @@ class Agent(
         }
         // 标记"自己刚按 HOME"，之后 SELF_HOME_SUPPRESS_MS 内不自动切副屏（0.8.3）
         selfHomeAtMs = System.currentTimeMillis()
-        // 临时值（固定等待），等 A1 / awaitStable 事件驱动落地后替换
-        delay(FOREGROUND_YIELD_MS)
+        // 按都按了，就算让开过了 —— 后面的让开检查不必再来一遍
         foregroundYielded = true
+
+        var waited = 0L
+        while (waited < FOREGROUND_YIELD_MS) {
+            val w = awaitWithStop(FOREGROUND_YIELD_POLL_MS)
+            if (w != WaitOutcome.DONE) return
+            waited += FOREGROUND_YIELD_POLL_MS
+            val pkg = controller.currentPackage()
+            if (pkg != null && pkg != selfPackage) {
+                logger?.line("已让开前台（${pkg}），等了 ${waited}ms", "通道")
+                return
+            }
+        }
+        logger?.warn("按 HOME 后 ${FOREGROUND_YIELD_MS}ms 前台还没切走", "通道")
     }
 
     /** 等待/稳定轮询的结果：正常完成 / 急停 / 通道切换请求（迁移或回迁） */
@@ -1669,7 +1766,8 @@ class Agent(
             return "$single → 已执行但界面无变化，可能没点中（重试失败：$retryError）"
         }
         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
-        val r2 = awaitStable(action.kind)
+        // 这次等待也可以提前放行：把弹窗那一屏的指纹当"动作前"，点完一看它变了就走
+        val r2 = awaitStable(action.kind, beforeFp = before)
         if (r2.outcome != WaitOutcome.DONE) return "$single → 重试中被中断"
         val after2 = r2.fingerprint ?: ""
         return if (after2 != before) {
@@ -1692,45 +1790,156 @@ class Agent(
     /**
      * 等当前界面稳定，可被急停 / 通道切换打断。
      *
-     * 判据：`max(最小起步, 连续两次指纹相同)` 且不超过 hardCap —— 动作刚
-     * 发出时界面还没开始变，立刻采样会误判“已稳定”，所以先等一个最小起步；
-     * 之后每 [STABLE_POLL_MS] 取一次控件树算指纹，连续两次相同就认为界面
-     * 停了。时钟/进度条这类每秒变字的页面可能永远不稳定，hardCap 是唯一
-     * 出口。全程走 [awaitWithStop]，急停 / 切换都能立刻打断（0.8.2）。
+     * ## 判据（这一版改了三处，都是为了少等）
+     *
+     * **1. 起步期就开始采样，不再先盲等一个固定值。**
+     * 动作发出后立刻采第一帧，之后每 [STABLE_POLL_MS] 一帧；只要
+     * **观测到**界面变过、且变化之后静止够了，立刻放行。
+     * 原来的实现是任何情况都先等满 [STABLE_MIN_MS]（400ms）才采第一帧 ——
+     * "点一下就跳页"这种最常见的情况等于白等 400ms。
+     * 保守性没丢：**没观测到变化**时仍旧等满 [STABLE_MIN_MS]，
+     * 因为那时候分不清是"动作没生效"还是"界面还没来得及开始动"
+     * （判据本身在 [WaitPolicy.settled] 里，有单测覆盖）。
+     *
+     * **2. 采样间隔 200ms → [STABLE_POLL_MS]。**
+     * 原来"界面 500ms 就停住了"也得等到 600~800ms 才返回。
+     *
+     * **3. open_app 用本地判据提前放行。**
+     * 传了 [targetPkg] 时，本地直接问系统"前台现在是谁"：目标应用到了前台、
+     * 界面也静止够 [OPEN_ARRIVED_SETTLE_MS] 就走，不必等满
+     * [OPEN_STABLE_MIN_MS]（冷启动的 1.5s 对"秒开"的应用是纯浪费）。
+     * 敢比常规判据更激进，是因为 open_app 那一支**不使用**返回的指纹
+     * （动作后验证对它不适用），提前放行的唯一后果是早一点进下一步，
+     * 而下一步会重新读界面。
+     *
+     * @param beforeFp  动作**发出之前**的界面指纹。有它才能判断"界面开始变了没有"；
+     *                  没有（首个动作、读不到树）就退回保守判据。
+     * @param targetPkg open_app 的目标包名，用来做"到了没有"的本地判断。
      */
-    private suspend fun awaitStable(kind: TouchKind): StableResult {
+    private suspend fun awaitStable(
+        kind: TouchKind,
+        beforeFp: String? = null,
+        targetPkg: String? = null,
+    ): StableResult {
         val start = System.nanoTime()
         fun elapsedMs() = (System.nanoTime() - start) / 1_000_000L
 
-        val (minFloor, hardCap) = when (kind) {
-            TouchKind.OPEN_APP -> OPEN_STABLE_MIN_MS to OPEN_STABLE_HARD_MS
-            else -> STABLE_MIN_MS to STABLE_HARD_MS
-        }
+        val openApp = kind == TouchKind.OPEN_APP
+        val minFloor = if (openApp) OPEN_STABLE_MIN_MS else STABLE_MIN_MS
+        val hardCap = if (openApp) OPEN_STABLE_HARD_MS else STABLE_HARD_MS
+        val pollMs = if (openApp) OPEN_STABLE_POLL_MS else STABLE_POLL_MS
 
-        // 最小起步（可中断），随后采第一次指纹
-        val floor = awaitWithStop(minFloor)
-        if (floor != WaitOutcome.DONE) return StableResult(floor)
-        var fp = PageFingerprint.fingerprint(
-            withContext(Dispatchers.IO) { controller.parseNodes() }
-        )
-        interruption().let { if (it != WaitOutcome.DONE) return StableResult(it) }
+        var prev: String? = null
+        var seenChange = false
+        var lastChangeAt = start
+        var arrivedAt = 0L
+        // 读控件树的累计耗时/次数。以前完全看不见，而它经常是"这步为什么等了 3 秒"
+        // 的真正答案 —— 界面切换中无障碍服务本身很忙，一次读树可能要一秒多，
+        // 比我们所有固定等待加起来都大。不把它单列出来就会一直误判成"等待参数没调好"
+        var parseMs = 0L
+        var parseCount = 0
 
         while (true) {
-            // 轮询间隔（不越过 hardCap），再采样比对
-            val waitMs = minOf(STABLE_POLL_MS, hardCap - elapsedMs())
-            val w = awaitWithStop(waitMs)
-            if (w != WaitOutcome.DONE) return StableResult(w)
-
-            val newFp = PageFingerprint.fingerprint(
-                withContext(Dispatchers.IO) { controller.parseNodes() }
-            )
+            // parseNodes() 自己就切到 IO 线程了，不用再包一层 withContext
+            val t0 = System.nanoTime()
+            val fp = PageFingerprint.fingerprint(controller.parseNodes())
+            parseMs += (System.nanoTime() - t0) / 1_000_000L
+            parseCount++
             interruption().let { if (it != WaitOutcome.DONE) return StableResult(it) }
-            // 连续两次指纹相同 → 稳定
-            if (newFp == fp) return StableResult(WaitOutcome.DONE, newFp)
-            fp = newFp
-            // 一直不稳定 → hardCap 兜底，返回当前指纹
-            if (elapsedMs() >= hardCap) return StableResult(WaitOutcome.DONE, fp)
+
+            val now = System.nanoTime()
+            val equal = prev != null && fp == prev
+
+            if (beforeFp != null && fp != beforeFp) {
+                // 还在持续变化就不断刷新计时；一旦停住，这个值就冻住，
+                // [WaitPolicy.settled] 靠"距离最后一次变化过了多久"判断静了没有
+                if (fp != prev) lastChangeAt = now
+                seenChange = true
+            }
+
+            if (equal && WaitPolicy.settled(
+                    samplesEqual = true,
+                    seenChange = seenChange,
+                    msSinceChange = (now - lastChangeAt) / 1_000_000L,
+                    elapsedMs = elapsedMs(),
+                    minFloorMs = minFloor,
+                    settleMs = STABLE_SETTLE_MS,
+                )) {
+                // 记一行实际等了多久。这不是调试残留 —— "这步为什么慢"是
+                // 排查体验时第一个要问的问题，而等待时间以前**完全不可见**
+                // （只知道固定的那几个常量，不知道实际走了哪条路）
+                logStableCost(
+                    kind, elapsedMs(), minFloor,
+                    early = elapsedMs() < minFloor,
+                    parseMs = parseMs, parseCount = parseCount,
+                )
+                return StableResult(WaitOutcome.DONE, fp)
+            }
+
+            if (targetPkg != null) {
+                val fg = controller.currentPackage()
+                if (fg == targetPkg) {
+                    if (arrivedAt == 0L) arrivedAt = now
+                    if (equal && WaitPolicy.arrived(
+                            targetPkg = targetPkg,
+                            foregroundPkg = fg,
+                            samplesEqual = true,
+                            msSinceArrival = (now - arrivedAt) / 1_000_000L,
+                            arrivedSettleMs = OPEN_ARRIVED_SETTLE_MS,
+                        )) {
+                        logStableCost(
+                            kind, elapsedMs(), minFloor, early = true,
+                            parseMs = parseMs, parseCount = parseCount,
+                        )
+                        return StableResult(WaitOutcome.DONE, fp)
+                    }
+                } else {
+                    arrivedAt = 0L
+                }
+            }
+
+            prev = fp
+            // 一直不稳定（时钟/进度条每秒变字）→ hardCap 兜底，返回当前指纹
+            val left = hardCap - elapsedMs()
+            if (left <= 0) {
+                logStableCost(
+                    kind, elapsedMs(), minFloor, early = false,
+                    parseMs = parseMs, parseCount = parseCount,
+                )
+                return StableResult(WaitOutcome.DONE, fp)
+            }
+            val w = awaitWithStop(minOf(pollMs, left))
+            if (w != WaitOutcome.DONE) return StableResult(w)
         }
+    }
+
+    /**
+     * 记一行"这步等界面稳定等了多久"。
+     *
+     * [early] = 走的是"看到界面变过又停住"的提前放行，而不是保守兜底。
+     * 前者是新加的路，也是等待时间下降的来源 —— 分不清两者就没法判断
+     * 优化到底有没有生效。
+     *
+     * [parseMs]/[parseCount] 单列读树的成本：它是**唯一可能吃掉几秒**的项，
+     * 界面切换中无障碍服务很忙，一次读树能到一秒多。不写出来，
+     * 看到"等了 3 秒"只会去怀疑等待参数，而参数其实没毛病。
+     */
+    private fun logStableCost(
+        kind: TouchKind,
+        elapsedMs: Long,
+        minFloorMs: Long,
+        early: Boolean,
+        parseMs: Long,
+        parseCount: Int,
+    ) {
+        val what = if (kind == TouchKind.OPEN_APP) "等应用起来" else "等界面稳定"
+        val why = if (early) "（看到界面变过，未等满兜底 ${minFloorMs}ms）" else ""
+        val read = if (parseCount > 0) {
+            "，其中读控件树 ${parseMs}ms / $parseCount 次"
+        } else {
+            ""
+        }
+        logger?.line("$what ${elapsedMs}ms$why$read", "等待")
     }
 
     private suspend fun fail(message: String, label: String) {
@@ -1882,11 +2091,15 @@ class Agent(
         const val OVERLAY_SETTLE_MS = 100L
 
         /**
-         * 按 HOME 让开后、等界面切走的时间。
+         * 按 HOME 让开后等界面切走：**上限**，不是固定等待。
          *
-         * ⚠️ 临时值（固定等待），等 A1 / awaitStable 事件驱动落地后替换。
+         * 实际等待由 [FOREGROUND_YIELD_POLL_MS] 轮询前台包名决定 ——
+         * 前台不是纸盒了就立刻走，这个值只是"真卡住"时的兜底。
          */
         const val FOREGROUND_YIELD_MS = 600L
+
+        /** 让开时轮询前台包名的间隔 */
+        const val FOREGROUND_YIELD_POLL_MS = 120L
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
@@ -1903,21 +2116,32 @@ class Agent(
 
         /**
          * 普通动作后等界面稳定的参数：
-         * - 最小起步：动作刚发出界面还没开始变，立刻采样会误判“已稳定”，
-         *   先等这么久给界面开始变化的时间。
+         * - 最小起步：**只在没有观测到界面变化时**才生效的保守兜底。
+         *   动作刚发出、界面还没开始动的时候，立刻采样会误判"已稳定"；
+         *   但只要亲眼看到它变过又停住，就不必等这个值了（见 [WaitPolicy]）。
          * - 硬上限：时钟/进度条这类每秒变字的页面可能永远不稳定，到点就放行。
-         * - 轮询间隔：每次取控件树是一次 binder 调用，不宜更短。
+         * - 轮询间隔：每次取控件树是一次 binder 调用。原来是 200ms ——
+         *   "界面 500ms 就停住了"也要等到 600~800ms 才返回，所以收到 100ms。
+         * - 静止判据：观测到最后一次变化之后，还要连续静止这么久才算稳。
+         *   100ms 的采样间隔下，这个值等于"至少两次采样一致且跨度足够"。
          */
         const val STABLE_MIN_MS = 400L
         const val STABLE_HARD_MS = 1200L
-        const val STABLE_POLL_MS = 200L
+        const val STABLE_POLL_MS = 100L
+        const val STABLE_SETTLE_MS = 200L
 
         /**
          * 打开应用（冷启动）的稳定参数：最小起步更长 —— 启动页常常整段
-         * 不在控件树里，指纹会误判“已稳定”；硬上限也相应放宽。
+         * 不在控件树里，指纹会误判"已稳定"；硬上限也相应放宽。
+         *
+         * [OPEN_ARRIVED_SETTLE_MS] 是本地判据的静止要求：目标包名到了前台
+         * 之后，界面还要静止这么久才算真的到了（启动页通常也会静止一瞬间）。
+         * 有它才敢提前放行 —— 典型的"秒开"应用能从 1500ms 降到 500ms 上下。
          */
         const val OPEN_STABLE_MIN_MS = 1500L
         const val OPEN_STABLE_HARD_MS = 2500L
+        const val OPEN_STABLE_POLL_MS = 150L
+        const val OPEN_ARRIVED_SETTLE_MS = 300L
 
         /**
          * 卡死的硬上限。
@@ -1944,6 +2168,14 @@ class Agent(
 
         /** 连续几次解析不出动作就停 */
         const val MAX_PARSE_FAILS = 5
+
+        /**
+         * 一次任务内端侧**主动**关弹窗的次数上限。
+         *
+         * 正常任务遇不到几个挡路弹窗；这个上限是给"关掉又弹出来"的循环兜底的 ——
+         * 到点就把判断交回模型，别把整趟任务耗在关弹窗上。
+         */
+        const val LOCAL_DISMISS_LIMIT = 8
 
         /**
          * 同一轮里最多调几次技能。
