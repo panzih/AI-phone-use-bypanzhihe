@@ -44,6 +44,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.shell.ShizukuBridge
+import com.aiphone.assistant.ui.AutoReturnOnForegroundEffect
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -77,6 +78,9 @@ class MirrorActivity : ComponentActivity() {
         val displayId = intent.getIntExtra(EXTRA_DISPLAY_ID, -1)
         setContent {
             AiPhoneTheme {
+                // 需求 F 的触发源之一。用户点纸盒图标时落到的是这个页面而不是
+                // 主界面，所以主界面挂了还不够 —— 见 ui/AutoReturnEffect.kt 的注释。
+                AutoReturnOnForegroundEffect()
                 MirrorScreen(displayId = displayId, onExit = { finish() })
             }
         }

@@ -102,6 +102,19 @@ object OverlayBus {
     }
 
     /**
+     * 当前有没有任务在跑。
+     *
+     * 「纸盒回到前台 → 自动回迁」这条判据要有它：镜像页（MirrorActivity）是另一个
+     * Activity，拿不到主界面 Compose 里的 `isRunning`。没有这个标志的话，
+     * 用户随手开一下纸盒就会置一个回迁请求，等下一条任务第一步被消费掉 ——
+     * 明明没进过后台，却被搬了一次。
+     *
+     * 由 MainActivity 在任务开始/结束时维护。
+     */
+    @Volatile
+    var taskRunning: Boolean = false
+
+    /**
      * 「自动回迁」的冷却截止时刻（epoch ms）。
      *
      * 为什么需要它（防乒乓，HANDOFF §9.4）：

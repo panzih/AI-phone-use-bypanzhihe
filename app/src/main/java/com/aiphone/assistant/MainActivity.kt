@@ -16,7 +16,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,6 +60,7 @@ import com.aiphone.assistant.overlay.OverlayService
 import com.aiphone.assistant.shell.ShizukuBridge
 import com.aiphone.assistant.skill.SkillContext
 import com.aiphone.assistant.skill.SkillRegistry
+import com.aiphone.assistant.ui.AutoReturnOnForegroundEffect
 import com.aiphone.assistant.ui.LogEntry
 import com.aiphone.assistant.ui.LogKind
 import com.aiphone.assistant.ui.MainScreen
@@ -660,57 +660,18 @@ private fun AppRoot(
 
     var resumeTick by remember { mutableIntStateOf(0) }
 
-    /**
-     * 最近一次「纸盒被切到后台」的时刻（epoch ms）；0 = 没进过后台 / 已被消费。
-     *
-     * 批 3 的自动回迁要靠它区分两种 ON_RESUME：
-     *   - 任务刚启动 / 配置变化引起的那次 → 前面没有过 ON_STOP，不该回迁
-     *   - 用户从别处**回到**纸盒 → 前面有一次 ON_STOP，这才算"他要用主屏了"
-     * 只看 ON_RESUME 的话，刚切到副屏就会被立刻搬回主屏。
-     */
-    var backgroundedAtMs by remember { mutableLongStateOf(0L) }
-
-    /**
-     * 批 3（需求 F）：纸盒回到前台 → 把跑在副屏上的任务自动搬回主屏。
-     *
-     * **只发请求，不在这里迁移。** 真正的迁移由 Agent 在**动作间隙**做
-     * （`handleReturnToMainScreen()`，0.8.1 已真机验证过）。理由：注入中途
-     * 换通道会把一次点击劈成两半、而且换屏后旧编号全作废。
-     *
-     * 判据（HANDOFF §9.4）：
-     *   1. 任务在跑
-     *   2. 当前通道确实是副屏
-     *   3. resume 后等 600ms 仍在同一状态（防抖：排除悬浮窗/多任务列表这类瞬态 resume）
-     *   4. 不在自动回迁的 30s 冷却里（防乒乓）
-     */
-    fun requestAutoReturnIfNeeded() {
-        if (!isRunning || !controller.isVirtualDisplay) return
-        if (OverlayBus.autoReturnSuppressed()) return
-        scope.launch {
-            delay(Agent.AUTO_RETURN_DEBOUNCE_MS)
-            // 等完还在同一状态才算数 —— 中途任务结束 / 已经切回来了就放弃
-            if (!isRunning || !controller.isVirtualDisplay) return@launch
-            if (OverlayBus.autoReturnSuppressed()) return@launch
-            OverlayBus.requestReturnFromVd(OverlayBus.REASON_AUTO_RETURN)
-        }
-    }
+    // 批 3（需求 F）：纸盒被带回前台 → 自动从副屏回迁。
+    // 主界面挂一份，镜像页（MirrorActivity）里也挂了一份 —— 实测用户点纸盒图标
+    // 落在的是镜像页，只挂这里的话需求 F 的核心场景根本不触发。
+    // 详见 ui/AutoReturnEffect.kt 的注释。
+    AutoReturnOnForegroundEffect()
 
     val hostLifecycle = hostActivity?.lifecycle
     DisposableEffect(hostLifecycle) {
         val observer = hostLifecycle?.let {
             LifecycleEventObserver { _, event ->
-                when (event) {
-                    Lifecycle.Event.ON_RESUME -> {
-                        resumeTick++
-                        val leftAt = backgroundedAtMs
-                        backgroundedAtMs = 0L
-                        if (leftAt > 0) requestAutoReturnIfNeeded()
-                    }
-                    Lifecycle.Event.ON_STOP -> {
-                        backgroundedAtMs = System.currentTimeMillis()
-                    }
-                    else -> Unit
-                }
+                // 只维护「刷新授权状态」这条；自动回迁的检测在 AutoReturnOnForegroundEffect
+                if (event == Lifecycle.Event.ON_RESUME) resumeTick++
             }
         }
         if (hostLifecycle != null && observer != null) hostLifecycle.addObserver(observer)
@@ -1009,6 +970,8 @@ private fun AppRoot(
 
         scope.launch {
             isRunning = true
+            // 镜像页要靠它判断"有没有任务在跑"（OverlayBus.taskRunning 的注释里说明了原因）
+            OverlayBus.taskRunning = true
 
             // 无障碍的连接检查已经提到 submit() 最前面了（见那里的注释：
             // 放这儿会把用户输入清掉、还往上下文里多塞一条任务消息）。
@@ -1045,7 +1008,14 @@ private fun AppRoot(
             }
             if (runOnVirtualDisplay) {
                 addLog(LogKind.SYSTEM, "正在创建副屏 ...", "副屏")
-                val st = runCatching { VirtualDisplayManager.create(context) }
+                // 必须挪到 IO 线程：createDisplay 走的是 Shizuku 的 Binder、**同步阻塞**。
+                // 留在主线程上会连卡好几秒，后果有两个：
+                //   1. 上面刚起的悬浮窗前台服务来不及执行 onCreate → startForeground，
+                //      系统判定"前台服务没在时限内起来"，直接抛
+                //      ForegroundServiceDidNotStartInTimeException 把进程打崩
+                //      （2026-09-26 在蓝叠上 5/5 必崩，真机同样跑 user 构建，风险一样）
+                //   2. 建屏这几秒整个界面是冻结的
+                val st = runCatching { withContext(Dispatchers.IO) { VirtualDisplayManager.create(context) } }
                     .getOrElse {
                         VirtualDisplayManager.State(message = "创建失败：${it.message}")
                     }
@@ -1059,10 +1029,17 @@ private fun AppRoot(
                         "副屏",
                     )
                     isRunning = false
+                    OverlayBus.taskRunning = false
                     progress = ""
                     // 任务结束，把纸盒界面拉回前台
                 bringAppToFront()
-                OverlayService.stop(context)
+                // **这里不能停悬浮窗服务**（2026-09-26 修的崩溃）：
+                // 本行就在上面 startForegroundService 之后、服务真正 startForeground
+                // 之前 —— 此刻调 stop，系统会「把还在等 startForeground 的服务拆掉」，
+                // 随后服务的 onCreate 才跑到，startForeground 已经没人认账，
+                // 系统抛 ForegroundServiceDidNotStartInTimeException 把整个 App 打崩。
+                // 复现条件很普通：Shizuku 没开（建副屏失败）→ 必崩。
+                // 悬浮窗留着无害（它就是个进度条和急停按钮），下次任务结束会一起收。
                     return@launch
                 }
                 vdCreated = true
@@ -1120,12 +1097,14 @@ private fun AppRoot(
                 // 用户下次打开"开发者选项 → 模拟副屏"会看到一块莫名其妙的屏
                 if (vdCreated) {
                     controller.exitVirtualDisplay()
-                    runCatching { VirtualDisplayManager.remove(context) }
+                    // 和建屏同理：remove 也是 Shizuku 的同步 Binder 调用，不能留在主线程
+                    runCatching { withContext(Dispatchers.IO) { VirtualDisplayManager.remove(context) } }
                 }
                 // 副屏是**逐条任务**的选项，跑完就复位，
                 // 免得下一条手动输入的任务莫名其妙跑到副屏上
                 runOnVirtualDisplay = false
                 isRunning = false
+                OverlayBus.taskRunning = false
                 progress = ""
                 // 任务结束，无条件把纸盒界面拉回前台（无论中途有没有让开）
                 bringAppToFront()
