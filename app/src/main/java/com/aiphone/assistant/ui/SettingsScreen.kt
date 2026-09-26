@@ -104,6 +104,11 @@ fun SettingsScreen(
     onOpenOverlaySettings: () -> Unit,
     onShizukuClick: () -> Unit,
     onProbeVirtualDisplay: () -> Unit,
+    /**
+     * 看副屏画面。手动切到副屏之后主屏会回桌面，用户就看不到 AI 在那块屏上
+     * 干什么了 —— 这个入口把镜像页拉起来。
+     */
+    onLookAtVd: () -> Unit,
     onClearContext: () -> Unit,
     onExportLogs: () -> Unit,
     onDeleteLogs: () -> Unit,
@@ -199,6 +204,14 @@ fun SettingsScreen(
                     title = "运行副屏探针",
                     subtitle = "检查副屏能否读到控件树，结果写进日志",
                     onClick = onProbeVirtualDisplay,
+                )
+            }
+
+            item {
+                ActionRow(
+                    title = stringResource(R.string.settings_vd_mirror),
+                    subtitle = stringResource(R.string.settings_vd_mirror_sub),
+                    onClick = onLookAtVd,
                 )
             }
 

@@ -1129,7 +1129,32 @@ private fun AppRoot(
     }
 
     /**
-     * 导出：把所有 debug 相关的东西打成一个 zip，走系统分享面板。
+     * 看副屏画面。
+     *
+     * 手动切到副屏之后主屏会回桌面，用户就看不到 AI 在那块屏上干什么了 ——
+     * 副屏是虚拟的，画面没有任何天然的出口，只能靠镜像页。
+     *
+     * 这里只负责"把镜像页拉起来"，不建屏：没有副屏就直说，别静默失败
+     * （这个项目在"点了没反应"上已经栽过一次了，见 log/LogExporter 的注释）。
+     */
+    fun lookAtVirtualDisplay() {
+        scope.launch {
+            val id = withContext(Dispatchers.IO) {
+                runCatching { VirtualDisplayManager.refresh(context).displayId }.getOrNull()
+            }
+            if (id == null) {
+                toast = context.getString(R.string.vd_mirror_none)
+                return@launch
+            }
+            runCatching { context.startActivity(MirrorActivity.intent(context, id)) }
+                .onFailure {
+                    toast = context.getString(R.string.vd_mirror_failed, it.message ?: "")
+                }
+        }
+    }
+
+    /**
+     * 打包日志并弹分享面板。
      *
      * ⚠️ **必须在 IO 线程做。** 打包要遍历所有运行目录、压缩全部截图，
      * 截图多的用户这里是**秒级**的活；放主线程就是一次实打实的 ANR 风险
@@ -1329,6 +1354,7 @@ private fun AppRoot(
                 }
             },
             onClearContext = { clearContext() },
+            onLookAtVd = { lookAtVirtualDisplay() },
             onExportLogs = { exportLogs() },
             onDeleteLogs = { deleteLogs() },
         )

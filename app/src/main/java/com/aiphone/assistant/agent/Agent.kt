@@ -165,6 +165,15 @@ class Agent(
     private var localDismissCount = 0
 
     /**
+     * 「用户把应用挪回主屏自己用了」的连续命中次数（副屏模式）。
+     *
+     * 要连续 [TAKEOVER_STRIKES] 次都成立才认定 —— 切通道那一瞬间
+     * `dumpsys` 会出现"两边都没有"的中间态，只看一次会误判成用户接管，
+     * 而误判的后果是平白把还在正常跑的任务掐掉。
+     */
+    private var takeoverStrikes = 0
+
+    /**
      * 刚换过通道，等下一轮开头把「界面变了没有」那套判据清零。
      *
      * 为什么不做成直接调一个函数去清：`lastTreeHash` / `sameTree` / `lastSig` /
@@ -369,6 +378,50 @@ class Agent(
                 ShizukuBridge.state(controller.appContext) == ShizukuBridge.State.READY
             // 用户回桌面 + 400ms 防抖：自动把目标 app 迁到副屏（0.8.3）
             if (autoDesktopSwitchReady() && handleAutoMoveToVirtualDisplay()) continue
+
+            // ---- 用户接管检测（只在副屏模式）----
+            // 用户可能把应用从副屏**挪回主屏**自己去用。这时副屏是空的，
+            // 再跑下去就是对着一块空屏烧 token、而且每一步都在"看不到东西"的
+            // 前提下瞎猜。判据要两条同时成立：副屏上没有前台任务 + 目标应用
+            // 出现在主屏。连查两次都成立才认定（切通道瞬间会有短暂的"两边都没有"）。
+            if (controller.isVirtualDisplay) {
+                val vdId = controller.virtualDisplayId
+                val tPkg = lastTargetPkg
+                if (vdId != null && !tPkg.isNullOrBlank() && currentTaskOnDisplay(vdId) == null) {
+                    val onMain = currentTaskOnDisplay(0)
+                    if (onMain?.second == tPkg) {
+                        takeoverStrikes++
+                        if (takeoverStrikes >= TAKEOVER_STRIKES) {
+                            takeoverStrikes = 0
+                            // 切回主屏**继续跑**，而不是停下。
+                            //
+                            // 依据是项目自己定的方案（else/工作汇报-0.8.5.md §附加触发源）：
+                            // "若被用户从主屏或最近任务列表拉回主屏，则判定用户接管，
+                            // 自动切回主屏模式继续"。外部项目 ShadowAuto 也把
+                            // "用户把被自动化的应用拉回主屏"列为会打断自动化的已知情况。
+                            //
+                            // 这里不用 handleReturnToMainScreen()：那套是给"应用还在副屏"
+                            // 写的，要搬栈；而此刻应用**已经在主屏**了，只需要换读取通道。
+                            controller.exitVirtualDisplay()
+                            onChannelSwitched("主屏")
+                            // 压住自动切副屏，否则下一步"前台是目标应用 + 后来用户回桌面"
+                            // 会立刻把它搬回副屏，用户一拉回来又被搬走，来回打乒乓
+                            autoMoveCooldownUntilMs =
+                                System.currentTimeMillis() + TAKEOVER_COOLDOWN_MS
+                            val msg = "检测到你把「$tPkg」挪回主屏了，AI 已切回主屏模式继续" +
+                                "（$TAKEOVER_COOLDOWN_MS / 1000 秒内不会再自动搬去副屏）。"
+                            logger?.line(msg, "接管")
+                            listener.onEvent(EventKind.THOUGHT, msg, "接管")
+                            continue
+                        }
+                        logger?.warn("副屏上没有前台应用，且「$tPkg」在主屏 —— 再确认一次", "接管")
+                    } else {
+                        takeoverStrikes = 0
+                    }
+                } else {
+                    takeoverStrikes = 0
+                }
+            }
 
             // ---- 端侧先清一遍挡路的无副作用弹窗 ----
             // 放在读控件树**之前**：这样模型拿到的是清理干净的页面，
@@ -1166,12 +1219,60 @@ class Agent(
         }
         val (taskId, pkg) = top
         if (pkg == selfPackage) {
-            val msg = "请先让 AI 打开要操作的应用，再切到副屏（现在前台还是纸盒自己）。"
-            logger?.line(msg, "副屏")
-            listener.onEvent(EventKind.THOUGHT, msg, "副屏")
-            return false
+            // 用户点开纸盒看一眼、再点「切到副屏」—— 这时前台是纸盒自己，
+            // 但我们要搬的是 **AI 正在操作的那个应用**，不是"现在前台是谁"。
+            // 所以退回用上一步记下的目标；只有真的从来没记过才让人先去开应用。
+            // （批 3 附加项：原来这里一律拒绝，等于用户一碰纸盒就切不了副屏）
+            val t = lastTargetPkg
+            if (t.isNullOrBlank()) {
+                val msg = "请先让 AI 打开要操作的应用，再切到副屏" +
+                    "（现在前台还是纸盒自己，也没记录到目标应用）。"
+                logger?.line(msg, "副屏")
+                listener.onEvent(EventKind.THOUGHT, msg, "副屏")
+                return false
+            }
+            val tid = lastTargetTaskId.takeIf { it >= 0 && taskExists(it) }
+                ?: resolveTaskIdForPackage(t)
+            if (tid < 0) {
+                val msg = "没找到「$t」的任务栈，先让 AI 打开它再切副屏（可能已经被关掉了）。"
+                logger?.line(msg, "副屏")
+                listener.onEvent(EventKind.THOUGHT, msg, "副屏")
+                return false
+            }
+            logger?.line("前台是纸盒自己，改为迁移上次操作的目标应用：$t", "副屏")
+            return performMoveToVirtualDisplay(tid, t, automatic = false).also { moved ->
+                if (moved) openMirrorPage()
+            }
         }
-        return performMoveToVirtualDisplay(taskId, pkg, automatic = false)
+        return performMoveToVirtualDisplay(taskId, pkg, automatic = false).also { moved ->
+            // 切过去之后把镜像页弹出来。以前手动切到副屏，用户**完全看不到**
+            // AI 在那块屏上干什么 —— 副屏是虚拟的，切过去主屏就回桌面了，
+            // 画面没有任何出口。这是"手动切屏"独有的空缺（定时任务走副屏时
+            // MainActivity 已经会弹，那条路不受影响）。
+            //
+            // 只手动切时弹：自动迁出是**用户回桌面**触发的，这时候弹镜像
+            // 等于把他从桌面拽走，是打扰。
+            if (moved) openMirrorPage()
+        }
+    }
+
+    /**
+     * 弹出副屏镜像页（拿到副屏画面去看 AI 在干什么）。
+     *
+     * 从应用进程启动 Activity 必须带 NEW_TASK。后台启动 Activity 在 Android 10+
+     * 默认被拦，但纸盒持有悬浮窗权限（SYSTEM_ALERT_WINDOW），属于系统放行的
+     * 白名单，所以这条路通。万一拉不起来也只是"看不到画面"，
+     * **不影响任务本身**，所以这里只记一行日志、不抛错。
+     */
+    fun openMirrorPage() {
+        val id = controller.virtualDisplayId ?: return
+        runCatching {
+            controller.appContext.startActivity(
+                com.aiphone.assistant.display.MirrorActivity
+                    .intent(controller.appContext, id)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { logger?.warn("副屏镜像页没能弹出：${it.message}", "副屏") }
     }
 
     /**
@@ -2176,6 +2277,22 @@ class Agent(
          * 到点就把判断交回模型，别把整趟任务耗在关弹窗上。
          */
         const val LOCAL_DISMISS_LIMIT = 8
+
+        /**
+         * 「用户把应用挪回主屏」要连续命中几次才认定（副屏模式，批 3 附加项）。
+         *
+         * 2 次是为了滤掉切通道瞬间"两边都没有"的中间态；代价是最多白跑一步。
+         */
+        const val TAKEOVER_STRIKES = 2
+
+        /**
+         * 判定「用户接管」之后，多久内不再自动把应用搬去副屏。
+         *
+         * 一拉回来就被搬走、再拉回来再被搬走，来回打乒乓比不搬更烦人。
+         * 一分钟够用户把手上那点事做完；真要搬，悬浮窗上的「切到副屏」随时能按
+         * （那个按钮不受这条冷却影响）。
+         */
+        const val TAKEOVER_COOLDOWN_MS = 60_000L
 
         /**
          * 同一轮里最多调几次技能。

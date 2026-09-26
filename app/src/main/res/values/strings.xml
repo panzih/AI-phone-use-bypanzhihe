@@ -97,6 +97,10 @@
     <string name="settings_export_logs_button">导出日志</string>
     <string name="settings_local_dismiss">端侧自动清弹窗</string>
     <string name="settings_local_dismiss_desc">广告、更新提示这类挡路弹窗，端侧当场关掉，不用等模型看一眼再决定——省一次往返。授权页和支付页一律不碰。</string>
+    <string name="settings_vd_mirror">看副屏画面</string>
+    <string name="settings_vd_mirror_sub">打开镜像页看 AI 在那块屏上干什么。切到副屏后主屏会回桌面，画面只有这个出口。</string>
+    <string name="vd_mirror_none">现在没有副屏。先让任务切到副屏模式，或到「运行副屏探针」建一块。</string>
+    <string name="vd_mirror_failed">镜像页没能打开：%1$s</string>
     <string name="log_delete_confirm_title">删除所有日志？</string>
     <string name="log_delete_confirm_body">会删掉运行日志、诊断日志和自动截图。记忆、学到的技能和定时任务不受影响。这个操作不能撤销。</string>
     <string name="log_delete_done">日志已删除</string>

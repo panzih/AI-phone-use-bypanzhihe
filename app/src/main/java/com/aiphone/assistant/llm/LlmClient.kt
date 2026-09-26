@@ -372,6 +372,19 @@ class LlmClient(private val cfg: LlmConfig) {
             conn.setFixedLengthStreamingMode(payload.size)
             conn.outputStream.use { it.write(payload) }
 
+            // ⚠️ 这里必须再查一次中断。
+            //
+            // `openConnection()` 只是造了个对象、**还没连**（真正建连发生在
+            // 第一次 I/O 时）。如果 abort() 落在"设好 activeConn" 与"真正建连"
+            // 之间，那次 disconnect() 落在未连接的 socket 上是**空操作**，
+            // 而 abortFlag 又已经置上了 —— 结果就是连接照样建起来、
+            // 请求照样发出去、然后卡满整个 readTimeout。用户按了急停却要等两分钟。
+            // 这一行把这个窗口堵掉。
+            if (isAborted()) {
+                runCatching { conn.disconnect() }
+                return Try.Fatal(ABORT_MESSAGE)
+            }
+
             // 传完了，接下来是等服务端算 —— 切换阶段
             onUploaded?.invoke()
 

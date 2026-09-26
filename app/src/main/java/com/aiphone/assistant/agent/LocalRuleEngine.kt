@@ -72,6 +72,8 @@ class LocalRuleEngine {
     /** 按钮是否“安全可点”：不含副作用词、也不含正向推进词 */
     private fun isSafeDismiss(node: UiNode): Boolean {
         val label = labelOf(node)
+        // 一票否决：会**杀掉应用**或清数据的按钮，任何情况都不自动点
+        if (NEVER_DISMISS.any { containsWord(label, it) }) return false
         if (Agent.labelHasSideEffect(node)) return false
         if (POSITIVE_WORDS.any { containsWord(label, it) }) return false
         return true
@@ -115,6 +117,26 @@ class LocalRuleEngine {
         private val SENSITIVE_ACTION_WORDS = listOf(
             "允许", "同意", "授权", "支付", "付款", "购买", "订阅", "转账",
             "permission", "allow", "grant", "authorize", "pay", "purchase", "subscribe",
+        )
+
+        /**
+         * **一票否决**：点了会杀掉应用或清数据的按钮，永远不自动点。
+         *
+         * 这一条是 2026-09-26 在模拟器上真撞出来的：当时屏幕上是系统弹的
+         * **ANR（应用无响应）对话框**，按钮是「Close app / Wait」。端侧按通用
+         * 关闭词匹配到了 `close` → 把那个无响应的应用关掉了。
+         *
+         * 那次关的是 SystemUI，无害；但**同一个弹窗可能长在 AI 正在操作的目标
+         * 应用头上** —— 关掉它等于把用户的应用杀了、任务进度全丢，而且这是
+         * 端侧自作主张干的，用户不会知道为什么应用没了。
+         *
+         * ⚠️ 顺序很关键：必须在通用关闭词**之前**判。`close app` 里的 `close`
+         * 本身在 [DISMISS_GENERIC] 里，只靠词表顺序拦不住。
+         */
+        private val NEVER_DISMISS = listOf(
+            "结束应用", "关闭应用", "强行关闭", "强制关闭", "停止应用", "杀掉", "终止应用",
+            "清除数据", "卸载", "close app", "force close", "stop app", "kill app",
+            "end app", "uninstall", "clear data", "force stop",
         )
     }
 }

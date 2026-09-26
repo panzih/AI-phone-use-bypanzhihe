@@ -3,6 +3,7 @@ package com.aiphone.assistant.agent
 import android.graphics.Rect
 import com.aiphone.assistant.a11y.UiNode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -98,4 +99,43 @@ class LocalRuleEngineTest {
         val nodes = listOf(node(1, "Not Now"))
         assertEquals(1, engine.findSafeDismiss(nodes).target?.index)
     }
+
+    // ---- 一票否决：点了会杀掉应用的按钮，永远不自动点 ----
+    //
+    // 2026-09-26 在模拟器上真撞出来的：屏幕上是系统的 ANR（应用无响应）对话框，
+    // 按钮是「Close app / Wait」。端侧按通用关闭词匹配到了 close 并点了下去。
+    // 那次关的是 SystemUI 所以无害，但同一个弹窗可能长在**目标应用**头上 ——
+    // 关掉它等于把用户的应用杀了、任务进度全丢，还是端侧自作主张干的。
+
+    @Test
+    fun `ANR弹窗的 Close app 不能自动点`() {
+        // 只有这一个按钮的稀疏弹窗 —— 通用关闭词本来是允许点的场景
+        val r = engine.findSafeDismiss(listOf(node(1, "Close app")))
+        assertNull("「Close app」会杀掉应用，绝不能自动点", r.target)
+    }
+
+    @Test
+    fun `几种结束应用的措辞都不自动点`() {
+        listOf(
+            "Close app", "Force close", "End app", "Stop app",
+            "结束应用", "强行关闭", "强制关闭", "停止应用", "清除数据", "卸载",
+        ).forEach { label ->
+            assertNull("不能自动点「$label」", engine.findSafeDismiss(listOf(node(1, label))).target)
+        }
+    }
+
+    @Test
+    fun `同一弹窗里如果另有安全按钮_应该点安全的那个而不是 Close app`() {
+        val r = engine.findSafeDismiss(
+            listOf(node(1, "Close app"), node(2, "稍后"))
+        )
+        assertEquals("应当点「稍后」", 2, r.target?.index)
+    }
+
+    @Test
+    fun `纯粹叫 Close 的按钮仍然可以点`() {
+        // 一票否决只针对"关掉应用"这类措辞，别把关掉弹窗的 Close 也误伤
+        assertNotNull(engine.findSafeDismiss(listOf(node(1, "Close"))).target)
+    }
+
 }
