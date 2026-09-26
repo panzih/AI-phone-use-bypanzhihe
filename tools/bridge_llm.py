@@ -70,6 +70,38 @@ TIMEOUT = float(os.environ.get("BRIDGE_TIMEOUT", "900"))
 _seq_lock = threading.Lock()
 _seq = {"n": 0}
 
+# ---------------------------------------------------------------- 前缀统计
+#
+# 真模型返回的 usage 里有 prompt_cache_hit_tokens / prompt_cache_miss_tokens，
+# 纸盒靠它算「上下文缓存命中率」那行日志。我们这边没有真 token 数，但
+# **前缀长度是能精确算出来的** —— 而命中率 = 前缀 / 总数，这个比值是真的。
+#
+# 不补这一段的话，桥接模式下那行日志永远是「命中 0 / 未命中 0（命中率 无数据）」，
+# 等于把"缓存有没有被打断"这个最重要自查指标给丢了。
+#
+# ⚠️ token 数本身是编的（每条消息按 PER_MSG_TOKENS 估），**只有比值可信**。
+PER_MSG_TOKENS = 400
+
+_prefix_lock = threading.Lock()
+_prev_keys = {"v": None}
+
+
+def prefix_stats(messages):
+    """返回 (前缀条数, 上次总条数)。逐条深比较，图片 base64 也比。"""
+    keys = [json.dumps(m, ensure_ascii=False, sort_keys=True) for m in messages]
+    with _prefix_lock:
+        prev = _prev_keys["v"]
+        hit = 0
+        if prev is not None:
+            for a, b in zip(prev, keys):
+                if a == b:
+                    hit += 1
+                else:
+                    break
+        prev_len = len(prev) if prev is not None else 0
+        _prev_keys["v"] = keys
+    return hit, prev_len
+
 
 def log(msg):
     line = time.strftime("%H:%M:%S") + "  " + msg
@@ -189,6 +221,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw)
         except Exception:
             body = {}
+        messages = body.get("messages", [])
 
         with _seq_lock:
             _seq["n"] += 1
@@ -197,8 +230,11 @@ class Handler(BaseHTTPRequestHandler):
         with open(os.path.join(PENDING, f"req-{n:04d}.json"), "w", encoding="utf-8") as f:
             f.write(raw.decode("utf-8", "replace"))
 
+        # 前缀统计要在写摘要**之前**算：它自己也依赖"上一次的 messages"这个状态
+        hit, prev_len = prefix_stats(messages)
+
         step = ""
-        for m in reversed(body.get("messages", [])):
+        for m in reversed(messages):
             if m.get("role") == "user":
                 c = m.get("content")
                 t = c if isinstance(c, str) else "".join(
@@ -215,6 +251,15 @@ class Handler(BaseHTTPRequestHandler):
 
         log(f"[{n:04d}] ← 收到请求 {step}  → pending/req-{n:04d}.md")
         print(f"        >>> 等回复：把内容写进 done/res-{n:04d}.json <<<")
+
+        # 前缀复用自查：命中率是这套系统最关键的指标（打断 = 只烧钱不出错）
+        if prev_len == 0:
+            cache_line = "（第一轮，没有可复用的前缀）"
+        elif hit == prev_len:
+            cache_line = f"前缀复用 {hit}/{prev_len} 条 ✅ 完整"
+        else:
+            cache_line = f"前缀复用 {hit}/{prev_len} 条 ⚠️ 被打断（第 {hit} 条起分叉）"
+        log(f"[{n:04d}]    消息 {len(messages)} 条（上次 {prev_len}）  {cache_line}")
 
         res_path = os.path.join(DONE, f"res-{n:04d}.json")
         content = None
@@ -257,7 +302,14 @@ class Handler(BaseHTTPRequestHandler):
                 "message": {"role": "assistant", "content": content},
                 "finish_reason": "stop",
             }],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            # 给纸盒算「上下文缓存命中率」用。token 数是估的，**比值是真的**（见 prefix_stats）
+            "usage": {
+                "prompt_tokens": PER_MSG_TOKENS * len(messages),
+                "completion_tokens": 0,
+                "total_tokens": PER_MSG_TOKENS * len(messages),
+                "prompt_cache_hit_tokens": PER_MSG_TOKENS * hit,
+                "prompt_cache_miss_tokens": PER_MSG_TOKENS * max(0, len(messages) - hit),
+            },
         }
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
