@@ -24,6 +24,13 @@ enum class AgentPhase(val label: String, val color: Int) {
     SCREENSHOT("截图中", 0xFF29B6F6.toInt()),
     UPLOADING("上传中", 0xFFFFA726.toInt()),
     WAITING_MODEL("等待大模型返回结果", 0xFFAB47BC.toInt()),
+    /**
+     * 上一次请求没成，正在等一会儿重发。
+     *
+     * 单独一档而不复用「上传中」：用户最怕的就是"它是不是死了"，
+     * 而"重发"这个词本身就说明了"它知道出问题了，正在自己处理"。
+     */
+    RETRYING("模型没响应，准备重发", 0xFFFF7043.toInt()),
     ACTING("正在操作手机", 0xFFEF5350.toInt()),
     WAITING_SYSTEM("等待系统响应", 0xFF66BB6A.toInt()),
 }

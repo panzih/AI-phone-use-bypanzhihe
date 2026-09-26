@@ -16,6 +16,8 @@ import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 
@@ -515,16 +517,64 @@ class Agent(
                 listener.onEvent(EventKind.THOUGHT, "正在请求模型 ...", "第 $step 步")
                 val callStart = System.currentTimeMillis()
                 OverlayBus.setPhase(AgentPhase.UPLOADING)
+
+                // 请求期间也必须能被急停打断。
+                //
+                // 为什么不能只靠"动作间隙查一次"：模型卡住时这一行会阻塞几十秒
+                // 到几分钟，那段时间里按急停是**完全没有反应**的 —— 协程取消
+                // 穿不透一个阻塞中的 socket 读。所以另起一个轻量看门狗盯着，
+                // 一发现要停就 abort()，把连接掀掉让请求立刻失败。
+                // 这是用户能"随时抽身"的最后一道保障。
                 val result = withContext(Dispatchers.IO) {
-                    llm.chat(system, history) {
-                        // 请求体传完了，接下来是等服务端算
-                        OverlayBus.setPhase(AgentPhase.WAITING_MODEL)
+                    val stopWatchdog = launch {
+                        while (isActive) {
+                            delay(STOP_POLL_MS)
+                            if (isStopped()) {
+                                llm.abort()
+                                return@launch
+                            }
+                        }
+                    }
+                    try {
+                        llm.chat(
+                            system = system,
+                            history = history,
+                            onUploaded = {
+                                // 请求体传完了，接下来是等服务端算
+                                OverlayBus.setPhase(AgentPhase.WAITING_MODEL)
+                            },
+                            // 重发是本轮新增的：以前一旦卡住就只能干等到超时，
+                            // 现在会自己退避重试，并把"正在重发"告诉用户 ——
+                            // 状态卡和日志各给一份，免得他以为程序死了
+                            onRetry = { attempt, maxAttempts, why, waitMs ->
+                                OverlayBus.setPhase(AgentPhase.RETRYING)
+                                val secs = (waitMs + 999) / 1000
+                                val line = "模型没有正常响应（$why）—— ${secs} 秒后重发" +
+                                    "（第 $attempt 次失败，最多试 $maxAttempts 次）"
+                                // 回调在 IO 线程上；日志列表和运行日志都按惯例在主线程写，切回去
+                                launch(Dispatchers.Main) {
+                                    // 两处都要写：界面让用户**当下**知道它在自救，
+                                    // 运行日志留着事后回答"这一趟为什么慢"
+                                    listener.onEvent(EventKind.THOUGHT, line, "重发")
+                                    logger?.line(line, "重发")
+                                }
+                            },
+                            shouldAbort = { isStopped() },
+                        )
+                    } finally {
+                        stopWatchdog.cancel()
                     }
                 }
                 val elapsed = System.currentTimeMillis() - callStart
 
                 when (result) {
                     is LlmResult.Fail -> {
+                        // 因为是急停而被中断的，别报成"模型出错" ——
+                        // 那是用户自己按的停止，弹一条红色的报错只会让人困惑
+                        if (isStopped()) {
+                            finish(false, "你停止了任务（模型请求被中断）")
+                            return
+                        }
                         logger?.error("模型调用失败：${result.message}", "模型")
                         fail(result.message, "模型出错")
                         return

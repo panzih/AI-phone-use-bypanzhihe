@@ -8,6 +8,8 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 模型配置。
@@ -43,6 +45,19 @@ data class LlmConfig(
      */
     val thinking: ThinkingMode = ThinkingMode.OFF,
     val timeoutMs: Int = 120_000,
+    /**
+     * 一次调用最多试几次（首试 + 重发）。
+     *
+     * 大模型"卡住"最常见的形态是**服务端收下了请求却迟迟不吐字** ——
+     * 干等到超时也没什么可等的，重发一次往往就好了。3 次是折中：
+     * 单次上限 [timeoutMs]，加上退避，最坏在几分钟量级。
+     *
+     * 注意重发**不是免费的**：如果上一次其实只是"慢"而不是"死"，
+     * 服务端可能已经把两份都算了钱。所以只对**确定失败**的情形重发
+     * （超时、连接断、5xx、429），4xx 一律不重发 —— 那是配置问题，
+     * 重发一百次结果一样，只会白烧额度。
+     */
+    val maxAttempts: Int = 3,
 )
 
 /**
@@ -138,6 +153,47 @@ sealed class LlmResult {
 class LlmClient(private val cfg: LlmConfig) {
 
     /**
+     * 正在飞的那条连接。
+     *
+     * 只在中断时才用得上：`HttpURLConnection` 的 **读** 有 `readTimeout` 兜着，
+     * 但 **写** 没有 —— 官方 API 根本没有写超时。上传一个几百 KB 到几 MB 的
+     * base64 请求体时，如果链路半死不活（对端不给 ACK），
+     * `outputStream.write()` 会一直阻塞，用户看到的就是"卡死了"。
+     *
+     * 唯一的解法是从**另一个线程** `disconnect()`：它会关掉底层 socket，
+     * 让阻塞中的读或写立刻抛 IOException，线程得以退出。
+     */
+    private val activeConn = AtomicReference<HttpURLConnection?>(null)
+
+    /** 外部叫停（急停按钮 / 任务被停止）。置上之后不再重发 */
+    private val abortFlag = AtomicBoolean(false)
+
+    /**
+     * 从外部打断当前这次请求。
+     *
+     * 由 [com.aiphone.assistant.agent.Agent] 的看门狗调用：用户按了急停，
+     * 而请求正卡在几十秒的等待里 —— 这时候什么都不做的话，用户会以为
+     * 程序死了。断开连接让它立刻失败、立刻收尾。
+     *
+     * 从任意线程调用都安全。
+     */
+    fun abort() {
+        abortFlag.set(true)
+        runCatching { activeConn.get()?.disconnect() }
+    }
+
+    /** 一次尝试的结论。三类：拿到了 / 值得重发 / 重发也是白费 */
+    private sealed class Try {
+        class Ok(val result: LlmResult.Ok) : Try()
+
+        /** [why] 要短，它会出现在"第 2 次重发（HTTP 503）"这种给用户看的文案里 */
+        class Retry(val why: String) : Try()
+
+        /** [message] 是可以直接显示的中文原因；重发没有意义 */
+        class Fatal(val message: String) : Try()
+    }
+
+    /**
      * 上一次请求的消息指纹。
      *
      * 默认是"一次任务内"的比对。但上下文跨任务续接之后，任务的第一次
@@ -192,9 +248,28 @@ class LlmClient(private val cfg: LlmConfig) {
          * 慢则好几秒（截图 base64 之后一两兆），等待则是另一段。
          * 分开报给用户，他才知道卡在哪一段。
          *
+         * **每次重发都会再回调一次** —— 重发当然也要重新上传。
+         *
          * 回调在 IO 线程上执行。
          */
         onUploaded: (() -> Unit)? = null,
+        /**
+         * 每次准备重发之前回调一次（IO 线程）。
+         *
+         * 参数：这是第几次**尝试失败**（1 起）、最多允许几次、
+         * 上一次为什么没成、这次要等多久再发。
+         *
+         * 存在的理由和 [onUploaded] 一样：让用户知道"它没死，是在等一会儿重发"，
+         * 而不是干瞪着屏幕怀疑卡死了。
+         */
+        onRetry: ((attempt: Int, maxAttempts: Int, why: String, waitMs: Long) -> Unit)? = null,
+        /**
+         * 外部中断信号（急停）。返回 true 就不再重发、不再等待。
+         *
+         * 为什么不是一个普通的 `Boolean`：等待退避的那几秒也要能被叫停，
+         * 否则"按了急停还要等 6 秒"就会变成常态。
+         */
+        shouldAbort: (() -> Boolean)? = null,
     ): LlmResult {
         if (cfg.apiKey.isBlank()) {
             return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个。")
@@ -205,26 +280,94 @@ class LlmClient(private val cfg: LlmConfig) {
         // 是本地模型服务的常见场景，不警告。
         warnIfPublicHttp(cfg.baseUrl)
 
+        // 上一次调用的中断标记属于上一次，清掉
+        abortFlag.set(false)
+
         // 和上一次请求比对前缀。这一步很便宜（只比指纹），
-        // 但它是"缓存为什么没命中"这个问题唯一能自己回答的部分
+        // 但它是"缓存为什么没命中"这个问题唯一能自己回答的部分。
+        // ⚠️ 只在这里记一次 —— 重发不算新的"上一次请求"，
+        // 记多了一次会让下一次的复用率统计永远对不上。
         val fingerprints = fingerprint(system, history)
         val previous = lastFingerprints
         val reused = commonPrefixLength(previous, fingerprints)
         lastFingerprints = fingerprints
 
+        // 请求体只构造一次，重发时**逐字节复用同一份**。
+        // 服务端按最长公共前缀命中缓存，重发同一份内容能直接吃上缓存；
+        // 重新构造（哪怕内容完全等价）就没这个保证了。
         val body = buildBody(system, history)
 
-        return try {
-            val conn = (URL(endpoint()).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 20_000
-                readTimeout = cfg.timeoutMs
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
-                setRequestProperty("Accept", "application/json")
+        val startedAt = System.currentTimeMillis()
+        val deadline = startedAt + RETRY_TOTAL_BUDGET_MS
+        val maxAttempts = cfg.maxAttempts.coerceAtLeast(1)
+        var attempts = 0
+
+        while (true) {
+            if (isAborted() || shouldAbort?.invoke() == true) {
+                return LlmResult.Fail(ABORT_MESSAGE)
             }
 
+            attempts++
+            val outcome = try {
+                // 分母用**上一次**的消息条数：这个指标要回答的是
+                // "上一次请求是不是被完整复用了"，而不是"新请求多长"
+                attemptOnce(body, onUploaded, reused, previous.size)
+            } catch (t: Throwable) {
+                throwableToTry(t)
+            }
+
+            when (outcome) {
+                is Try.Ok -> return outcome.result
+
+                is Try.Fatal -> return LlmResult.Fail(outcome.message)
+
+                is Try.Retry -> {
+                    Log.w(TAG, "第 $attempts 次请求没成：${outcome.why}")
+                    if (attempts >= maxAttempts) {
+                        return giveUp(attempts, outcome.why, startedAt)
+                    }
+                    // 剩下的预算不够再跑一趟完整的 timeoutMs，就别起新的了 ——
+                    // 否则"重发"会变成没有上限的干等。反过来，
+                    // 快速失败（连接被拒、5xx）不占预算，能多试几次。
+                    if (System.currentTimeMillis() + cfg.timeoutMs > deadline) {
+                        return giveUp(attempts, "${outcome.why}，且总耗时已超预算", startedAt)
+                    }
+                    val wait = backoffMs(attempts)
+                    onRetry?.invoke(attempts, maxAttempts, outcome.why, wait)
+                    if (!sleepWithAbort(wait, shouldAbort)) {
+                        return LlmResult.Fail(ABORT_MESSAGE)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 一次尝试：建连 → 上传 → 等响应 → 解析。
+     *
+     * 全程被一个看门狗线程盯着（见 [Watchdog]），
+     * 到点没回来就断开，转成"超时"交给外面的重发循环。
+     */
+    private fun attemptOnce(
+        body: JSONObject,
+        onUploaded: (() -> Unit)?,
+        prefixReused: Int,
+        prefixTotal: Int,
+    ): Try {
+        val conn = (URL(endpoint()).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = cfg.timeoutMs
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
+            setRequestProperty("Accept", "application/json")
+        }
+        activeConn.set(conn)
+        val watched = Watchdog(conn)
+        watched.start()
+
+        return try {
             val payload = body.toString().toByteArray(Charsets.UTF_8)
             conn.setFixedLengthStreamingMode(payload.size)
             conn.outputStream.use { it.write(payload) }
@@ -233,20 +376,131 @@ class LlmClient(private val cfg: LlmConfig) {
             onUploaded?.invoke()
 
             val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.let {
-                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
-            } ?: ""
-
-            if (code !in 200..299) {
-                return LlmResult.Fail(explainHttpError(code, text))
+            val text = if (code in 200..299) {
+                readAll(conn.inputStream)
+            } else {
+                readAll(conn.errorStream)
             }
 
-            // 分母用**上一次**的消息条数：这个指标要回答的是
-            // "上一次请求是不是被完整复用了"，而不是"新请求多长"
-            parseResponse(text, reused, previous.size)
+            if (code !in 200..299) {
+                httpFailure(code, text)
+            } else {
+                parseResponse(text, prefixReused, prefixTotal)
+            }
         } catch (t: Throwable) {
-            LlmResult.Fail(explainThrowable(t))
+            when {
+                isAborted() -> Try.Fatal(ABORT_MESSAGE)
+                watched.tripped -> Try.Retry("超时（${cfg.timeoutMs / 1000}s 没等到响应）")
+                else -> throwableToTry(t)
+            }
+        } finally {
+            watched.stop()
+            activeConn.compareAndSet(conn, null)
+        }
+    }
+
+    /** 把响应体读干净。必须读到 EOF，否则这条连接不会被复用 */
+    private fun readAll(stream: java.io.InputStream?): String =
+        stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
+        } ?: ""
+
+    // ------------------------------------------------------------------
+    // 重发策略
+    // ------------------------------------------------------------------
+
+    /**
+     * 退避时长：1.5s → 3s → 6s，各带 ±20% 抖动。
+     *
+     * 抖动是为了避免"多个任务同时失败、同时重发"挤在一起 ——
+     * 服务端本来就在出问题，整齐划一地猛敲它只会让它更糟。
+     */
+    private fun backoffMs(attempt: Int): Long {
+        val base = RETRY_BASE_DELAY_MS shl (attempt - 1)
+        val jitter = (base * 0.2 * (Math.random() * 2 - 1)).toLong()
+        return (base + jitter).coerceAtLeast(400L)
+    }
+
+    /**
+     * 可被叫停的等待。
+     *
+     * 一整段 `Thread.sleep(6000)` 会让"按了急停还要等六秒"变成常态，
+     * 所以切成 100ms 一片，每片都看一眼中断标记。
+     *
+     * @return true = 等满了；false = 中途被叫停
+     */
+    private fun sleepWithAbort(totalMs: Long, shouldAbort: (() -> Boolean)?): Boolean {
+        var left = totalMs
+        while (left > 0) {
+            if (isAborted() || shouldAbort?.invoke() == true) return false
+            val step = minOf(left, ABORT_POLL_MS)
+            try {
+                Thread.sleep(step)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+            left -= step
+        }
+        return true
+    }
+
+    private fun isAborted(): Boolean = abortFlag.get()
+
+    private fun giveUp(attempts: Int, why: String, startedAt: Long): LlmResult.Fail {
+        val spent = (System.currentTimeMillis() - startedAt) / 1000
+        return LlmResult.Fail(
+            "模型连续 $attempts 次没有正常响应（最后一次：$why），共花了 ${spent}s。\n" +
+                "网络不稳就重发一次任务；每次都这样，检查手机网络，" +
+                "或者看「设置 → 模型」里的地址和服务商状态。",
+        )
+    }
+
+    /**
+     * 看门狗：单次尝试的总时限。
+     *
+     * `readTimeout` 只管读、`connectTimeout` 只管建连，**写没有超时**。
+     * 上传大请求体时卡住是真实存在的一种"卡死"，只能靠外面的线程
+     * 定时 `disconnect()` 把它掀掉。
+     *
+     * 时限故意比 `readTimeout` 宽几秒：正常情况下让 `readTimeout` 先赢，
+     * 那样异常类型明确（SocketTimeoutException）、文案也好写；
+     * 看门狗只在"卡在读和写之外的地方"时才接管。
+     */
+    private inner class Watchdog(private val conn: HttpURLConnection) {
+        @Volatile var tripped: Boolean = false
+        private val alive = AtomicBoolean(true)
+        private val thread = Thread {
+            val limit = cfg.timeoutMs + WATCHDOG_GRACE_MS
+            val deadline = System.currentTimeMillis() + limit
+            while (alive.get()) {
+                val left = deadline - System.currentTimeMillis()
+                if (left <= 0) {
+                    if (alive.getAndSet(false)) {
+                        tripped = true
+                        Log.w(TAG, "单次请求超过 ${limit}ms 还没回来，主动断开")
+                        runCatching { conn.disconnect() }
+                    }
+                    return@Thread
+                }
+                try {
+                    Thread.sleep(minOf(left, ABORT_POLL_MS))
+                } catch (e: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }.apply {
+            isDaemon = true
+            name = "llm-watchdog"
+        }
+
+        fun start() {
+            thread.start()
+        }
+
+        fun stop() {
+            alive.set(false)
+            thread.interrupt()
         }
     }
 
@@ -406,26 +660,40 @@ class LlmClient(private val cfg: LlmConfig) {
     // 响应解析与报错翻译
     // ------------------------------------------------------------------
 
-    private fun parseResponse(raw: String, prefixReused: Int, prefixTotal: Int): LlmResult {
-        return try {
-            val root = JSONObject(raw)
-            val choices = root.optJSONArray("choices")
-            if (choices == null || choices.length() == 0) {
-                return LlmResult.Fail("模型没有返回任何内容。原始响应：${raw.take(300)}")
+    private fun parseResponse(raw: String, prefixReused: Int, prefixTotal: Int): Try {
+        val root = try {
+            JSONObject(raw)
+        } catch (t: Throwable) {
+            // 响应截断（连接被中途掐断）也会长得像"不合法 JSON"，
+            // 所以归到可重发，而不是直接判死
+            return Try.Retry("响应不是合法 JSON（${t.message}）").also {
+                Log.w(TAG, "响应不是合法 JSON，原始内容前 300 字：${raw.take(300)}")
             }
-            val message = choices.getJSONObject(0).optJSONObject("message")
-                ?: return LlmResult.Fail("返回结构里没有 message 字段：${raw.take(300)}")
+        }
 
-            // 有些模型（尤其是带推理的）会把内容放在 reasoning_content，
-            // content 为空。两个都看看，别直接判失败。
-            val content = message.optString("content", "").ifBlank {
-                message.optString("reasoning_content", "")
-            }
-            if (content.isBlank()) {
-                return LlmResult.Fail("模型返回了空内容：${raw.take(300)}")
+        val choices = root.optJSONArray("choices")
+        if (choices == null || choices.length() == 0) {
+            Log.w(TAG, "返回里没有 choices：${raw.take(300)}")
+            return Try.Retry("模型没返回任何内容")
+        }
+        val message = choices.getJSONObject(0).optJSONObject("message")
+            ?: return Try.Retry("返回结构里没有 message 字段").also {
+                Log.w(TAG, "返回结构里没有 message：${raw.take(300)}")
             }
 
-            val usage = root.optJSONObject("usage")
+        // 有些模型（尤其是带推理的）会把内容放在 reasoning_content，
+        // content 为空。两个都看看，别直接判失败。
+        val content = message.optString("content", "").ifBlank {
+            message.optString("reasoning_content", "")
+        }
+        if (content.isBlank()) {
+            Log.w(TAG, "模型返回了空内容：${raw.take(300)}")
+            // 温度默认 1.0，重发一次拿到不同结果的概率不低 —— 值得再试
+            return Try.Retry("模型返回了空内容")
+        }
+
+        val usage = root.optJSONObject("usage")
+        return Try.Ok(
             LlmResult.Ok(
                 text = content,
                 promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
@@ -435,51 +703,103 @@ class LlmClient(private val cfg: LlmConfig) {
                 prefixReused = prefixReused,
                 prefixTotal = prefixTotal,
             )
-        } catch (t: Throwable) {
-            LlmResult.Fail("响应不是合法 JSON：${t.message}\n原始内容：${raw.take(300)}")
-        }
+        )
     }
 
     /**
-     * 把 HTTP 错误翻译成看得懂的中文。
+     * HTTP 非 2xx 的处置：**翻译成人话，并判断值不值得重发**。
      *
      * 这一步不能省。原始报错是 `{"error":{"message":"..."}}` 这种，
      * 用户看到只会一头雾水。而这里最常见的两个坑 ——
      * Key 不对、模型不支持图片 —— 恰好都能从状态码和关键字判断出来。
+     *
+     * 分界线是"重发会不会有不同结果"：
+     *   5xx / 429 / 408 —— 服务端自己或链路的事，等一会儿可能就好了
+     *   其余 4xx       —— 我们的请求本身有问题，重发一百次也还是一样
      */
-    private fun explainHttpError(code: Int, body: String): String {
+    private fun httpFailure(code: Int, body: String): Try {
         val detail = runCatching {
             JSONObject(body).optJSONObject("error")?.optString("message", "")
         }.getOrNull().orEmpty().ifBlank { body.take(200) }
+        Log.w(TAG, "HTTP $code：$detail")
 
-        val base = when (code) {
+        val reason = when (code) {
             401, 403 -> "API Key 不对或没有权限。检查「设置 → 模型」里的 Key。"
             404 -> "接口地址或模型名不对。地址是 ${endpoint()}，模型是 ${cfg.model}。"
-            429 -> "请求太频繁或额度用完了。等一会儿再试。"
+            408 -> "服务端等我们等超时了。"
+            429 -> "请求太频繁或额度用完了。"
             400 -> when {
                 detail.contains("image", true) || detail.contains("vision", true) ->
                     "这个模型不接受图片输入。要多模态模型（比如 deepseek-flash）。"
-                detail.contains("model", true) ->
-                    "模型名不对：${cfg.model}。"
+                detail.contains("model", true) -> "模型名不对：${cfg.model}。"
                 else -> "请求被拒绝。"
             }
-            500, 502, 503, 504 -> "服务端出错了（$code），稍后重试。"
-            else -> "请求失败，HTTP $code。"
+            in 500..599 -> "服务端出错了。"
+            else -> "请求失败。"
         }
-        return "$base\n服务端说明：$detail"
+
+        val retryable = code == 408 || code == 429 || code in 500..599
+        return if (retryable) {
+            Try.Retry("HTTP $code（$reason）")
+        } else {
+            Try.Fatal("$reason\n服务端说明：$detail")
+        }
     }
 
-    private fun explainThrowable(t: Throwable): String = when (t) {
+    /**
+     * 异常 → 处置。
+     *
+     * 绝大多数网络异常是**暂时性**的：连接被拒、连接被重置、
+     * 域名解析抖一下。重发一次基本都能过去。
+     *
+     * 唯一例外是 SSL 握手失败 —— 那通常意味着证书/域名配置不对，
+     * 重发只会浪费时间，直接判死更快让用户看到真正的问题。
+     */
+    private fun throwableToTry(t: Throwable): Try = when (t) {
+        // ⚠️ SocketTimeoutException 是 InterruptedIOException 的子类，
+        // 这两个分支的先后顺序不能调
         is java.net.SocketTimeoutException ->
-            "请求超时。可能是网络慢，或者接口地址填错了。"
-        is java.net.UnknownHostException ->
-            "连不上 ${cfg.baseUrl}。检查手机网络，或者接口地址有没有写错。"
-        is javax.net.ssl.SSLException ->
-            "HTTPS 握手失败：${t.message}"
-        else -> "请求出错：${t.javaClass.simpleName} ${t.message}"
+            Try.Retry("超时（${cfg.timeoutMs / 1000}s 没等到响应）")
+        is java.io.InterruptedIOException -> Try.Retry("连接被中断")
+        is java.net.ConnectException -> Try.Retry("连不上服务端")
+        is java.net.UnknownHostException -> Try.Retry("域名解析失败（${cfg.baseUrl}）")
+        is java.net.SocketException -> Try.Retry("连接断了（${t.message}）")
+        is java.io.IOException -> Try.Retry("网络出错（${t.message}）")
+        is javax.net.ssl.SSLException -> Try.Fatal("HTTPS 握手失败：${t.message}")
+        else -> Try.Fatal("请求出错：${t.javaClass.simpleName} ${t.message}")
     }
 
     /** 给连通性自检用的短描述 */
     fun describe(): String =
-        "模型=${cfg.model} 地址=${endpoint()} 图片=${cfg.detail} 思考=${cfg.thinking.label}"
+        "模型=${cfg.model} 地址=${endpoint()} 图片=${cfg.detail} 思考=${cfg.thinking.label} " +
+            "重发=${cfg.maxAttempts}次"
+
+    companion object {
+        private const val TAG = "LlmClient"
+
+        /** 建连超时。和读超时分开：连不上是"地址/网络"问题，等久了没意义 */
+        const val CONNECT_TIMEOUT_MS = 20_000
+
+        /** 重发退避的基准：1.5s、3s、6s… */
+        const val RETRY_BASE_DELAY_MS = 1_500L
+
+        /** 看门狗比 readTimeout 宽出来的余量，见 [Watchdog] 的说明 */
+        const val WATCHDOG_GRACE_MS = 5_000L
+
+        /** 等待中断标记的轮询间隔 */
+        const val ABORT_POLL_MS = 100L
+
+        /**
+         * 一次 [chat] 的总时间预算。
+         *
+         * 没有它的话，"每次都卡满 120s"会变成 3 趟加起来六分钟 ——
+         * 手机任务里这个体感已经接近死机了。有了预算，**快失败能多试、
+         * 慢卡死少试**：5xx 那种几百毫秒就返回的，三次都跑得完；
+         * 真卡满 120s 的，第二趟之后就不给新的了。
+         */
+        const val RETRY_TOTAL_BUDGET_MS = 300_000L
+
+        /** 用户按了急停、请求被中断时的返回文案 */
+        const val ABORT_MESSAGE = "已停止（请求被中断）"
+    }
 }
