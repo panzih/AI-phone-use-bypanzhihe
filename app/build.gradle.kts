@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 47      // 0.9.7：需求F自然路径 + FGS崩溃 + 模型卡住重发 + 导出日志 + 减少等待/端侧分析
-        versionName = "0.9.7"
+        versionCode = 48      // 0.9.8：跨任务图片落盘复用（续接上下文时前缀不再从带图那条断开）
+        versionName = "0.9.8"
     }
 
     /**

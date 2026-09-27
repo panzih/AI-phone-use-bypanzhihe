@@ -111,8 +111,50 @@ object ContextStore {
      */
     private const val MAX_HISTORY_CHARS = 400_000
 
+    /**
+     * 历史里最多留多少张图（多了从最早的开始丢）。
+     *
+     * 字符数那道上限管不到图片 —— 截图挂在消息里，不算 [ChatTurn.text] 的长度。
+     * 一张全分辨率 JPEG 约 100KB，留 20 张 = 2MB 常驻内存加磁盘，够用又不失控。
+     */
+    private const val MAX_IMAGES = 20
+
     private fun file(context: Context): File =
         File(AppLog.rootDir(context), FILE_NAME)
+
+    /**
+     * 历史里的截图存这儿，和 `logs/`、`macros/` 平级。
+     *
+     * 文件名就是 [ChatTurn.imageId]（内容哈希 + 长度），所以同一张图天然只留一份。
+     * 存的是**原始字节**，读回来直接当 imageBytes 用 —— 服务端的缓存按最长公共
+     * 前缀复用，同一张图哪怕只是重新编码一次，前缀也会从那一条断掉。
+     */
+    private fun imageDir(context: Context): File =
+        File(AppLog.rootDir(context), "images")
+
+    private fun writeImage(context: Context, id: String, bytes: ByteArray): Boolean =
+        runCatching {
+            val f = File(imageDir(context), id)
+            if (f.exists() && f.length() == bytes.size.toLong()) return@runCatching true
+            imageDir(context).mkdirs()
+            f.writeBytes(bytes)
+            true
+        }.onFailure { AppLog.w("保存历史图片失败：${it.message}", "对话") }
+            .getOrDefault(false)
+
+    private fun readImage(context: Context, id: String): ByteArray? =
+        runCatching {
+            File(imageDir(context), id).takeIf { it.exists() }?.readBytes()
+        }.getOrNull()
+
+    /** 清掉不再被任何一条历史引用的图（裁剪历史、重开上下文都会留下孤儿） */
+    private fun pruneImages(context: Context, keep: Set<String>) {
+        runCatching {
+            imageDir(context).listFiles()?.forEach { f ->
+                if (f.name !in keep) f.delete()
+            }
+        }.onFailure { AppLog.w("清理历史图片失败：${it.message}", "对话") }
+    }
 
     fun load(context: Context): SavedContext? = runCatching {
         val f = file(context)
@@ -163,7 +205,16 @@ object ContextStore {
                         val text = h.optString("text")
                         val role = h.optString("role")
                         if (text.isBlank() || role.isBlank()) null
-                        else ChatTurn(role = role, text = text)
+                        else ChatTurn(
+                            role = role,
+                            text = text,
+                            // 图从磁盘读回来，一个字节都不动（见 imageDir 的说明）。
+                            // 读不回来（被清掉、当初没写成）就退回纯文本：那条路只会让
+                            // 下一次请求的前缀断一次，任务本身照常跑。
+                            imageBytes = h.optString("imageId")
+                                .takeIf { it.isNotBlank() }
+                                ?.let { readImage(context, it) },
+                        )
                     }
                 }
             } ?: emptyList(),
@@ -191,6 +242,17 @@ object ContextStore {
     ) {
         runCatching {
             val kept = if (entries.size > MAX_ENTRIES) entries.takeLast(MAX_ENTRIES) else entries
+            val keptHistory = trimHistory(history)
+            // 先把图片落盘、拿到"确实写成了"的那些标识，再写 JSON 里的引用 ——
+            // 反过来做的话，写盘失败会在 JSON 里留下一个指不到文件的 imageId。
+            val imagesWritten = mutableSetOf<String>()
+            keptHistory.forEach { h ->
+                val id = h.imageId
+                val bytes = h.imageBytes
+                if (id != null && bytes != null && writeImage(context, id, bytes)) {
+                    imagesWritten.add(id)
+                }
+            }
             val o = JSONObject().apply {
                 put("lastActivityAt", lastActivityAt)
                 put("entries", JSONArray().apply {
@@ -217,11 +279,12 @@ object ContextStore {
                     }
                 })
                 put("history", JSONArray().apply {
-                    trimHistory(history).forEach { h ->
+                    keptHistory.forEach { h ->
                         put(
                             JSONObject().apply {
                                 put("role", h.role)
                                 put("text", h.text)
+                                h.imageId?.takeIf { it in imagesWritten }?.let { put("imageId", it) }
                             }
                         )
                     }
@@ -235,6 +298,9 @@ object ContextStore {
                 put("skillCatalog", skillCatalog)
             }
             file(context).writeText(o.toString())
+            // 被裁掉的那些消息带过的图，此刻已经没人引用了 —— 就地清掉，
+            // 否则图片目录会随任务次数一直长大
+            pruneImages(context, imagesWritten)
         }.onFailure { AppLog.w("保存对话失败：${it.message}", "对话") }
     }
 
@@ -249,11 +315,16 @@ object ContextStore {
      */
     private fun trimHistory(history: List<ChatTurn>): List<ChatTurn> {
         var total = 0
+        var images = 0
         val out = ArrayDeque<ChatTurn>()
         for (h in history.asReversed()) {
-            if (total + h.text.length > MAX_HISTORY_CHARS && out.isNotEmpty()) break
+            val hasImage = h.imageBytes != null
+            if (out.isNotEmpty() &&
+                (total + h.text.length > MAX_HISTORY_CHARS || (hasImage && images >= MAX_IMAGES))
+            ) break
             out.addFirst(h)
             total += h.text.length
+            if (hasImage) images++
         }
         return out.toList()
     }
@@ -261,5 +332,7 @@ object ContextStore {
     /** 只在上下文真的被清掉时调用 */
     fun clear(context: Context) {
         runCatching { file(context).delete() }
+        // 上下文都没了，图留着谁也引用不到（save 时也会清，这里顺手让它立刻释放）
+        runCatching { imageDir(context).deleteRecursively() }
     }
 }

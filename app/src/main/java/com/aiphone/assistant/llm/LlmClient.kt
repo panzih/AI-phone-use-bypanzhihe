@@ -8,6 +8,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -94,9 +95,40 @@ data class ChatTurn(
      */
     val imageBytes: ByteArray? = null,
 ) {
+    /**
+     * 图片的**内容标识** —— 由字节算出来，同一份图永远是同一个串。
+     *
+     * 为什么不能用 [System.identityHashCode] 认图：那个身份码只在**同一次任务内**
+     * 成立。上下文落盘时图片跟着写进文件，下一次任务读回来是一个**新的数组**，
+     * 身份码必然不同 —— 于是"前缀复用"会把历史判成"从这条起被改过"，
+     * 整段缓存的命中就此让出去（实测：24 条里只复用得了 5 条）。
+     *
+     * 用内容算就不会有这个问题：字节一样 → 标识一样 → 指纹一样。
+     * 懒算是因为一张全分辨率截图几百 KB，没必要每次请求都重算。
+     */
+    val imageId: String? by lazy { imageBytes?.let { imageIdOf(it) } }
+
     companion object {
         const val USER = "user"
         const val ASSISTANT = "assistant"
+
+        private const val HEX = "0123456789abcdef"
+
+        /**
+         * 图片标识 = SHA-256 前 8 字节（16 位十六进制）+ 原始长度。
+         *
+         * 带上长度，是为了落盘后的文件名也能一眼看出有没有被截断；
+         * 真正防撞的是哈希。
+         */
+        fun imageIdOf(bytes: ByteArray): String {
+            val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            val sb = StringBuilder(24)
+            for (i in 0 until 8) {
+                val b = digest[i].toInt() and 0xFF
+                sb.append(HEX[b shr 4]).append(HEX[b and 0x0F])
+            }
+            return sb.append('-').append(bytes.size).toString()
+        }
     }
 }
 
@@ -637,10 +669,16 @@ class LlmClient(private val cfg: LlmConfig) {
         buildList {
             add("system".hashCode() * 31 + system.hashCode())
             history.forEach { t ->
+                val image = t.imageBytes
                 add(
                     t.role.hashCode() * 31 +
                         t.text.hashCode() * 7 +
-                        (t.imageBytes?.let { System.identityHashCode(it) * 13 + it.size } ?: 0)
+                        // 用**内容标识**而不是身份码：图从磁盘读回来是新数组，
+                        // 身份码会变，只有内容标识跨任务稳定（见 ChatTurn.imageId）。
+                        // 图不在这条上必须是 0 —— 指纹要如实反映"实际发出去的东西"，
+                        // 否则应用会报"前缀完整"，而服务端那边其实早就分叉了。
+                        if (image == null) 0
+                        else (t.imageId?.hashCode() ?: 0) * 13 + image.size
                 )
             }
         }

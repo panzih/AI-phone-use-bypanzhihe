@@ -131,11 +131,15 @@ class Agent(
      */
     private val allHistory = mutableListOf<ChatTurn>()
 
-    /** 只读快照。带图的消息把图去掉：下一次任务没法原样重发它 */
+    /**
+     * 只读快照。带图的消息**原样带走**。
+     *
+     * 图片由 ContextStore 落盘、下一次任务再读回来，所以历史里每一条都还能
+     * 逐字复原 —— 前缀才是真正只增不改的。原来在这里把图剥掉，等于让下一次
+     * 任务的前缀从第一条带图的消息就断掉（实测 24 条只复用 5 条）。
+     */
     val finalHistory: List<ChatTurn>
-        get() = synchronized(allHistory) {
-            allHistory.map { ChatTurn(role = it.role, text = it.text) }
-        }
+        get() = synchronized(allHistory) { allHistory.toList() }
 
     /** 累计 token，用来算这次花了多少 */
     private var promptTokens = 0
