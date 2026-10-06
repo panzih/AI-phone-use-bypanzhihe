@@ -327,7 +327,7 @@ class LlmClient(private val cfg: LlmConfig) {
         lastFingerprints = fingerprints
 
         // 请求体只构造一次，重发时**逐字节复用同一份**。
-        // 服务端按最长公共前缀命中缓存，重发同一份内容能直接吃上缓存；
+        // 服务端要求完整匹配缓存前缀单元，重发同一份内容才保得住已有单元；
         // 重新构造（哪怕内容完全等价）就没这个保证了。
         val body = buildBody(system, history)
 
@@ -813,12 +813,14 @@ class LlmClient(private val cfg: LlmConfig) {
         // 这两个分支的先后顺序不能调
         is java.net.SocketTimeoutException ->
             Try.Retry("超时（${cfg.timeoutMs / 1000}s 没等到响应）")
+        // SSLException 也是 IOException 的子类，必须放在通用 IO 分支之前。
+        // 证书或协议配置错误时重发同一请求只会重复失败。
+        is javax.net.ssl.SSLException -> Try.Fatal("HTTPS 握手失败：${t.message}")
         is java.io.InterruptedIOException -> Try.Retry("连接被中断")
         is java.net.ConnectException -> Try.Retry("连不上服务端")
         is java.net.UnknownHostException -> Try.Retry("域名解析失败（${cfg.baseUrl}）")
         is java.net.SocketException -> Try.Retry("连接断了（${t.message}）")
         is java.io.IOException -> Try.Retry("网络出错（${t.message}）")
-        is javax.net.ssl.SSLException -> Try.Fatal("HTTPS 握手失败：${t.message}")
         else -> Try.Fatal("请求出错：${t.javaClass.simpleName} ${t.message}")
     }
 

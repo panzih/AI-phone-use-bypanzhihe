@@ -126,10 +126,11 @@ object ContextStore {
      * 历史里的截图存这儿，和 `logs/`、`macros/` 平级。
      *
      * 文件名就是 [ChatTurn.imageId]（内容哈希 + 长度），所以同一张图天然只留一份。
-     * 存的是**原始字节**，读回来直接当 imageBytes 用 —— 服务端的缓存按最长公共
-     * 前缀复用，同一张图哪怕只是重新编码一次，前缀也会从那一条断掉。
+     * 存的是**原始字节**，读回来直接当 imageBytes 用 —— 服务端只命中完整匹配的
+     * 缓存前缀单元，同一张图哪怕只是重新编码一次，后续单元也可能失配。
      */
-    private fun imageDir(context: Context): File =
+    // 供日志导出复用同一目录定义，避免导出的对话引用找不到对应图片。
+    internal fun imageDir(context: Context): File =
         File(AppLog.rootDir(context), "images")
 
     private fun writeImage(context: Context, id: String, bytes: ByteArray): Boolean =

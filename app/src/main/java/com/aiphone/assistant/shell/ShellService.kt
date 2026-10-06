@@ -1,5 +1,6 @@
 package com.aiphone.assistant.shell
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -112,6 +113,10 @@ class ShellService : IShellService.Stub() {
 
     // ================= 0.5.0：TRUSTED 虚拟副屏 =================
 
+    // 这块屏必须携带 shell 可用的隐藏 flag（TRUSTED、OWN_DISPLAY_GROUP 等）。
+    // SDK 的 @IntDef 只列公开 flag，Lint 在调用 createVirtualDisplay 时会将这些
+    // 实测需要的位误判为 WrongConstant。仅在本函数局部抑制这项检查。
+    @SuppressLint("WrongConstant")
     override fun createDisplay(): Int = synchronized(this) {
         try {
             // 幂等：已经建了就直接返回现有 id

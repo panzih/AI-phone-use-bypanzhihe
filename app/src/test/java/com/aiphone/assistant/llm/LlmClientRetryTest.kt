@@ -46,9 +46,13 @@ class LlmClientRetryTest {
         server.close()
     }
 
-    private fun client(maxAttempts: Int = 3, timeoutMs: Int = 30_000) = LlmClient(
+    private fun client(
+        maxAttempts: Int = 3,
+        timeoutMs: Int = 30_000,
+        scheme: String = "http",
+    ) = LlmClient(
         LlmConfig(
-            baseUrl = "http://127.0.0.1:${server.port}",
+            baseUrl = "$scheme://127.0.0.1:${server.port}",
             apiKey = "test-key",
             model = "test-model",
             maxAttempts = maxAttempts,
@@ -90,6 +94,21 @@ class LlmClientRetryTest {
         assertTrue("应当是失败，实际：$r", r is LlmResult.Fail)
         assertEquals("只发一次", 1, server.served.get())
         assertTrue("要提示是 Key 的问题", (r as LlmResult.Fail).message.contains("API Key"))
+    }
+
+    @Test
+    fun `HTTPS握手失败_直接报告证书错误且不重发`() {
+        // 服务端说普通 HTTP，客户端却尝试 TLS：真实触发 SSLException。
+        // 重发同一条请求无法修复协议或证书配置错误。
+        server.plan(Reply.badTls(), Reply.badTls())
+        val retries = CopyOnWriteArrayList<String>()
+
+        val r = chat(client(scheme = "https"), onRetry = { retries.add(it) })
+
+        assertTrue("应当报告失败，实际：$r", r is LlmResult.Fail)
+        assertTrue("应当指出 HTTPS 握手问题，实际：$r", (r as LlmResult.Fail).message.contains("HTTPS 握手失败"))
+        assertEquals("握手失败不应重发", 1, server.served.get())
+        assertTrue("握手失败不应通知重发", retries.isEmpty())
     }
 
     // ---- 该重发的：超时（服务端收下请求但不吐字）----
@@ -154,11 +173,14 @@ class LlmClientRetryTest {
         class Fail(val code: Int) : Reply()
         /** 收下请求但一直不回，用来构造"卡住" */
         class Hang : Reply()
+        /** 用普通 HTTP 回应 TLS ClientHello，模拟地址协议配置错误 */
+        class BadTls : Reply()
 
         companion object {
             fun ok(body: String) = Ok(body)
             fun fail(code: Int) = Fail(code)
             fun hang() = Hang()
+            fun badTls() = BadTls()
         }
     }
 
@@ -197,12 +219,17 @@ class LlmClientRetryTest {
             try {
                 val n = served.getAndIncrement()
                 firstServed.countDown()
-                drainRequest(conn.getInputStream())
-                when (val r = plan.getOrNull(n) ?: Reply.fail(500)) {
+                val reply = plan.getOrNull(n) ?: Reply.fail(500)
+                if (reply !is Reply.BadTls) drainRequest(conn.getInputStream())
+                when (val r = reply) {
                     is Reply.Ok -> respond(conn, 200, r.body)
                     is Reply.Fail -> respond(conn, r.code, """{"error":{"message":"stub"}}""")
                     // 挂住：什么都不写，也不关 —— 让客户端一直等
                     is Reply.Hang -> Thread.sleep(120_000)
+                    is Reply.BadTls -> {
+                        conn.getOutputStream().write("HTTP/1.1 400 Bad Request\r\n\r\n".toByteArray())
+                        conn.getOutputStream().flush()
+                    }
                 }
             } catch (t: Throwable) {
                 // 客户端断开（abort/超时）会走到这里，正常

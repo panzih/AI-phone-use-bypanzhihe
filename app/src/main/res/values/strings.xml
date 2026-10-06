@@ -102,8 +102,12 @@
     <string name="vd_mirror_none">现在没有副屏。先让任务切到副屏模式，或到「运行副屏探针」建一块。</string>
     <string name="vd_mirror_failed">镜像页没能打开：%1$s</string>
     <string name="log_delete_confirm_title">删除所有日志？</string>
-    <string name="log_delete_confirm_body">会删掉运行日志、诊断日志和自动截图。记忆、学到的技能和定时任务不受影响。这个操作不能撤销。</string>
+    <string name="log_delete_confirm_body">会删掉运行日志、诊断日志、自动截图，以及当前对话和历史截图。记忆、学到的技能和定时任务不受影响。这个操作不能撤销。</string>
     <string name="log_delete_done">日志已删除</string>
+    <string name="log_delete_busy">任务执行或日志导出期间不能删除；请先停止任务或等待导出结束。</string>
+    <string name="log_delete_in_progress">正在删除日志和对话，请稍候。</string>
+    <string name="log_delete_failed">删除日志失败：%1$s</string>
+    <string name="log_delete_context_marker">日志和对话记录已删除</string>
     <string name="log_autocap_stats">自动截图 %1$d 张 · %2$s</string>
 
     <!-- 定时任务 -->
@@ -185,7 +189,6 @@
     <string name="settings_export_logs_desc">打包成 zip，可以直接发给别人</string>
     <string name="settings_log_stats">共 %1$d 次记录 · %2$s</string>
     <string name="settings_memory_stats">记忆：%1$d 条 · %2$s</string>
-    <string name="settings_export_none">还没有日志可导出</string>
     <string name="settings_export_done">已生成：%1$s</string>
     <string name="settings_export_working">正在打包…</string>
     <string name="settings_export_failed">导出失败：%1$s</string>

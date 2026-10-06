@@ -40,6 +40,7 @@
 
 ## 安装
 
+
 **方式一：直接装 APK**
 
 到 [Releases](../../releases) 页面下载 APK，装到手机上（首次安装需要在系统里
@@ -379,7 +380,7 @@ python3 tools/bridge_ctl.py reply 3 '{"actions":[{"action":"open_app","package":
 真机填同一 WiFi 下电脑的局域网 IP，如 `http://192.168.1.5:8766`）。**API Key 随便填**，
 桥接不校验它。
 
-不需要 API Key、不联网、不花钱。代价是每一步都要有人/AI 回一下 ——
+不需要 API Key、不访问公网模型服务、不花钱（手机仍会连接本机/局域网桥接端点）。代价是每一步都要有人/AI 回一下 ——
 适合调试、演示和"手把手带它走一遍"，不适合无人值守跑长任务。
 
 > 摘要文件是特意做的：原样请求体动辄上百 KB（历史里累积的 base64 截图），
@@ -401,6 +402,9 @@ screenshots/     截图（如果有）
 
 > Android 11 之后应用私有目录对文件管理器和 USB 都不可见，
 > 所以必须走"分享"这条路，不是设计得绕，是系统限制。
+
+导出包还包含对话历史引用的原始截图（`images/`）。它可能包含屏幕上的个人信息，
+分享前请核对接收者；在设置页删除日志时，对话记录及其历史截图也会一并清理。
 
 遇到问题时，**把导出的 zip 发出来** —— 里面能看到模型每一步的原始输出，
 卡在哪里一目了然，比描述半天管用。
@@ -448,7 +452,7 @@ screenshots/     截图（如果有）
 
 ## 隐私
 
-- **API Key 只存在你的手机上**（应用私有目录），除了发给你自己填的模型接口，不会去别处
+- **API Key 只存在你的手机上**（应用私有目录的 SharedPreferences，当前未加密），除了发给你自己填的模型接口，不会去别处
 - **日志和截图只存在本地**，只有你主动点导出、分享出去，才会离开手机
 - 屏幕内容会**发送给你配置的模型接口**用于判断下一步 —— 这是它工作的前提，
   请确认你信任所填的服务商
@@ -483,8 +487,9 @@ screenshots/     截图（如果有）
 
 **运行时依赖**（均为 Apache-2.0）：[AndroidX](https://developer.android.com/jetpack/androidx) ·
 [Jetpack Compose](https://developer.android.com/jetpack/compose) ·
-[Kotlin](https://kotlinlang.org/) / [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines)。
-除 AndroidX 之外**没有任何第三方运行时依赖** —— HTTP 用 JDK 自带的
+[Kotlin](https://kotlinlang.org/) / [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines) ·
+[Shizuku](https://github.com/RikkaApps/Shizuku)（副屏功能）。
+除 AndroidX 和 Shizuku 之外**没有其它第三方运行时依赖** —— HTTP 用 JDK 自带的
 `HttpURLConnection`，JSON 用安卓自带的 `org.json`。
 
 **灵感来源**（未使用其代码）：

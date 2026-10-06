@@ -19,10 +19,10 @@ cd "$(dirname "$0")"
 KEYSTORE="keystore/release.keystore"
 PROPS="keystore.properties"
 
-if [ -f "$KEYSTORE" ]; then
-    echo "❗ $KEYSTORE 已经存在，我没有覆盖它。"
-    echo "   要重新生成的话先手动删掉（但那会让已发布的版本无法升级）。"
-    exit 0
+if [ -e "$KEYSTORE" ] || [ -e "$PROPS" ]; then
+    echo "❗ 已存在 $KEYSTORE 或 $PROPS，我没有覆盖现有签名材料。"
+    echo "   先核对当前签名配置与备份；更换密钥会让已安装版本无法升级。"
+    exit 1
 fi
 
 if ! command -v keytool >/dev/null 2>&1; then
@@ -40,9 +40,10 @@ if [ -z "$CN" ]; then
     exit 1
 fi
 
-# 自动生成一个高强度口令。用你自己的想法也行，但别用弱口令 ——
-# 这个口令是保护"只有你能发这个应用的升级包"这件事的。
-PASS="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)"
+# 自动生成 24 个随机字节的十六进制口令（48 个字符）。
+# 输入是有限长度，避免 `tr </dev/urandom | head -c 24` 在 pipefail 下因
+# tr 收到 SIGPIPE 而返回 141、让整个脚本在建密钥前退出。
+PASS="$(od -An -N24 -tx1 /dev/urandom | tr -d '[:space:]')"
 
 mkdir -p keystore
 
@@ -75,7 +76,7 @@ cat <<EOF
    别名：$ALIAS
    口令：$PASS
 
-⚠️  上面这个口令只显示这一次，请立刻抄到密码管理器里。
+⚠️  口令保存在 $PROPS 中；请另存到密码管理器并保护好这个文件。
     密钥文件也请备份到别的地方 —— 丢了就永远无法给老用户推送升级。
 
 下一步：
