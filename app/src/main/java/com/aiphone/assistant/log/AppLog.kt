@@ -49,15 +49,30 @@ class RunLogger internal constructor(
     private val lock = Any()
     private val logFile = File(runDir, LOG_NAME)
     private val shotDir = File(runDir, SHOT_SUBDIR).apply { mkdirs() }
+
+    /**
+     * 每一步"模型到底看到了什么"。
+     *
+     * `run.log` 里也有同一份（给人看），但那是**文字流**；这里每步一个文件，
+     * 复盘时可以直接按步号打开，也方便把某一步单独发给别人。
+     */
+    private val uiDir = File(runDir, UI_SUBDIR).apply { mkdirs() }
     private val reportFile = File(runDir, REPORT_NAME)
 
     /** 结构化记录，close() 时一次性写成 report.json */
     private val steps = JSONArray()
 
+    /** 步号 → 那一刻发给模型的元素列表（原样），写进 report.json 供 AI 复盘 */
+    private val stepTrees = HashMap<Int, String?>()
+
     private val startedAt = System.currentTimeMillis()
 
     @Volatile
     private var closed = false
+
+    /** 结局（成功/失败 + 一句话），close() 时写进 report.json */
+    private var outcomeSuccess: Boolean? = null
+    private var outcome: String? = null
 
     val screenshotsDir: File get() = shotDir
 
@@ -118,7 +133,7 @@ class RunLogger internal constructor(
             runCatching {
                 // 扩展名跟着通道给的实际编码走：无障碍截图是全分辨率 JPEG
                 // （旧版本曾存 PNG，日志目录里可能两种混着，按内容看即可）
-                val f = File(shotDir, "step_%02d.jpg".format(step))
+                val f = File(shotDir, "step_%02d.%s".format(step, ImageFormat.extension(bytes)))
                 f.writeBytes(bytes)
                 screenshotCount++
                 f
@@ -150,6 +165,10 @@ class RunLogger internal constructor(
             put("result", result ?: JSONObject.NULL)
             put("rawModelOutput", rawModelOutput ?: JSONObject.NULL)
             put("screenshot", shot?.name ?: JSONObject.NULL)
+            // 这一刻模型看到的界面元素（原样）。没有它就"复盘"不了 ——
+            // 光看模型说了什么，无法判断它是不是看到了错误的界面。
+            put("uiTree", stepTrees[step] ?: JSONObject.NULL)
+            put("uiTreeFile", if (stepTrees.containsKey(step)) uiFileName(step) else JSONObject.NULL)
             put("at", System.currentTimeMillis())
         }
         synchronized(lock) {
@@ -157,6 +176,43 @@ class RunLogger internal constructor(
             steps.put(o)
         }
     }
+
+    /**
+     * 记下"这一步发给模型的界面元素"。
+     *
+     * 必须在 [recordStep] **之前**调用：recordStep 会把它写进 report.json
+     * 的同一条 step 里（顺序反了那一条就永远是 null）。
+     *
+     * @param summary 一行摘要（根节点读到没有 / 几个元素 / 有没有截断）
+     * @param treeText 原样发给模型的元素列表；null = 这一屏没有可用的元素列表
+     */
+    fun recordUiTree(
+        step: Int,
+        summary: String,
+        treeText: String?,
+        rootAvailable: Boolean,
+        elementCount: Int,
+        truncated: Boolean,
+        rawNodeCount: Int,
+    ) {
+        synchronized(lock) {
+            if (closed) return
+            stepTrees[step] = treeText
+            // 每步一个文件：读不到的时候也要留，因为"读不到"本身就是结论
+            runCatching {
+                val body = buildString {
+                    appendLine(summary)
+                    appendLine("根节点可读：$rootAvailable")
+                    appendLine("元素个数：$elementCount（遍历 ${rawNodeCount} 个原始节点，截断=$truncated）")
+                    appendLine()
+                    appendLine(treeText ?: "（这一屏没有可用的界面元素列表）")
+                }
+                File(uiDir, uiFileName(step)).writeText(body)
+            }
+        }
+    }
+
+    private fun uiFileName(step: Int): String = "step_%02d.txt".format(step)
 
     // ------------------------------------------------------------------
     // 收尾
@@ -174,6 +230,11 @@ class RunLogger internal constructor(
                     put("endedAt", System.currentTimeMillis())
                     put("durationMs", System.currentTimeMillis() - startedAt)
                     put("screenshots", screenshotCount)
+                    // 结局：导出包的 index.csv 靠它一眼看出"这次是成功还是卡住"。
+                    // 以前 report.json 里没有结局，一次运行是跑完了还是崩了
+                    // 得把 run.log 读到最后一行才知道。
+                    put("success", outcomeSuccess ?: JSONObject.NULL)
+                    put("outcome", outcome ?: JSONObject.NULL)
                     put("steps", steps)
                 }
                 reportFile.writeText(root.toString(2))
@@ -181,10 +242,24 @@ class RunLogger internal constructor(
         }
     }
 
+    /**
+     * 记下这次运行的结局。
+     *
+     * 由 Agent 在收尾时调用（成功/失败/卡住/急停都会走到那里）。
+     */
+    fun setOutcome(success: Boolean, message: String) {
+        synchronized(lock) {
+            if (closed) return
+            outcomeSuccess = success
+            outcome = message
+        }
+    }
+
     companion object {
         const val LOG_NAME = "run.log"
         const val REPORT_NAME = "report.json"
         const val SHOT_SUBDIR = "screenshots"
+        const val UI_SUBDIR = "ui"
         const val LOGCAT_TAG = "纸盒"
 
         private val TIME = SimpleDateFormat("HH:mm:ss", Locale.US)

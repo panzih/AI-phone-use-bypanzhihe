@@ -39,6 +39,16 @@ data class UiNode(
     val centerX: Int get() = bounds.centerX()
     val centerY: Int get() = bounds.centerY()
 
+    /**
+     * 日志和报错里指代这个控件的一句话。
+     *
+     * 为什么必须有：调试点错问题时，日志里只有"编号[33] 点不动"是查不出
+     * 究竟点到谁的。带上文字/描述之后，"编号[33] 其实点到了『切换』"这种
+     * 结论可以直接从日志读出来，不用再去猜。
+     */
+    fun labelForLog(): String =
+        text.ifBlank { contentDesc }.ifBlank { className }.take(20)
+
     /** 给模型看的一行描述 */
     fun describe(): String {
         val sb = StringBuilder()
@@ -79,6 +89,31 @@ object UiTreeParser {
     private const val MIN_AREA = 24 * 24
 
     /**
+     * 控件树**读到了、但一个可交互元素都没有**时，给模型看的那一行。
+     *
+     * ⚠️ 这是"空列表"的占位文本，**不是**一个元素。历史上调用方用
+     * `文本行数` 当元素个数，于是这一行被数成了「控件树：1 个元素」，
+     * 导出日志里完全看不出"其实是 0 个 / 根本读不到"。要用元素个数就
+     * 用 [ParseResult.nodes]`.size`，不要数文本行。
+     */
+    const val EMPTY_TEXT = "（当前界面没有可交互元素，可能是游戏、视频或自定义绘制的页面）"
+
+    /**
+     * 一次解析的结果。
+     *
+     * [rawNodeCount] / [truncated] 是为了**复盘**加的：以前日志里只有
+     * "控件树：N 个元素"，看不出这 N 个是完整的还是被 `limit` 砍过的，
+     * 也看不出无障碍到底遍历到了多少节点。
+     */
+    data class ParseResult(
+        val nodes: List<UiNode>,
+        /** 遍历到的原始节点数（含被过滤掉的容器/噪声），<= limit 时不代表截断 */
+        val rawNodeCount: Int,
+        /** 是否撞到了 limit（界面元素比发给模型的还多） */
+        val truncated: Boolean,
+    )
+
+    /**
      * 解析整棵树。
      *
      * @param root 无障碍给的根节点（通常是 getRootInActiveWindow()）
@@ -95,27 +130,44 @@ object UiTreeParser {
         screenHeight: Int,
         limit: Int = 60,
         excludePackage: String? = null,
-    ): List<UiNode> {
+    ): List<UiNode> = parseDetailed(root, screenWidth, screenHeight, limit, excludePackage).nodes
+
+    /** 和 [parse] 一样，只是把"截断了没有 / 遍历了多少"一起带出来，供日志复盘 */
+    fun parseDetailed(
+        root: AccessibilityNodeInfo?,
+        screenWidth: Int,
+        screenHeight: Int,
+        limit: Int = 60,
+        excludePackage: String? = null,
+    ): ParseResult {
+        val walk = keepNodesDetailed(root, screenWidth, screenHeight, limit, excludePackage)
         val rect = Rect()
-        return keepNodes(root, screenWidth, screenHeight, limit, excludePackage)
-            .mapIndexed { i, node ->
-                node.getBoundsInScreen(rect)
-                UiNode(
-                    index = i + 1,
-                    className = simplifyClass(node.className?.toString().orEmpty()),
-                    text = node.text?.toString().orEmpty().trim(),
-                    contentDesc = node.contentDescription?.toString().orEmpty().trim(),
-                    viewId = node.viewIdResourceName.orEmpty(),
-                    bounds = Rect(rect),
-                    clickable = node.isClickable,
-                    longClickable = node.isLongClickable,
-                    scrollable = node.isScrollable,
-                    editable = node.isEditable,
-                    enabled = node.isEnabled,
-                    checked = node.isChecked,
-                )
-            }
+        val nodes = walk.nodes.mapIndexed { i, node ->
+            node.getBoundsInScreen(rect)
+            UiNode(
+                index = i + 1,
+                className = simplifyClass(node.className?.toString().orEmpty()),
+                text = node.text?.toString().orEmpty().trim(),
+                contentDesc = node.contentDescription?.toString().orEmpty().trim(),
+                viewId = node.viewIdResourceName.orEmpty(),
+                bounds = Rect(rect),
+                clickable = node.isClickable,
+                longClickable = node.isLongClickable,
+                scrollable = node.isScrollable,
+                editable = node.isEditable,
+                enabled = node.isEnabled,
+                checked = node.isChecked,
+            )
+        }
+        return ParseResult(nodes, walk.visited, walk.truncated)
     }
+
+    /** [keepNodesDetailed] 的结果 */
+    data class NodeWalk(
+        val nodes: List<AccessibilityNodeInfo>,
+        val visited: Int,
+        val truncated: Boolean,
+    )
 
     /**
      * 只做遍历和过滤，返回**原始节点**，顺序和 [parse] 的编号一一对应。
@@ -132,12 +184,23 @@ object UiTreeParser {
         screenHeight: Int,
         limit: Int = 60,
         excludePackage: String? = null,
-    ): List<AccessibilityNodeInfo> {
-        if (root == null) return emptyList()
+    ): List<AccessibilityNodeInfo> =
+        keepNodesDetailed(root, screenWidth, screenHeight, limit, excludePackage).nodes
+
+    /** 和 [keepNodes] 一样，额外回报遍历了多少个原始节点、有没有被 limit 截断 */
+    fun keepNodesDetailed(
+        root: AccessibilityNodeInfo?,
+        screenWidth: Int,
+        screenHeight: Int,
+        limit: Int = 60,
+        excludePackage: String? = null,
+    ): NodeWalk {
+        if (root == null) return NodeWalk(emptyList(), 0, false)
 
         val out = ArrayList<AccessibilityNodeInfo>(limit)
         val seen = HashSet<String>()
         val rect = Rect()
+        var visited = 0
 
         // 深度优先遍历。用显式栈避免深层界面把递归栈打爆
         val stack = ArrayDeque<AccessibilityNodeInfo>()
@@ -145,6 +208,7 @@ object UiTreeParser {
 
         while (stack.isNotEmpty() && out.size < limit) {
             val node = stack.removeLast()
+            visited++
 
             // 整个子树跳过：自己家的悬浮面板不该出现在给模型的列表里。
             // continue 之后不会再把子节点入栈，等于剪掉整棵子树。
@@ -168,7 +232,9 @@ object UiTreeParser {
             }
         }
 
-        return out
+        // out.size 撞到 limit 就认为"可能还有没发出去的" —— 保守表述，
+        // 日志里写的是"已达上限"，不断言一定被砍了
+        return NodeWalk(out, visited, out.size >= limit)
     }
 
     /** 这个节点值不值得留给模型看 */
@@ -230,9 +296,7 @@ object UiTreeParser {
      * 这是提示词里最关键的一段 —— 模型靠它决定"点哪个"。
      */
     fun render(nodes: List<UiNode>): String {
-        if (nodes.isEmpty()) {
-            return "（当前界面没有可交互元素，可能是游戏、视频或自定义绘制的页面）"
-        }
+        if (nodes.isEmpty()) return EMPTY_TEXT
         return nodes.joinToString("\n") { it.describe() }
     }
 }

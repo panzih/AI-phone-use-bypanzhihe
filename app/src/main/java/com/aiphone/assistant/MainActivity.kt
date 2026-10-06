@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
@@ -72,6 +73,7 @@ import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -259,6 +261,7 @@ private fun AppRoot(
     // 正在打包日志。日志大的时候打包是分钟级的活，界面必须有个交代，
     // 否则用户连点几下都只看到"没反应"，只能认为按钮坏了
     var exporting by remember { mutableStateOf(false) }
+    var deletingLogs by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(AutoService.isConnected) }
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var logStats by remember { mutableStateOf("") }
@@ -849,7 +852,8 @@ private fun AppRoot(
             agent.run(task)
             // 把模型这一侧的历史接住，随对话一起落盘 —— 下一次任务
             // 就是靠这一份才"记得"上一轮说过什么。
-            // 带图的消息在图被剥掉后无法逐字复原，所以只留文本
+            // 带图消息的原始字节也一起保留，ContextStore 会按内容标识落盘；
+            // 跨任务续接时必须原样读回，否则缓存前缀会从第一张图开始失配。
             agent.finalHistory
         } finally {
             // 兜底：Agent 万一提前抛了，也要收口，否则 run.log 停在半截
@@ -865,6 +869,10 @@ private fun AppRoot(
     fun submit() {
         val task = input.trim()
         if (task.isBlank() || isRunning) return
+        if (deletingLogs) {
+            toast = context.getString(R.string.log_delete_in_progress)
+            return
+        }
 
         // 主屏模式必须先连好无障碍服务。
         //
@@ -1080,7 +1088,14 @@ private fun AppRoot(
                     )
                     while (isActive) {
                         runCatching {
-                            controller.captureFrame()?.let { AutoCapture.save(context, it) }
+                            controller.captureFrame()?.let { bytes ->
+                                // 文件名写进本次 run.log：这样复盘时能拿
+                                // "自动截图：cap_142739_433" 这一行把画面
+                                // 对齐到具体是第几步的现场
+                                AutoCapture.save(context, bytes)?.let {
+                                    AppLog.i("自动截图：${it.name}", "截图")
+                                }
+                            }
                         }
                         delay(AutoCapture.INTERVAL_MS)
                     }
@@ -1164,6 +1179,10 @@ private fun AppRoot(
         // 防重入：连点会并发打好几份 zip（尤其是日志大的时候，
         // 第一份还没打完第二份又开跑），白烧 IO 还可能撞同一个文件名
         if (exporting) return
+        if (deletingLogs) {
+            toast = context.getString(R.string.log_delete_in_progress)
+            return
+        }
         exporting = true
 
         scope.launch {
@@ -1195,13 +1214,28 @@ private fun AppRoot(
         }
     }
 
-    /** 删除日志：只清运行痕迹，不动记忆 / 技能 / 定时任务（同样不能占主线程） */
+    /** 删除日志与对话历史；内存状态也要同步清掉，避免下一次防抖保存把旧内容写回磁盘。 */
     fun deleteLogs() {
+        if (deletingLogs) {
+            toast = context.getString(R.string.log_delete_in_progress)
+            return
+        }
+        if (isRunning || exporting) {
+            toast = context.getString(R.string.log_delete_busy)
+            return
+        }
+        deletingLogs = true
         scope.launch {
-            val n = withContext(Dispatchers.IO) { LogExporter.deleteAllLogs(context) }
-            refreshStats()
-            toast = context.getString(R.string.log_delete_done)
-            if (n == 0) toast = context.getString(R.string.settings_export_none)
+            try {
+                withContext(Dispatchers.IO) { LogExporter.deleteAllLogs(context) }
+                clearContextWithMarker(context.getString(R.string.log_delete_context_marker))
+                toast = context.getString(R.string.log_delete_done)
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                toast = context.getString(R.string.log_delete_failed, t.message ?: t.javaClass.simpleName)
+            } finally {
+                deletingLogs = false
+            }
         }
     }
 
@@ -1220,6 +1254,23 @@ private fun AppRoot(
         runOnVirtualDisplay = pendingUseVirtualDisplay
         submit()
         onPendingTaskHandled()
+    }
+
+    // ---- 系统返回键 / 返回手势 ----
+    //
+    // 之前完全没接这一层：Compose 里的 [screen] 只是一个普通状态，系统的返回
+    // 不认识它，于是"进设置页按一下返回"会直接 finish() 掉 Activity、退回桌面 ——
+    // 用户以为自己在二级菜单里按返回，结果整个应用都没了。
+    //
+    // 现在按屏幕层级退回主界面；只有**已经在主界面**时才把返回让给系统，
+    // 这样"连按两次返回退出应用"的直觉仍然成立。
+    //
+    // 弹窗（设置页的确认框等）走 Compose Dialog，它自己会先消费返回事件，
+    // 不会误触发这里的翻页。
+    BackHandler(enabled = screen != Screen.CONTROL) {
+        screen = Screen.CONTROL
+        // 上一屏留下的 toast 不该跟着回到主界面
+        toast = null
     }
 
     when (screen) {

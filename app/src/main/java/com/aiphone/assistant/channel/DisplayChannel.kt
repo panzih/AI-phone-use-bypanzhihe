@@ -120,11 +120,18 @@ class DisplayChannel(
      */
     override suspend fun dumpUiTree(): String? = null
 
+    /** 副屏读不到控件树：明确回报"根节点拿不到"，而不是一句空文本 */
+    override suspend fun readTree(): UiTreeRead = UiTreeRead.unavailable()
+
     override suspend fun currentNodes(): List<com.aiphone.assistant.a11y.UiNode> = emptyList()
+
+    /** 副屏没有控件树，也就不存在"读到没读到"的区别 —— 一律 null */
+    override suspend fun currentNodesOrNull(): List<com.aiphone.assistant.a11y.UiNode>? = null
 
     override suspend fun perform(
         action: TouchAction,
         onPoint: ((Int, Int) -> Unit)?,
+        hint: com.aiphone.assistant.a11y.UiNode?,
     ): String? = withContext(Dispatchers.IO) {
         try {
             // 副屏没有控件列表（currentNodes 为空），index 无法解析成坐标。

@@ -5,6 +5,7 @@ import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.channel.AccessibilityChannel
 import com.aiphone.assistant.channel.DeviceChannel
 import com.aiphone.assistant.channel.DisplayChannel
+import com.aiphone.assistant.channel.UiTreeRead
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -107,9 +108,13 @@ class ChannelController(private val context: Context) {
      *
      * 这是本架构的定位主力 —— 模型从这个列表里选编号，
      * 而不是从截图里猜像素。
+     *
+     * ⚠️ 返回类型是 [UiTreeRead] 而不是 `String?`：文本在没有元素时是一句
+     * 占位语，按行数会数成"1 个元素"，把"无障碍没工作"和"这一屏没有控件"
+     * 混成同一件事（0.8.5 日志里整整一批失败都是这么来的）。
      */
-    suspend fun readUiTree(): String? =
-        withContext(Dispatchers.IO) { ensureChannel().dumpUiTree() }
+    suspend fun readUiTree(): UiTreeRead =
+        withContext(Dispatchers.IO) { ensureChannel().readTree() }
 
     /**
      * 结构化节点列表（带 viewId / bounds）。
@@ -119,6 +124,15 @@ class ChannelController(private val context: Context) {
      */
     suspend fun parseNodes(): List<com.aiphone.assistant.a11y.UiNode> =
         withContext(Dispatchers.IO) { ensureChannel().currentNodes() }
+
+    /**
+     * 和 [parseNodes] 一样，但**读不到控件树时返回 null**。
+     *
+     * 判"动作前后界面变没变"必须用它：空列表的指纹是固定值，会让
+     * "界面没变化"永远成立，于是每次点击都被误判成没点中并重试。
+     */
+    suspend fun parseNodesOrNull(): List<com.aiphone.assistant.a11y.UiNode>? =
+        withContext(Dispatchers.IO) { ensureChannel().currentNodesOrNull() }
 
     /**
      * 截一帧，返回 PNG 字节。
@@ -162,7 +176,8 @@ class ChannelController(private val context: Context) {
     suspend fun execute(
         action: com.aiphone.assistant.touch.TouchAction,
         onPoint: ((Int, Int) -> Unit)? = null,
-    ): String? = withContext(Dispatchers.IO) { ensureChannel().perform(action, onPoint) }
+        hint: com.aiphone.assistant.a11y.UiNode? = null,
+    ): String? = withContext(Dispatchers.IO) { ensureChannel().perform(action, onPoint, hint) }
 
     /**
      * 当前前台应用的包名。

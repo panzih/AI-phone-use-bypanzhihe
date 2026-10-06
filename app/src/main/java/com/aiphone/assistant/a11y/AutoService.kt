@@ -298,9 +298,29 @@ class AutoService : AccessibilityService() {
         null
     }
 
+    /**
+     * 给通道层读的同一份包名。
+     *
+     * 通道层要用它调用 [UiTreeParser.parseDetailed]（剪掉我们自己的悬浮窗），
+     * 但又不能各写一份 try/catch 包名的代码 —— 两处不一致的后果是过滤规则
+     * 不同、编号整体错位，而那是"模型说点 3 号结果点到 5 号"的来源。
+     */
+    val ownPackageName: String? get() = ownPackage
+
     /** 解析成精简后的节点列表 */
     fun parseTree(screenWidth: Int, screenHeight: Int, limit: Int = 60): List<UiNode> =
         UiTreeParser.parse(readTree(), screenWidth, screenHeight, limit, ownPackage)
+
+    /**
+     * 解析成节点列表，并带上"根节点读到没有 / 遍历了多少 / 截断没有"。
+     *
+     * 这三个字段是给日志复盘用的：没有它们，导出包里只有一句
+     * "控件树：1 个元素"，分不清"真的只有一个控件"还是"无障碍根本没工作"。
+     * 复用**同一棵 root**（只读一次 binder），避免两次 readTree 之间界面变了
+     * 导致日志和实际发给模型的列表对不上。
+     */
+    fun parseTreeDetailed(screenWidth: Int, screenHeight: Int, limit: Int = 60): UiTreeParser.ParseResult =
+        UiTreeParser.parseDetailed(readTree(), screenWidth, screenHeight, limit, ownPackage)
 
     // ------------------------------------------------------------------
     // 探针：跨所有 display（含虚拟副屏）读窗口，验证副屏能否拿控件树

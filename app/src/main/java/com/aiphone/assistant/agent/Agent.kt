@@ -252,6 +252,29 @@ class Agent(
         }
         logger?.line("通道就绪：${settings.mode.label}", "通道")
 
+        // ---- 1.5 无障碍**真的**读到东西了吗 ----
+        // `probe()` 只检查"服务对象在不在"。MIUI / HyperOS 上服务被系统停用
+        // 之后，对象可能还在、`rootInActiveWindow` 却一直返回 null ——
+        // 0.8.5 那份包里就是这样：日志第一行写着「通道就绪：无障碍」，
+        // 而整个任务的控件树都是空的、纸盒界面上还挂着"无障碍未开启"。
+        // 这里先读一次，把真实情况写进日志开头 —— 复盘时第一眼就能看到，
+        // 不用等到第 6 步的止损消息。
+        if (!controller.isVirtualDisplay) {
+            val preflight = withContext(Dispatchers.IO) { controller.readUiTree() }
+            logger?.line(
+                "通道自检：" + when {
+                    !preflight.rootAvailable ->
+                        "❌ 读不到控件树 —— 无障碍服务没有真正生效。" +
+                            "请到「设置 → 操作授权 → 无障碍」里把纸盒的无障碍关掉再打开。"
+                    preflight.nodes.isEmpty() ->
+                        "⚠️ 读到根节点，但当前这一屏没有可交互元素" +
+                            "（前台可能是纸盒自己，或界面是自绘的）"
+                    else -> "✅ 读到 ${preflight.nodes.size} 个元素"
+                },
+                "通道",
+            )
+        }
+
         var w = 0
         var h = 0
         controller.screenSize()?.let { if (it.first > 0 && it.second > 0) { w = it.first; h = it.second } }
@@ -297,8 +320,8 @@ class Agent(
         val history = allHistory
         history.clear()
         // 接着上一段上下文：把发过的历史原样放回去。
-        // **必须逐字原样** —— 差一个字，服务端的最长公共前缀就在那里断开，
-        // 后面全部按未命中计价（这正是之前命中率低的原因）
+        // **必须逐字原样** —— 改动历史消息会使包含它的缓存前缀单元无法完整匹配，
+        // 后续历史可能整段按未命中计价（这正是之前命中率低的原因）
         if (seedHistory.isNotEmpty()) {
             history.addAll(seedHistory)
             logger?.line("接着上一段上下文：${seedHistory.size} 条历史已复原", "上下文")
@@ -307,13 +330,25 @@ class Agent(
         var sameTree = 0
         var lastSig = ""
         var repeatAction = 0
+        // 连续几步"根节点都读不到"（无障碍没真正生效）。它和"界面没变化"
+        // 是两件事：前者是环境坏了，后者是动作没生效。混在一起会给出
+        // 完全错误的止损理由（0.8.5 日志里就报成了"界面点不动"）。
+        var unreadableTreeSteps = 0
         // 模型连续几次没给出可用动作。原本这种情况会一直 continue 到步数上限 ——
         // 步数改成"不限"之后，那等于死循环烧钱，所以单独计数
         var parseFails = 0
 
+        // 拒绝"没看一眼就说完成"只做一次，避免模型死磕时来回拉锯
+        var refusedBlindFinish = false
+
         // 上一批动作的执行结果。它会拼进**下一条** user 消息里，
         // 而不是单独发一条 —— 这样整条对话是严格追加，缓存才命中得了。
         var lastResult: String? = null
+
+        // 这一步存下来的截图文件（need_image 或 capture 都会存）。
+        // 记进 report.json 的 step.screenshot 后，复盘时"这一步的现场"
+        // 才能直接点开看 —— 以前这个字段永远是 null，只有 screenshots 计数。
+        var stepShot: java.io.File? = null
 
         // capture 动作截到的图：跨步携带，随**下一步**的 user 消息一起发。
         // 不在截到的当下发，是因为图和"界面元素"必须来自同一瞬间 ——
@@ -438,24 +473,64 @@ class Agent(
 
             // 读控件树。这次**不藏悬浮窗** —— 我们自己的节点已经在
             // 解析层按包名过滤掉了，没必要为它闪一下。
-            val tree = withContext(Dispatchers.IO) { controller.readUiTree() }
-            val nodeCount = tree?.lines()?.count { it.isNotBlank() } ?: 0
-            logger?.line("控件树：$nodeCount 个元素", "UI")
+            //
+            // ⚠️ 用 [UiTreeRead] 而不是一段文本：文本在"没有元素"时是一句
+            // 占位语，按行数会数成"1 个元素"。0.8.5 的日志里整整一批失败
+            // （微信、蓝牙、中信证券第一次）都是这么被盖住的 ——
+            // 明明是无障碍没工作，日志却写着"控件树：1 个元素"。
+            val treeRead = withContext(Dispatchers.IO) { controller.readUiTree() }
+            // 没有元素就等于**没有元素列表可用**：模型该走"看图 + 坐标"这条路。
+            // 这里直接归一成 null，下游 noTreeReason / 自动带图 全都按它判断。
+            // 撞到上限时必须**明说**：静默截断会让模型以为"界面上就这么点东西"，
+            // 于是找不到目标就乱点（0.8.5 里"找不到编号 30 的元素"部分来自这里）。
+            val tree = treeRead.text?.let { text ->
+                if (treeRead.truncated) {
+                    "$text\n（以上是前 ${treeRead.nodes.size} 个元素，已达上限：" +
+                        "界面上还有更多元素没列出来。要找的目标不在这里就用 scroll 翻，或用 x/y 给坐标。）"
+                } else {
+                    text
+                }
+            }
+            val nodeCount = treeRead.nodes.size
+            val treeLine = buildTreeLogLine(treeRead)
+            logger?.line(treeLine, "UI")
+            // ---- 完整控件树落盘 ----
+            // 复盘时最需要的是"模型当时到底看到了什么"，光有个数字不够。
+            // 写进 run.log（给人看），同时交给 logger 存成每步一个文件、
+            // 并进 report.json（给以后的 AI 复盘用）。
+            logger?.recordUiTree(
+                step = step,
+                summary = treeLine,
+                treeText = tree,
+                rootAvailable = treeRead.rootAvailable,
+                elementCount = nodeCount,
+                truncated = treeRead.truncated,
+                rawNodeCount = treeRead.rawNodeCount,
+            )
+            if (tree != null) {
+                logger?.section("第 $step 步界面元素（原样发给模型）")
+                tree.lines().forEach { logger?.line("  $it") }
+            }
 
-            // ---- 界面变了没有 ----
-            // 用控件树文本的指纹，不再依赖截图（默认没有截图了）
-            val treeHash = if (tree.isNullOrBlank()) 0 else md5(tree.toByteArray())
-            if (treeHash != 0 && treeHash == lastTreeHash) sameTree++ else sameTree = 0
+            // ---- 这一屏能不能拿"界面变了没有"当判据 ----
+            // 读不到树、或这一屏压根没有元素时，指纹是一个**恒定值**，
+            // 拿它比就是在比空气：连续几步必然"一模一样"，于是第 6 步
+            // 一定会撞上"卡住了：界面连续 6 步没有任何变化"（0.8.5 日志里
+            // 两次微信任务都死在这一条）。所以这里明确要求"看得见且有东西"
+            // 才启用这个判据。
+            val treeObservable = RunGuards.treeObservable(treeRead.rootAvailable, nodeCount)
+            val treeHash = if (!treeObservable) 0 else md5(tree!!.toByteArray())
+            sameTree = RunGuards.nextSameTreeCount(sameTree, treeHash, lastTreeHash)
             if (treeHash != 0) lastTreeHash = treeHash
+
+            // 连续读不到控件树：这是**环境坏了**，不是模型的问题。
+            // 单独计数，用来在止损消息里说清原因，并在提示词里提醒模型。
+            unreadableTreeSteps =
+                RunGuards.nextUnreadableStreak(unreadableTreeSteps, treeRead.rootAvailable)
 
             // ---- 卡死止损 ----
             // 注入提示只到 2 次；再往下就是明知道没用还在烧钱，直接停。
-            if (sameTree >= STUCK_LIMIT || repeatAction >= STUCK_LIMIT) {
-                val why = if (sameTree >= STUCK_LIMIT) {
-                    "界面连续 ${sameTree + 1} 步没有任何变化"
-                } else {
-                    "模型连续 ${repeatAction + 1} 次给出同一批动作"
-                }
+            RunGuards.stuckReason(sameTree, repeatAction, STUCK_LIMIT)?.let { why ->
                 val msg = "卡住了：$why，已经停下。可能是这个界面点不动、" +
                     "或者需要你自己操作一下（比如输入密码）。"
                 logger?.error(msg, "卡死")
@@ -464,12 +539,46 @@ class Agent(
                 return
             }
 
-            val interruptions = buildList {
+            // 连续读不到控件树 → 止损，而且要把原因说成"无障碍没工作"，
+            // 而不是"界面点不动"（0.8.5 里就报错过）
+            RunGuards.unreadableTreeStop(unreadableTreeSteps, UNREADABLE_TREE_LIMIT)?.let { msg ->
+                logger?.error(msg, "无障碍")
+                listener.onEvent(EventKind.ERROR, msg, "无障碍没生效")
+                finish(false, msg)
+                return
+            }
+
+            // 做成 var：ask 循环里"防幻觉完成"被拦下时，要把提醒**当场**
+            // 回灌给模型（同一步重新问一次），而不是等到下一步
+            var interruptions = buildList {
+                // 第一步 + 接着上一段历史：必须把"任务边界"说清楚。
+                //
+                // 0.8.5 那两次蓝牙任务就是没这一步：新任务是「打开蓝牙」，
+                // 但历史里上一段是「关上蓝牙」且已 finished=true。模型在
+                // 读不到任何界面元素的情况下直接复述了上一段的结论
+                // （"已成功关闭蓝牙"），一步动作没做就结束了。
+                if (step == 1 && seedHistory.isNotEmpty()) {
+                    add(
+                        "这是一段**新任务**的开始。上面的历史属于已经结束的旧任务，" +
+                            "其中的任务内容和「已完成」结论**一律作废**。" +
+                            "只以本次「用户的任务」为准：先在当前界面上确认实际状态，" +
+                            "再决定动作；不要复述旧任务的结果。"
+                    )
+                }
                 // 纸盒自己在前台：比"界面没变化"更根本的问题，先说它
                 if (foreground != null && foreground == selfPackage) {
                     add(
                         "现在前台是「纸盒」自己，不是用户要操作的应用。先用 open_app 打开目标应用" +
                             "（包名不确定就先调 list_apps 查真实包名），不要在纸盒的界面上点击。"
+                    )
+                }
+                // 读不到控件树：这是**环境**问题，必须说清楚，否则模型会
+                // 以为"界面是自绘的"而一直等，或者瞎点坐标
+                if (!treeRead.rootAvailable) {
+                    add(
+                        "⚠️ 这一屏**读不到控件树**（无障碍服务没有真正生效，或当前窗口不给无障碍）。" +
+                            "你只能靠附图判断，坐标点击不可靠。" +
+                            "如果连着几步都这样，直接 failed 并让用户重新开启无障碍服务。"
                     )
                 }
                 if (sameTree >= 2) {
@@ -504,8 +613,14 @@ class Agent(
              *
              * 代价是每一步都多一张图的 token。但这是副屏模式必然的成本，
              * 不是可以优化掉的东西。
+             *
+             * ⚠️ 例外：**前台就是纸盒自己**时不带图。那种情况下没有元素列表
+             * 是因为我们按包名把自己的节点过滤掉了，不是"看不到界面" ——
+             * 提示词里已经写清"用 open_app 打开目标应用"，再附一张纸盒
+             * 自己的截图纯属浪费（每个任务的第一步都会白花一张全分辨率图）。
              */
-            val autoImage: ByteArray? = if (tree == null) {
+            val selfForeground = foreground != null && foreground == selfPackage
+            val autoImage: ByteArray? = if (tree == null && !selfForeground) {
                 withContext(Dispatchers.IO) { controller.captureFrame() }
             } else {
                 null
@@ -556,13 +671,22 @@ class Agent(
                     return
                 }
 
-                // 控件树为空时要说清是**哪一种**空 —— 副屏、纸盒自己在前台、
-                // 界面自绘，这三种情况模型该做的事完全不同（见 AgentPrompt 常量）
-                val noTreeReason = when {
-                    tree != null -> null
-                    controller.isVirtualDisplay -> AgentPrompt.NO_TREE_VIRTUAL_DISPLAY
-                    foreground != null && foreground == selfPackage -> AgentPrompt.NO_TREE_SELF
-                    else -> null // 兜底：AgentPrompt 里会用 DEFAULT_NO_TREE_REASON
+                // 没有元素列表时要说清是**哪一种**没有 —— 这四种情况模型该做的事
+                // 完全不同（副屏 / 无障碍没工作 / 纸盒自己在前台 / 这一屏真没控件），
+                // 所以由 Agent 判断后传进来；不传时用 DEFAULT_NO_TREE_REASON。
+                //
+                // ⚠️ 必须先判"读不到根节点"：以前这一支永远走不到，因为无障碍
+                // 通道在没有元素时返回的是一句占位语而不是 null，`tree == null`
+                // 永远不成立 —— 于是"无障碍没工作"被当成了"界面自绘"。
+                val noTreeReason = if (tree != null) {
+                    null
+                } else {
+                    when {
+                        !treeRead.rootAvailable -> AgentPrompt.NO_TREE_UNREADABLE
+                        controller.isVirtualDisplay -> AgentPrompt.NO_TREE_VIRTUAL_DISPLAY
+                        foreground != null && foreground == selfPackage -> AgentPrompt.NO_TREE_SELF
+                        else -> AgentPrompt.NO_TREE_NO_ELEMENTS
+                    }
                 }
 
                 val userText = AgentPrompt.stepMessage(
@@ -717,6 +841,57 @@ class Agent(
                             return
                         }
 
+                        // ---- 防"幻觉完成"（0.8.5 最贵的一次失败）----
+                        //
+                        // 现象：任务「打开蓝牙」刚发出去，模型一个动作都没做就回
+                        // "上一批已点击蓝牙开关……任务完成"，summary 还是**上一个
+                        // 任务**（关上蓝牙）的结论。根因是这一段接着旧上下文跑，
+                        // 历史里那条 assistant 已经 finished=true，而这一步它连
+                        // 界面元素都没拿到，于是直接复述了上一段的结论。
+                        //
+                        // 处理：**新任务第一步 + 带着历史 + 零动作就要收尾**时不采纳，
+                        // 把"你没有界面依据"当场回灌给模型（同一步重新问一次，
+                        // 不算新的一步），让它要么先看清界面、要么给出动作。
+                        // 只拦一次：模型第二次仍然坚持就放行，避免和"任务其实
+                        // 已经完成"的正常情况来回拉锯。
+                        //
+                        // ⚠️ 必须放在这里：这一支原本在循环内就 return 了，
+                        // 把判断放到 ask 循环外面是永远走不到的死代码。
+                        if (RunGuards.shouldRefuseBlindFinish(
+                                step = step,
+                                carriedHistoryCount = seedHistory.size,
+                                finished = p.finished,
+                                actionCount = p.actions.size,
+                                alreadyRefused = refusedBlindFinish,
+                            )
+                        ) {
+                            refusedBlindFinish = true
+                            val refuseMsg = "拦下一次没有依据的「任务已完成」：这是新任务的" +
+                                "第一步，又带着上一段已经结束的上下文，这一步既没有可用的" +
+                                "界面元素、也没有任何动作，无法确认任务真的做完了。"
+                            logger?.warn(refuseMsg, "防幻觉")
+                            listener.onEvent(EventKind.THOUGHT, refuseMsg, "防幻觉")
+                            logger?.recordStep(
+                                step = step,
+                                thought = p.thought,
+                                action = "（被端侧拦下：新任务第一步就宣布完成）",
+                                result = "未采纳，已要求模型先确认当前界面",
+                                rawModelOutput = result.text,
+                                shot = stepShot,
+                            )
+                            // 提醒拼进本步的 interruption，重新问一次（不算新一步）
+                            interruptions = (interruptions + "\n" +
+                                "⚠️ 你刚刚宣布「任务完成」，但这一步你**没有任何界面依据**：" +
+                                "既没有可用的界面元素列表，也没有给出任何动作。" +
+                                "上面历史里那句「已完成」属于**旧任务**，不算数。" +
+                                "请先确认当前界面的真实状态（需要就先 need_image 要截图，" +
+                                "或 open_app 打开目标应用），再决定：给出下一步动作，" +
+                                "或者在确实做不到时用 failed 说明原因。").trim()
+                            // 这次输出照样记进历史，保持"严格追加"的对话结构
+                            history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
+                            continue@ask
+                        }
+
                         // ---- 任务完成？ ----
                         // 模型可能同一批既给 actions 又说 finished（语义是"做完这批
                         // 动作任务就完成了"）。有动作时不能在这里结束，否则动作一个都
@@ -753,7 +928,7 @@ class Agent(
                                 pendingImage = shot
                                 totalImages++
                                 logger?.line("截图：${w}x$h，${shot.size} 字节（本次发送）", "截图")
-                                logger?.saveScreenshot(step, shot)
+                                stepShot = logger?.saveScreenshot(step, shot)
                                 imageNote = "这是你要的截图。"
                             }
                             // 重新问一次：这次带上图，不算新的一步
@@ -996,7 +1171,7 @@ class Agent(
                                 // 计数留给"真正发出去"那一步（见 pendingActionShot 的消费）
                                 pendingActionShot = shot
                                 shotsThisBatch++
-                                logger?.saveScreenshot(step, shot)
+                                stepShot = logger?.saveScreenshot(step, shot)
                                 logger?.line(
                                     "  $single → 已截（${shot.size} 字节），随下一步发送",
                                     "执行",
@@ -1037,8 +1212,21 @@ class Agent(
 
                     // 动作前控件树：用来算“动作前指纹”，tap 时还用来判断点的
                     // 是不是发送/支付等有副作用的按钮（决定要不要自动重试）。
+                    //
+                    // 用 parseNodesOrNull：读不到控件树时返回 null，而不是一个
+                    // 空列表 —— 空列表的指纹是固定值，会把"没看到东西"算成
+                    // "界面没变化"，于是每次点击都被误判成没点中（0.8.5 日志里
+                    // 高德、中信证券都有这种无意义的"重试后仍无变化"）。
                     val beforeNodes = if (isVerifiable(action.kind)) {
-                        withContext(Dispatchers.IO) { controller.parseNodes() }
+                        withContext(Dispatchers.IO) { controller.parseNodesOrNull() }
+                    } else {
+                        null
+                    }
+                    // 模型看到的那个控件（按编号操作时用来在当前帧里按身份找回它）。
+                    // 编号是逐帧的，模型往返期间界面可能重排，直接点第 N 个
+                    // 很可能点到别的控件上。
+                    val hint = if (action.targetIndex > 0) {
+                        treeRead.nodes.firstOrNull { it.index == action.targetIndex }
                     } else {
                         null
                     }
@@ -1054,7 +1242,7 @@ class Agent(
                     // 上报真实落点，屏幕上闪一圈水波 ——
                     // 用户能看见 AI 点在哪，是"点错了"还是"点了没反应"一眼可辨
                     val execResult = withContext(Dispatchers.IO) {
-                        controller.execute(action) { px, py -> OverlayBus.pulse(px, py) }
+                        controller.execute(action, { px, py -> OverlayBus.pulse(px, py) }, hint)
                     }
                     if (mustHide) {
                         OverlayBus.show()
@@ -1135,7 +1323,9 @@ class Agent(
                                 break
                             }
                             WaitOutcome.DONE ->
-                                results.add(verifyAction(action, single, beforeNodes, sr.fingerprint ?: ""))
+                                results.add(
+                                    verifyAction(action, single, beforeNodes, sr.fingerprint ?: "", hint)
+                                )
                         }
                     }
                 }
@@ -1165,7 +1355,7 @@ class Agent(
                 action = desc,
                 result = resultText,
                 rawModelOutput = modelOutput,
-                shot = null,
+                shot = stepShot,
             )
 
             // 要图这件事已经变成 actions 里的一个 capture 动作（见 ActionParser），
@@ -1686,7 +1876,7 @@ class Agent(
             OverlayBus.hide()
             delay(OVERLAY_SETTLE_MS)
         }
-        val err = controller.execute(tap) { px, py -> OverlayBus.pulse(px, py) }
+        val err = controller.execute(tap, { px, py -> OverlayBus.pulse(px, py) })
         if (mustHide) OverlayBus.show()
         if (err != null) return DismissOutcome(false, "关闭弹窗：点击失败（$err）")
 
@@ -1770,7 +1960,7 @@ class Agent(
     private suspend fun pressHomeToYield() {
         OverlayBus.setPhase(AgentPhase.ACTING)
         withContext(Dispatchers.IO) {
-            controller.execute(TAP_HOME) { px, py -> OverlayBus.pulse(px, py) }
+            controller.execute(TAP_HOME, { px, py -> OverlayBus.pulse(px, py) })
         }
         // 标记"自己刚按 HOME"，之后 SELF_HOME_SUPPRESS_MS 内不自动切副屏（0.8.3）
         selfHomeAtMs = System.currentTimeMillis()
@@ -1830,12 +2020,19 @@ class Agent(
         kind == TouchKind.TAP || kind == TouchKind.KEY_BACK
 
     /**
-     * 动作执行并等界面稳定后，比动作前后指纹判断动作有没有生效。
-     * - 指纹变了 → 界面变化，动作生效。
+     * 动作后验证。
+     *
+     * 判据是"动作前后的页面指纹有没有变"。**读不到控件树时不做这个判断** ——
+     * [beforeNodes] 为 null 就说明那一帧根本没看到东西，此时指纹是个固定值，
+     * 说"界面没变化"是无中生有，还会触发一次多余的重试（0.8.5 日志里
+     * 高德和中信证券反复出现"重试后界面仍无变化"，其实什么都没数）。
+     *
      * - 指纹没变 → 可能没点中：导航类动作**重试一次**；有副作用的动作
      *   （发送/支付/下单/确认/删除等）**只上报、绝不重试**，避免一次误判
      *   就重复发送/付款。
      *
+     * @param hint 模型看到的那一份元素列表里的同一个节点；重试时要按身份
+     *             找回目标，不能再按编号点（编号可能已经漂移）
      * @return 回灌给模型、写进结果列表的一行
      */
     private suspend fun verifyAction(
@@ -1843,10 +2040,12 @@ class Agent(
         single: String,
         beforeNodes: List<UiNode>?,
         after: String,
+        hint: UiNode? = null,
     ): String {
         if (beforeNodes == null) {
-            logger?.line("  $single → 已执行", "执行")
-            return "$single → 已执行"
+            // 读不到控件树 → 没有可比对的依据。如实说，不猜"没点中"
+            logger?.line("  $single → 已执行（读不到控件树，无法判断界面有没有变化）", "执行")
+            return "$single → 已执行（这一屏读不到控件树，无法确认界面是否变化）"
         }
         val before = PageFingerprint.fingerprint(beforeNodes)
         if (after != before) {
@@ -1864,7 +2063,7 @@ class Agent(
         logger?.warn("  $single → 界面没变化，重试一次", "执行")
         OverlayBus.setPhase(AgentPhase.ACTING)
         val retryError = withContext(Dispatchers.IO) {
-            controller.execute(action) { px, py -> OverlayBus.pulse(px, py) }
+            controller.execute(action, { px, py -> OverlayBus.pulse(px, py) }, hint)
         }
         if (retryError != null) {
             logger?.error("  $single → 重试失败：$retryError", "执行")
@@ -1943,11 +2142,16 @@ class Agent(
         // 比我们所有固定等待加起来都大。不把它单列出来就会一直误判成"等待参数没调好"
         var parseMs = 0L
         var parseCount = 0
+        // 这一轮等待里有没有**真正读到过**控件树。一次都没读到的话，
+        // 指纹相等只是"两帧都是空的"，不能拿来当"界面已稳定"的证据
+        var sawTree = false
 
         while (true) {
             // parseNodes() 自己就切到 IO 线程了，不用再包一层 withContext
             val t0 = System.nanoTime()
-            val fp = PageFingerprint.fingerprint(controller.parseNodes())
+            val frame = controller.parseNodesOrNull()
+            if (frame != null) sawTree = true
+            val fp = PageFingerprint.fingerprint(frame.orEmpty())
             parseMs += (System.nanoTime() - t0) / 1_000_000L
             parseCount++
             interruption().let { if (it != WaitOutcome.DONE) return StableResult(it) }
@@ -1977,6 +2181,7 @@ class Agent(
                     kind, elapsedMs(), minFloor,
                     early = elapsedMs() < minFloor,
                     parseMs = parseMs, parseCount = parseCount,
+                    sawTree = sawTree,
                 )
                 return StableResult(WaitOutcome.DONE, fp)
             }
@@ -1995,6 +2200,7 @@ class Agent(
                         logStableCost(
                             kind, elapsedMs(), minFloor, early = true,
                             parseMs = parseMs, parseCount = parseCount,
+                            sawTree = sawTree,
                         )
                         return StableResult(WaitOutcome.DONE, fp)
                     }
@@ -2010,6 +2216,7 @@ class Agent(
                 logStableCost(
                     kind, elapsedMs(), minFloor, early = false,
                     parseMs = parseMs, parseCount = parseCount,
+                    sawTree = sawTree,
                 )
                 return StableResult(WaitOutcome.DONE, fp)
             }
@@ -2028,14 +2235,14 @@ class Agent(
      * [parseMs]/[parseCount] 单列读树的成本：它是**唯一可能吃掉几秒**的项，
      * 界面切换中无障碍服务很忙，一次读树能到一秒多。不写出来，
      * 看到"等了 3 秒"只会去怀疑等待参数，而参数其实没毛病。
-     */
-    private fun logStableCost(
+     */    private fun logStableCost(
         kind: TouchKind,
         elapsedMs: Long,
         minFloorMs: Long,
         early: Boolean,
         parseMs: Long,
         parseCount: Int,
+        sawTree: Boolean = true,
     ) {
         val what = if (kind == TouchKind.OPEN_APP) "等应用起来" else "等界面稳定"
         val why = if (early) "（看到界面变过，未等满兜底 ${minFloorMs}ms）" else ""
@@ -2044,7 +2251,10 @@ class Agent(
         } else {
             ""
         }
-        logger?.line("$what ${elapsedMs}ms$why$read", "等待")
+        // 一次都没读到控件树：这里的"稳定"只是"两帧都空"，必须说清楚，
+        // 否则复盘时会以为界面真的稳定过
+        val blind = if (sawTree) "" else "，全程读不到控件树（稳定判据无效）"
+        logger?.line("$what ${elapsedMs}ms$why$read$blind", "等待")
     }
 
     private suspend fun fail(message: String, label: String) {
@@ -2085,6 +2295,9 @@ class Agent(
             "统计",
         )
         logger?.line("结束：$message", "任务")
+        // 结局要进 report.json：导出包的 index.csv 靠它一眼看出这趟是成功、
+        // 失败还是卡住。以前只有 run.log 的最后一行有，批量复盘很费劲。
+        logger?.setOutcome(success, message)
         logger?.close()
         listener.onFinished(success, message)
     }
@@ -2255,6 +2468,45 @@ class Agent(
          * 纯粹是烧 token。步数上限现在是"不限"，所以这条兜底必须存在。
          */
         const val STUCK_LIMIT = 5
+
+        /**
+         * 连续几步"连根节点都读不到"就止损。
+         *
+         * 这是**环境**问题（无障碍服务被系统停用、当前窗口不交给无障碍），
+         * 不是模型不行。以前这种情况会和"界面没变化"混在一起，5 步之后
+         * 报一句"卡住了：界面连续 6 步没有任何变化"，把用户引到完全错的
+         * 方向（他去看那个界面，界面明明是好的）。
+         *
+         * 6 步：足够跨过一次启动/切页的瞬时读不到，又不至于让用户白等太久。
+         */
+        const val UNREADABLE_TREE_LIMIT = 6
+
+        /**
+         * 控件树的一次读结果写进日志的一行。
+         *
+         * 0.8.5 的日志里这一行是 `控件树：1 个元素` —— 那个 "1" 其实是
+         * 空列表的占位文本行数，于是"读不到"和"只有一个控件"在日志里
+         * 长得一模一样，整整一批失败都没法复盘。现在把**根节点读到没有 /
+         * 真的有几个元素 / 有没有被截断**分开写。
+         */
+        fun buildTreeLogLine(r: com.aiphone.assistant.channel.UiTreeRead): String = buildString {
+            append("控件树：")
+            append(r.nodes.size)
+            append(" 个元素")
+            when {
+                !r.rootAvailable ->
+                    append("（❌ 读不到根节点：无障碍服务没真正生效，或当前窗口不给无障碍）")
+                r.nodes.isEmpty() ->
+                    append("（根节点读到了，但这一屏没有可交互元素：自绘/游戏/视频，或前台是纸盒自己）")
+                else -> {
+                    append("（遍历 ${r.rawNodeCount} 个原始节点）")
+                    if (r.truncated) {
+                        append(" ⚠️ 已达上限 ${com.aiphone.assistant.channel.AccessibilityChannel.TREE_LIMIT}")
+                        append("，界面还有元素没发给模型")
+                    }
+                }
+            }
+        }
 
         /** `OverlayBus.returnFromVdReason` 的"用户手动"取值，用来区分要不要进冷却（批 3） */
         const val RETURN_REASON_MANUAL = OverlayBus.REASON_MANUAL

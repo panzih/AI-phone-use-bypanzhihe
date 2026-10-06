@@ -36,8 +36,22 @@ interface DeviceChannel {
      * 读 UI 控件树，返回给模型看的文本。
      *
      * 这是本项目的定位主力：模型从编号列表里选，而不是从截图里猜像素。
+     *
+     * ⚠️ **不要拿这个方法的返回值判"有没有元素"** —— 没有元素时它会返回一句
+     * 占位文本（见 `UiTreeParser.EMPTY_TEXT`），按行数会数成"1 个元素"。
+     * 要判空、要元素个数，用 [readTree]。
      */
     suspend fun dumpUiTree(): String?
+
+    /**
+     * 读一次控件树，把"读没读到根节点 / 有几个元素 / 有没有被截断"一起带出来。
+     *
+     * 这是给 Agent 和日志用的**唯一**入口：它才能区分
+     * 「无障碍没真正工作」和「这一屏确实没有可交互元素」——
+     * 这两种情况该让模型做的事完全不同（前者要提示用户重开无障碍，
+     * 后者直接看截图给坐标）。
+     */
+    suspend fun readTree(): UiTreeRead
 
     /**
      * 当前的控件节点列表（带 viewId / bounds）。
@@ -49,14 +63,31 @@ interface DeviceChannel {
     suspend fun currentNodes(): List<com.aiphone.assistant.a11y.UiNode>
 
     /**
+     * 和 [currentNodes] 一样，但**读不到根节点时返回 null** 而不是空列表。
+     *
+     * 空列表算出来的页面指纹是一个固定值，"动作前后界面没变化"会永远成立，
+     * 于是每一次点击都被判成"没点中"并被无意义地重试（0.8.5 的日志里
+     * 高德、中信证券都有这种记录）。null 才能表达"这一帧根本没看到东西"。
+     */
+    suspend fun currentNodesOrNull(): List<com.aiphone.assistant.a11y.UiNode>?
+
+    /**
      * 执行一个触控动作。返回 null 表示成功。
      *
      * @param onPoint 上报这次动作**真正落在**的屏幕坐标（按编号点击时
      *                取节点的中心）。用来在屏幕上闪一圈水波给用户看，
      *                所以只有通道层知道这个值 —— 模型给的编号在解析成
      *                坐标之前是看不出落点的
+     * @param hint 模型看到的那一份元素列表里的同一个节点。按编号操作时
+     *             编号可能已经因为界面重排而漂移，通道用它在当前帧里
+     *             按身份找回目标；找不回就如实失败，绝不盲点第 N 个。
+     *             null = 调用方拿到的编号就是刚刚这一帧的（端侧清弹窗）。
      */
-    suspend fun perform(action: TouchAction, onPoint: ((Int, Int) -> Unit)? = null): String?
+    suspend fun perform(
+        action: TouchAction,
+        onPoint: ((Int, Int) -> Unit)? = null,
+        hint: com.aiphone.assistant.a11y.UiNode? = null,
+    ): String?
 
     /** 释放资源 */
     fun release()

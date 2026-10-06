@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 48      // 0.9.8：跨任务图片落盘复用（续接上下文时前缀不再从带图那条断开）
-        versionName = "0.9.8"
+        versionCode = 49      // 0.9.9：日志能复盘的控件树 + 修掉"空白控件树"引发的一批误判
+        versionName = "0.9.9"
     }
 
     /**
@@ -72,9 +72,9 @@ android {
          * 密钥和口令**不进仓库** —— 从 `keystore.properties` 读，那个文件在
          * .gitignore 里。跑一次 `bash setup_release_keystore.sh` 生成。
          *
-         * 文件不存在时**不报错**，只是 release 产物没有签名
-         * （出 app-release-unsigned.apk）。这样 clone 下来的人不会因为
-         * 缺密钥连构建都过不去 —— 他只是发不了包而已。
+         * 文件不存在时**不报错**，而是在下方 release 构建类型中回退到
+         * 仓库内公开的 debug keystore。这样 clone 下来的人也能构建可安装包，
+         * 但该包不具备正式发布签名的升级连续性。
          */
         if (hasReleaseKey) {
             create("release") {
