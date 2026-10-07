@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
@@ -108,6 +109,7 @@ fun MainScreen(
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
     onNewConversation: () -> Unit,
+    onPermissionsClick: () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -133,6 +135,10 @@ fun MainScreen(
                 },
                 onSchedules = {
                     onSchedules()
+                    scope.launch { drawerState.close() }
+                },
+                onPermissions = {
+                    onPermissionsClick()
                     scope.launch { drawerState.close() }
                 },
                 onSettings = {
@@ -263,14 +269,15 @@ private fun BrandCenter() {
  *   1. 操作手机   ← 主功能
  *   2. 操作记录   ← 手动录一段操作，交给 AI 学成技能
  *   3. 定时任务   ← 到点自动跑一条任务
- *   4. 副屏       ← 用 Shizuku 开虚拟屏，把画面搬到自己的窗口里
- *   3. 设置       ← 置底
+ *   4. 权限       ← 所有权限申请的唯一入口     ┐ 置底
+ *   5. 设置       ← 模型 / 日志 / 更多设置      ┘
  */
 @Composable
 private fun AppDrawer(
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
+    onPermissions: () -> Unit,
     onSettings: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
@@ -323,6 +330,13 @@ private fun AppDrawer(
             Spacer(Modifier.weight(1f))
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Spacer(Modifier.height(8.dp))
+            // 权限放在「设置」正上方：它是"不开就用不了"的前置条件，
+            // 比偏好设置更需要被一眼看到；全应用只有这一处发起权限申请。
+            DrawerItem(
+                icon = Icons.Filled.Lock,
+                title = stringResource(R.string.drawer_permissions),
+                onClick = onPermissions,
+            )
             DrawerItem(
                 icon = Icons.Filled.Settings,
                 title = stringResource(R.string.drawer_settings),

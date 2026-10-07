@@ -67,6 +67,7 @@ import com.aiphone.assistant.ui.LogKind
 import com.aiphone.assistant.ui.MainScreen
 import com.aiphone.assistant.ui.MacroSummary
 import com.aiphone.assistant.ui.MainUiState
+import com.aiphone.assistant.ui.PermissionsScreen
 import com.aiphone.assistant.ui.RecordingScreen
 import com.aiphone.assistant.ui.ScheduleScreen
 import com.aiphone.assistant.ui.Screen
@@ -264,6 +265,16 @@ private fun AppRoot(
     var deletingLogs by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(AutoService.isConnected) }
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+    // 通知权限：Android 13 以下默认有。**只有「权限」页读它** ——
+    // 以前这个权限是发任务时静默弹的、状态从不回读，用户拒绝后
+    // 通知栏的急停入口凭空消失却查不出原因。
+    var notifGranted by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
     var logStats by remember { mutableStateOf("") }
     var memoryStats by remember { mutableStateOf("") }
     var autoCapStats by remember { mutableStateOf("") }
@@ -690,8 +701,11 @@ private fun AppRoot(
         // 每次回到前台都重新问一次系统，而不是只在启动时查一次 ——
         // 用户去系统设置开完无障碍回来，正好走到这里。
         authorized = AutoService.isConnected
-        // 用户可能刚从系统设置里开完悬浮窗回来，每次前台都重查
+        // 用户可能刚从系统设置里开完悬浮窗 / 通知回来，每次前台都重查
         overlayGranted = Settings.canDrawOverlays(context)
+        notifGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
         refreshStats()
 
         // 打开应用 / 回到前台时先按策略判断这段上下文还算不算数。
@@ -890,7 +904,7 @@ private fun AppRoot(
         if (!runOnVirtualDisplay && !com.aiphone.assistant.a11y.AutoService.isConnected) {
             addLog(
                 LogKind.ERROR,
-                "还没开启无障碍服务。到「设置 → 操作授权 → 无障碍」里开一下再发任务。",
+                "还没开启无障碍服务。到「权限」页里开一下再发任务。",
                 "无障碍未开启",
             )
             toast = context.getString(R.string.a11y_needed_toast)
@@ -987,11 +1001,6 @@ private fun AppRoot(
             // 无障碍的连接检查已经提到 submit() 最前面了（见那里的注释：
             // 放这儿会把用户输入清掉、还往上下文里多塞一条任务消息）。
 
-            // 通知权限：拒绝也不拦流程，只是少了通知栏那个急停按钮
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-
             // 起悬浮窗。没权限时 OverlayService 会自己退出，
             // 任务照常跑，只是用户看不到进度和急停按钮。
             if (Settings.canDrawOverlays(context)) {
@@ -1000,7 +1009,7 @@ private fun AppRoot(
                 addLog(
                     LogKind.ERROR,
                     "没有悬浮窗权限，这次看不到进度面板和急停按钮。" +
-                        "到「设置 → 操作授权 → 悬浮窗」里开一下。",
+                        "到「权限」页里开一下。",
                     "悬浮窗不可用",
                 )
             }
@@ -1297,6 +1306,7 @@ private fun AppRoot(
                 exactAlarmGranted = exactAlarmGranted,
             ),
             onSettingsClick = { screen = Screen.SETTINGS },
+            onPermissionsClick = { screen = Screen.PERMISSIONS },
             onInputChange = { input = it },
             onSubmit = { submit() },
             onStop = {
@@ -1337,7 +1347,47 @@ private fun AppRoot(
             onAdd = { task, h, m, daily, vd -> addSchedule(task, h, m, daily, vd) },
             onToggle = { s, on -> toggleSchedule(s, on) },
             onDelete = { id -> deleteSchedule(id) },
+        )
+
+        Screen.PERMISSIONS -> PermissionsScreen(
+            state = MainUiState(
+                settings = settings,
+                authorized = authorized,
+                overlayGranted = overlayGranted,
+                notifGranted = notifGranted,
+                shizukuState = shizukuState,
+                exactAlarmGranted = exactAlarmGranted,
+                toast = toast,
+            ),
+            onBack = { screen = Screen.CONTROL; toast = null },
+            onSettingsChange = { next -> settings = next; store.save(next) },
+            onGotoAccessibility = onOpenAccessibilitySettings,
+            onOpenOverlaySettings = onOpenOverlaySettings,
+            onRequestNotification = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
             onRequestExactAlarm = onRequestExactAlarm,
+            // 副屏状态行：按 Shizuku 当前状态处理（未授权才弹授权框，
+            // 另外三个分支只是提示怎么装/怎么启动 —— 整段一起搬过来，
+            // 只搬 requestPermission() 会丢掉那些提示）
+            onShizukuClick = {
+                when (ShizukuBridge.state(context)) {
+                    ShizukuBridge.State.NO_PERMISSION -> ShizukuBridge.requestPermission()
+                    ShizukuBridge.State.NOT_INSTALLED ->
+                        toast = "请先安装 Shizuku 应用"
+                    ShizukuBridge.State.NOT_RUNNING ->
+                        toast = "请先打开 Shizuku、启动服务"
+                    ShizukuBridge.State.READY ->
+                        if (isRunning) {
+                            OverlayBus.requestMoveToVirtualDisplay()
+                            toast = "已请求切到副屏"
+                        } else {
+                            toast = "启动任务后回桌面即自动切副屏"
+                        }
+                }
+            },
         )
 
         Screen.SETTINGS -> SettingsScreen(
@@ -1371,25 +1421,6 @@ private fun AppRoot(
                 }
             },
             onBack = { screen = Screen.CONTROL; toast = null },
-            onGotoAuth = { onOpenAccessibilitySettings() },
-            onOpenOverlaySettings = onOpenOverlaySettings,
-            // 副屏状态行点击：按 Shizuku 当前状态处理
-            onShizukuClick = {
-                when (ShizukuBridge.state(context)) {
-                    ShizukuBridge.State.NO_PERMISSION -> ShizukuBridge.requestPermission()
-                    ShizukuBridge.State.NOT_INSTALLED ->
-                        toast = "请先安装 Shizuku 应用"
-                    ShizukuBridge.State.NOT_RUNNING ->
-                        toast = "请先打开 Shizuku、启动服务"
-                    ShizukuBridge.State.READY ->
-                        if (isRunning) {
-                            OverlayBus.requestMoveToVirtualDisplay()
-                            toast = "已请求切到副屏"
-                        } else {
-                            toast = "启动任务后回桌面即自动切副屏"
-                        }
-                }
-            },
             onProbeVirtualDisplay = {
                 // 探针要逐个窗口读 root（跨进程同步调用），不能压在主线程上 ——
                 // 按钮点下去会直接卡住界面。扔 IO 线程，回来了再弹 toast。

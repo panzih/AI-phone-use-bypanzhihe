@@ -67,7 +67,15 @@ data class MainUiState(
     /** 悬浮窗权限（SYSTEM_ALERT_WINDOW）。没有它就没有进度面板和急停按钮 */
     val overlayGranted: Boolean = false,
 
-    /** Shizuku 当前状态（给设置页「副屏」状态行用），例如「已就绪」 */
+    /**
+     * 通知权限（Android 13+ 的 POST_NOTIFICATIONS）。
+     *
+     * 只有「权限」页显示它：没开也能照常跑任务，只是通知栏里既没有进度
+     * 也没有急停入口。以前这个权限是发任务时静默申请、状态从不回读的。
+     */
+    val notifGranted: Boolean = false,
+
+    /** Shizuku 当前状态（给「权限」页副屏状态行用），例如「已就绪」 */
     val shizukuState: String = "",
 
     /** 设置页显示的日志统计，例如 "共 3 次记录 · 1.2 MB" */

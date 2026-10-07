@@ -70,7 +70,6 @@ import com.aiphone.assistant.R
 import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
-import com.aiphone.assistant.data.OperationMode
 import com.aiphone.assistant.data.ThinkingMode
 
 /**
@@ -79,7 +78,7 @@ import com.aiphone.assistant.data.ThinkingMode
  * 结构严格按手稿，三段：
  *
  *   模型          接口地址 / API Key（打码） / 模型 / 图片精度
- *   操作授权      操作方式（下拉） / 前往授权
+ *   更多设置      清空上下文 / 记忆 / 日志 / 副屏探针
  *   开发者设置    红字警告 / 清空上下文 / 自动清空 / 记忆三项 / 日志四项
  *
  * ## 关于 API Key
@@ -100,9 +99,6 @@ fun SettingsScreen(
     state: MainUiState,
     onSettingsChange: (AppSettings) -> Unit,
     onBack: () -> Unit,
-    onGotoAuth: () -> Unit,
-    onOpenOverlaySettings: () -> Unit,
-    onShizukuClick: () -> Unit,
     onProbeVirtualDisplay: () -> Unit,
     /**
      * 看副屏画面。手动切到副屏之后主屏会回桌面，用户就看不到 AI 在那块屏上
@@ -159,31 +155,6 @@ fun SettingsScreen(
             // ================= 模型 =================
             item { SectionHeader(stringResource(R.string.settings_section_model)) }
             item { ModelSection(s, onSettingsChange) }
-
-            item { SectionDivider() }
-
-            // ================= 操作授权 =================
-            item { SectionHeader(stringResource(R.string.settings_section_auth)) }
-            item {
-                AuthSection(
-                    current = s.mode,
-                    authorized = state.authorized,
-                    shizukuState = state.shizukuState,
-                    onSelect = { onSettingsChange(s.copy(mode = it)) },
-                    onGotoAuth = onGotoAuth,
-                    onShizukuClick = onShizukuClick,
-                )
-            }
-            item {
-                PermissionRow(
-                    title = stringResource(R.string.settings_overlay_label),
-                    desc = stringResource(R.string.settings_overlay_desc),
-                    granted = state.overlayGranted,
-                    actionText = stringResource(R.string.settings_overlay_open),
-                    grantedText = stringResource(R.string.settings_overlay_granted),
-                    onAction = onOpenOverlaySettings,
-                )
-            }
 
             item { SectionDivider() }
 
@@ -425,172 +396,6 @@ private fun ThinkingModeSlider(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-    }
-}
-
-// ----------------------------------------------------------------------
-// 操作授权
-// ----------------------------------------------------------------------
-
-@Composable
-private fun AuthSection(
-    current: OperationMode,
-    authorized: Boolean,
-    shizukuState: String,
-    onSelect: (OperationMode) -> Unit,
-    onGotoAuth: () -> Unit,
-    onShizukuClick: () -> Unit,
-) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        DropdownRow(
-            title = stringResource(R.string.settings_mode_label),
-            subtitle = current.note,
-            current = current,
-            options = OperationMode.entries.toList(),
-            optionLabel = { if (it.available) it.label else "${it.label}（未接入）" },
-            // 不可用的操作方式（ADB）只能看、不能选中
-            optionEnabled = { it.available },
-            onSelect = onSelect,
-            horizontalPadding = 0.dp,
-        )
-
-        Spacer(Modifier.height(4.dp))
-
-        PermissionRow(
-            title = stringResource(R.string.settings_a11y_label),
-            desc = null,
-            granted = authorized,
-            enabled = current.available,
-            actionText = stringResource(R.string.settings_goto_auth),
-            grantedText = stringResource(R.string.settings_auth_granted),
-            unavailableText = stringResource(R.string.settings_auth_unavailable),
-            onAction = onGotoAuth,
-        )
-
-        Spacer(Modifier.height(4.dp))
-
-        // 副屏是「通道」不是「权限」：不做跳页箭头，
-        // 在无障碍行正下方贴一行 Shizuku 状态，点一下按状态处理
-        VirtualDisplayStatusRow(
-            shizukuState = shizukuState,
-            onClick = onShizukuClick,
-        )
-    }
-}
-
-/**
- * 权限行 —— 无障碍和悬浮窗**共用同一个组件**。
- *
- * 之前这两行是两个各写一遍的 Row：无障碍用实心 `Button`、悬浮窗用
- * `OutlinedButton`，摆在同一个列表里看着像两种不同性质的东西，
- * 其实它们是一回事 —— 都是"未授权 → 去系统设置开 → 已授权"。
- * 抄成两遍的后果就是改一处漏一处，现在合成一个。
- *
- * @param desc 可为空。无障碍那行不写说明，因为上面的「操作方式」下拉里
- *             已经有同样一段话，重复两遍反而乱
- * @param enabled false 表示这个能力当前版本还没接入
- */
-@Composable
-private fun PermissionRow(
-    title: String,
-    desc: String?,
-    granted: Boolean,
-    actionText: String,
-    grantedText: String,
-    enabled: Boolean = true,
-    unavailableText: String = "",
-    onAction: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            if (!desc.isNullOrBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = desc,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        Spacer(Modifier.width(12.dp))
-
-        when {
-            !enabled -> Text(
-                text = unavailableText,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            granted -> {
-                Icon(
-                    imageVector = Icons.Filled.CheckCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = grantedText,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            else -> OutlinedButton(onClick = onAction) {
-                Text(actionText)
-            }
-        }
-    }
-}
-
-/**
- * 副屏状态行 —— 贴在「无障碍」行正下方。
- *
- * 副屏是一条操作通道（Shizuku 高级通道），不是要用户授予的权限，
- * 所以右侧不显示「去授权」按钮、也不做跳页箭头，只显示 Shizuku
- * 当前状态；整行可点，点击后的动作由上层按状态决定。
- */
-@Composable
-private fun VirtualDisplayStatusRow(
-    shizukuState: String,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.vd_title),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = stringResource(R.string.settings_vd_entry_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        Spacer(Modifier.width(12.dp))
-
-        Text(
-            text = shizukuState.ifBlank { "—" },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -1042,7 +847,7 @@ private fun SwitchRow(
  * 用最朴素的 DropdownMenu 就够，且不依赖实验性 API。
  */
 @Composable
-private fun <T> DropdownRow(
+internal fun <T> DropdownRow(
     title: String,
     subtitle: String?,
     current: T,

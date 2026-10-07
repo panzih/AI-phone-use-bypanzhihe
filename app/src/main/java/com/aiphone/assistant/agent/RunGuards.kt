@@ -85,7 +85,7 @@ internal object RunGuards {
         if (consecutive < limit) return null
         return "连续 $consecutive 步读不到控件树：无障碍服务很可能被系统停用了" +
             "（有些 ROM 会在后台清掉它），我看不到界面元素，只能靠截图猜坐标，" +
-            "再试下去也不会准。请到「设置 → 操作授权 → 无障碍」里把纸盒的无障碍" +
+            "再试下去也不会准。请到「权限」页里把纸盒的无障碍" +
             "关掉再打开，然后重新发一次任务。"
     }
 }

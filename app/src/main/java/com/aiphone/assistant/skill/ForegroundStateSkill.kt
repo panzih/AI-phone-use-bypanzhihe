@@ -68,7 +68,7 @@ object ForegroundStateSkill : Skill {
             val state = ShizukuBridge.state(ctx.context)
             if (state != ShizukuBridge.State.READY) {
                 return@withContext "Shizuku 未就绪（当前：${state.label}），读不到前台状态。" +
-                    "让用户到「设置 → 增强能力」里启动并授权。"
+                    "让用户到「权限」页里启动并授权。"
             }
 
             // ② 跑命令（只 grep 关键行）

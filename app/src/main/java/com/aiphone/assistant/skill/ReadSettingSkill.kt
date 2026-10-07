@@ -78,7 +78,7 @@ object ReadSettingSkill : Skill {
             val state = ShizukuBridge.state(ctx.context)
             if (state != ShizukuBridge.State.READY) {
                 return@withContext "Shizuku 未就绪（当前：${state.label}），读不到系统设置。" +
-                    "让用户到「设置 → 增强能力」里启动并授权。"
+                    "让用户到「权限」页里启动并授权。"
             }
 
             // 解析参数

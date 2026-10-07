@@ -29,7 +29,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -79,7 +78,6 @@ fun ScheduleScreen(
     onAdd: (task: String, hour: Int, minute: Int, daily: Boolean, onVirtualDisplay: Boolean) -> Unit,
     onToggle: (Schedule, Boolean) -> Unit,
     onDelete: (String) -> Unit,
-    onRequestExactAlarm: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
     var task by remember { mutableStateOf("") }
@@ -160,23 +158,16 @@ fun ScheduleScreen(
                     )
                     Spacer(Modifier.height(10.dp))
 
-                    // 精确闹钟状态
+                    // 精确闹钟状态。
+                    // ⚠️ 这里**只提示、不申请** —— 全应用的权限申请统一在「权限」页，
+                    // 免得用户在三个地方各被弹一次不同的授权框。
                     if (!state.exactAlarmGranted) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.schedule_inexact_warning),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedButton(onClick = onRequestExactAlarm) {
-                                Text(stringResource(R.string.schedule_grant_exact))
-                            }
-                        }
+                        Text(
+                            text = stringResource(R.string.schedule_inexact_warning) + "。" +
+                                stringResource(R.string.schedule_exact_goto_permissions),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                         Spacer(Modifier.height(10.dp))
                     }
                 }

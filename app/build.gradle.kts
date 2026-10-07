@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 49      // 0.9.9：日志能复盘的控件树 + 修掉"空白控件树"引发的一批误判
-        versionName = "0.9.9"
+        versionCode = 50      // 0.9.10：权限入口集中到侧边栏「权限」页，别处不再申请权限
+        versionName = "0.9.10"
     }
 
     /**
