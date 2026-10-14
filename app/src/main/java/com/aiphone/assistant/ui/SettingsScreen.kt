@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -57,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +73,10 @@ import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.ThinkingMode
+import com.aiphone.assistant.llm.ModelListFetcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 设置页。
@@ -260,6 +266,12 @@ private fun ModelSection(
     onChange: (AppSettings) -> Unit,
 ) {
     var keyVisible by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    // 模型列表对话框状态
+    var fetching by remember { mutableStateOf(false) }
+    var models by remember { mutableStateOf<List<String>?>(null) }
+    var fetchError by remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(8.dp))
@@ -315,6 +327,85 @@ private fun ModelSection(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
         )
+
+        Spacer(Modifier.height(4.dp))
+
+        // 获取模型列表按钮
+        OutlinedButton(
+            onClick = {
+                if (fetching) return@OutlinedButton
+                fetching = true
+                fetchError = null
+                models = null
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching { ModelListFetcher.fetch(s.baseUrl, s.apiKey) }
+                    }
+                    fetching = false
+                    result.onSuccess { list ->
+                        models = list
+                    }.onFailure { e ->
+                        fetchError = e.message ?: e.javaClass.simpleName
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (fetching) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.settings_model_fetching))
+            } else {
+                Text(stringResource(R.string.settings_model_fetch))
+            }
+        }
+
+        fetchError?.let { err ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.settings_model_fetch_failed, err),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        // 模型选择对话框
+        models?.let { list ->
+            AlertDialog(
+                onDismissRequest = { models = null },
+                title = { Text(stringResource(R.string.settings_model_dialog_title)) },
+                text = {
+                    if (list.isEmpty()) {
+                        Text(stringResource(R.string.settings_model_empty))
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn {
+                            items(list) { m ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            onChange(s.copy(modelName = m))
+                                            models = null
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                                ) {
+                                    Text(m, style = MaterialTheme.typography.bodyLarge)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { models = null }) {
+                        Text(stringResource(R.string.schedule_cancel))
+                    }
+                },
+            )
+        }
 
         Spacer(Modifier.height(4.dp))
 
