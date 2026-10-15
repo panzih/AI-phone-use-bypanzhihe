@@ -2,6 +2,17 @@ package com.aiphone.assistant.data
 
 import android.content.Context
 
+/**
+ * 设置的存取。
+ *
+ * 用 SharedPreferences 而不是 DataStore，理由很实际：这里只有十来个字段，
+ * 同步读取对启动速度毫无影响，而 SharedPreferences 是零依赖、零协程的。
+ * DataStore 要引入 flow 和挂起，对这个规模是过度设计。
+ *
+ * 唯一的注意点是 API Key 存在明文里 —— 应用私有目录 + 沙箱隔离，
+ * 对"自己用"这个定位够了。要更严的话应该上 EncryptedSharedPreferences，
+ * 但那会引入 security-crypto 依赖，等真要分发时再说。
+ */
 class SettingsStore(context: Context) {
 
     private val sp = context.applicationContext
@@ -14,6 +25,7 @@ class SettingsStore(context: Context) {
         useFreeModel = sp.getBoolean(KEY_FREE_MODEL, DEFAULT.useFreeModel),
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
         mode = OperationMode.fromId(sp.getString(KEY_MODE, null))
+            // 老配置可能存过不可用的 ADB：归一化回无障碍，别把用户卡在灰界面
             .let { if (it.available) it else OperationMode.ACCESSIBILITY },
         maxSteps = sp.getInt(KEY_MAX_STEPS, DEFAULT.maxSteps),
         contextPolicy = ContextPolicy.fromId(sp.getString(KEY_CONTEXT_POLICY, null)),
@@ -40,6 +52,7 @@ class SettingsStore(context: Context) {
             .apply()
     }
 
+    /** 只改一个字段也走完整保存，避免调用方忘了先 load */
     fun update(block: (AppSettings) -> AppSettings): AppSettings =
         block(load()).also { save(it) }
 
@@ -52,6 +65,9 @@ class SettingsStore(context: Context) {
         const val KEY_FREE_MODEL = "use_free_model"
         const val KEY_THINKING = "thinking_mode"
         const val KEY_MODE = "operation_mode"
+        // 曾经的全局「在副屏上操作」开关。现在是**逐条定时任务**的选项
+        // （见 Schedule.useVirtualDisplay），这里不再读写 —— 老配置文件里
+        // 残留的那个键会被忽略，不需要清理
         const val KEY_MAX_STEPS = "max_steps"
         const val KEY_CONTEXT_POLICY = "context_policy"
         const val KEY_MEMORY = "memory_enabled"
