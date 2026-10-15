@@ -202,8 +202,31 @@ class LlmClient(private val cfg: LlmConfig) {
      */
     private val activeConn = AtomicReference<HttpURLConnection?>(null)
 
-    /** 免费通道的 session id：整个 App 进程复用一个，不然每请求新建会被 429 */
-    private val freeSessionId = "ses_" + java.util.UUID.randomUUID().toString().replace("-", "").take(26)
+    /**
+     * 免费通道的 session id：整个 App 进程复用一个，不然每请求新建会被 429。
+     *
+     * 格式（网关正则 ses_[0-9a-f]{12}[0-9A-Za-z]{14}）：12 位 hex 时间前缀 +
+     * 14 位 base62 随机后缀。前 12 位用随机 hex 即可（真正的客户端是时间戳，
+     * 网关只校验格式，不校验时间），后 14 位用 base62 字母表。
+     */
+    private val freeSessionId = "ses_" + canonicalId()
+
+    /** 每请求一个的 request id，格式同 session（msg_ 前缀，12 hex + 14 base62）。 */
+    private fun freeRequestId(): String = "msg_" + canonicalId()
+
+    /** 生成「12 位 hex + 14 位 base62」的网关规范 id 片段（共 26 位）。 */
+    private fun canonicalId(): String {
+        val rnd = java.util.Random()
+        val hex = StringBuilder().apply {
+            repeat(12) { append("0123456789abcdef"[rnd.nextInt(16)]) }
+        }.toString()
+        // base62：0-9 A-Z a-z
+        val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        val tail = StringBuilder().apply {
+            repeat(14) { append(alphabet[rnd.nextInt(62)]) }
+        }.toString()
+        return hex + tail
+    }
 
     /** 外部叫停（急停按钮 / 任务被停止）。置上之后不再重发 */
     private val abortFlag = AtomicBoolean(false)
@@ -229,7 +252,7 @@ class LlmClient(private val cfg: LlmConfig) {
         /** [why] 要短，它会出现在"第 2 次重发（HTTP 503）"这种给用户看的文案里 */
         class Retry(val why: String) : Try()
 
-        /** [message] 是可以直接显示的中文原因；重发没有意义 */
+        /** [message] 是可以直接显示给用户的中文原因；重发没有意义 */
         class Fatal(val message: String) : Try()
     }
 
@@ -281,8 +304,34 @@ class LlmClient(private val cfg: LlmConfig) {
     fun chat(
         system: String,
         history: List<ChatTurn>,
+        /**
+         * 请求体写完之后回调一次 —— 也就是"传完了，开始等模型"。
+         *
+         * 上传和等待是两件体感完全不同的事：上传快则几百毫秒、
+         * 慢则好几秒（截图 base64 之后一两兆），等待则是另一段。
+         * 分开报给用户，他才知道卡在哪一段。
+         *
+         * **每次重发都会再回调一次** —— 重发当然也要重新上传。
+         *
+         * 回调在 IO 线程上执行。
+         */
         onUploaded: (() -> Unit)? = null,
+        /**
+         * 每次准备重发之前回调一次（IO 线程）。
+         *
+         * 参数：这是第几次**尝试失败**（1 起）、最多允许几次、
+         * 上一次为什么没成、这次要等多久再发。
+         *
+         * 存在的理由和 [onUploaded] 一样：让用户知道"它没死，是在等一会儿重发"，
+         * 而不是干瞪着屏幕怀疑卡死了。
+         */
         onRetry: ((attempt: Int, maxAttempts: Int, why: String, waitMs: Long) -> Unit)? = null,
+        /**
+         * 外部中断信号（急停）。返回 true 就不再重发、不再等待。
+         *
+         * 为什么不是一个普通的 `Boolean`：等待退避的那几秒也要能被叫停，
+         * 否则"按了急停还要等 6 秒"就会变成常态。
+         */
         shouldAbort: (() -> Boolean)? = null,
     ): LlmResult {
         if (!cfg.useFreeModel && cfg.apiKey.isBlank()) {
@@ -381,7 +430,9 @@ class LlmClient(private val cfg: LlmConfig) {
                 setRequestProperty("User-Agent", "opencode/1.18.31")
                 setRequestProperty("x-opencode-client", "desktop")
                 setRequestProperty("x-opencode-session", freeSessionId)
-                setRequestProperty("x-opencode-request", "msg_" + java.util.UUID.randomUUID().toString().replace("-", "").take(27))
+                // 网关对 request id 的正则是 msg_[0-9a-f]{12}[0-9A-Za-z]{14}，
+                // 即 12 位 hex + 14 位 base62 = 26 位（之前取了 27 位，格式不合法）
+                setRequestProperty("x-opencode-request", freeRequestId())
                 setRequestProperty("x-opencode-project", "global")
             } else {
                 setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
@@ -647,6 +698,40 @@ class LlmClient(private val cfg: LlmConfig) {
                 put("thinking", JSONObject().put("type", toggle))
             }
             cfg.thinking.effort?.let { put("reasoning_effort", it) }
+            // 免费通道（opencode.ai 免密池）有一道「工具指纹门」：请求体里必须
+            // 声明 bash/glob/grep/read 四个工具，否则直接 403 FreeTierError。
+            // 我们并不真的让模型调用它们，所以发 4 个「自禁用诱饵」（描述里写明
+            // 不可用），并把 tool_choice 设为 none —— 模型只正常出文本，不发工具调用。
+            // 见 OFM 源码 upstream.js 的 applyFingerprint。
+            if (cfg.useFreeModel) {
+                val tools = JSONArray()
+                listOf("bash", "glob", "grep", "read").forEach { name ->
+                    tools.put(
+                        JSONObject().apply {
+                            put("type", "function")
+                            put(
+                                "function",
+                                JSONObject().apply {
+                                    put("name", name)
+                                    put(
+                                        "description",
+                                        "This tool is currently unavailable and must not be used.",
+                                    )
+                                    put(
+                                        "parameters",
+                                        JSONObject().apply {
+                                            put("type", "object")
+                                            put("properties", JSONObject())
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                }
+                put("tools", tools)
+                put("tool_choice", "none")
+            }
             put("stream", false)
         }
     }
@@ -716,7 +801,7 @@ class LlmClient(private val cfg: LlmConfig) {
         }
 
         val choices = root.optJSONArray("choices")
-        if (choices == null || choices.length() == 0) {
+        if (choices == null || choices.length == 0) {
             Log.w(TAG, "返回里没有 choices：${raw.take(300)}")
             return Try.Retry("模型没返回任何内容")
         }
@@ -797,7 +882,7 @@ class LlmClient(private val cfg: LlmConfig) {
      * 域名解析抖一下。重发一次基本都能过去。
      *
      * 唯一例外是 SSL 握手失败 —— 那通常意味着证书/域名配置不对，
-     * 重发只会浪费时间，直接判死更快让用户看到真正的问题。
+     * 重发只会浪费时间，让用户更快看到真正的问题。
      */
     private fun throwableToTry(t: Throwable): Try = when (t) {
         // ⚠️ SocketTimeoutException 是 InterruptedIOException 的子类，
