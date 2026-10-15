@@ -252,7 +252,7 @@ class LlmClient(private val cfg: LlmConfig) {
         /** [why] 要短，它会出现在"第 2 次重发（HTTP 503）"这种给用户看的文案里 */
         class Retry(val why: String) : Try()
 
-        /** [message] 是可以直接显示给用户的中文原因；重发没有意义 */
+        /** [message] 是可以直接显示的中文原因；重发没有意义 */
         class Fatal(val message: String) : Try()
     }
 
@@ -423,7 +423,9 @@ class LlmClient(private val cfg: LlmConfig) {
             readTimeout = cfg.timeoutMs
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Accept", "application/json")
+            // 免费通道强制流式，Accept 必须是 text/event-stream（OFM gatewayHeaders 逻辑）；
+            // 自定义通道保持 application/json。
+            setRequestProperty("Accept", if (cfg.useFreeModel) "text/event-stream" else "application/json")
             if (cfg.useFreeModel) {
                 // 免费通道：伪装成 opencode 桌面客户端
                 setRequestProperty("Authorization", "Bearer public")
@@ -465,7 +467,9 @@ class LlmClient(private val cfg: LlmConfig) {
 
             val code = conn.responseCode
             val text = if (code in 200..299) {
-                readAll(conn.inputStream)
+                val raw = readAll(conn.inputStream)
+                // 免费通道是 SSE 流，累积成普通 JSON 再交给解析器
+                if (cfg.useFreeModel) accumulateSse(raw) else raw
             } else {
                 readAll(conn.errorStream)
             }
@@ -492,6 +496,45 @@ class LlmClient(private val cfg: LlmConfig) {
         stream?.let {
             BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
         } ?: ""
+
+    /**
+     * 把免费通道的 SSE 事件流累积成一个普通的非流式 JSON 响应。
+     *
+     * opencode 免费池只回答流式请求（stream:true 才不 403），但 App 其余部分
+     * 都按"一个 JSON 响应"来解析。所以这里把所有 `data: {...}` 事件里的
+     * `choices[0].delta.content` 拼起来，再包成 `{"choices":[{"message":{"content":...}}]}`
+     * 交给原来的 parseResponse —— 下游完全不用改。
+     * `data: [DONE]` 表示结束；遇到解析不了的行直接跳过（SSE 里可能混心跳/注释）。
+     */
+    private fun accumulateSse(raw: String): String {
+        val content = StringBuilder()
+        raw.lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            if (!trimmed.startsWith("data:")) return@forEach
+            val payload = trimmed.removePrefix("data:").trim()
+            if (payload == "[DONE]") return@forEach
+            val json = try {
+                JSONObject(payload)
+            } catch (_: Throwable) {
+                return@forEach
+            }
+            val choices = json.optJSONArray("choices") ?: return@forEach
+            if (choices.length() == 0) return@forEach
+            val delta = choices.optJSONObject(0)?.optJSONObject("delta") ?: return@forEach
+            delta.optString("content")?.takeIf { it.isNotEmpty() }?.let { content.append(it) }
+        }
+        return JSONObject()
+            .put(
+                "choices",
+                JSONArray().put(
+                    JSONObject().put(
+                        "message",
+                        JSONObject().put("content", content.toString()),
+                    ),
+                ),
+            )
+            .toString()
+    }
 
     // ------------------------------------------------------------------
     // 重发策略
@@ -698,11 +741,16 @@ class LlmClient(private val cfg: LlmConfig) {
                 put("thinking", JSONObject().put("type", toggle))
             }
             cfg.thinking.effort?.let { put("reasoning_effort", it) }
-            // 免费通道（opencode.ai 免密池）有一道「工具指纹门」：请求体里必须
-            // 声明 bash/glob/grep/read 四个工具，否则直接 403 FreeTierError。
-            // 我们并不真的让模型调用它们，所以发 4 个「自禁用诱饵」（描述里写明
-            // 不可用），并把 tool_choice 设为 none —— 模型只正常出文本，不发工具调用。
-            // 见 OFM 源码 upstream.js 的 applyFingerprint。
+            // 免费通道（opencode.ai 免密池）的客户端契约，照抄 OurFreeModel
+            // （MIT 协议，ofm-src/src/upstream.js，2026-09-24 实测通过）：
+            //   1. body.stream = true（非流式直接 403 FreeTierError）
+            //   2. body.tools 必须声明 bash/glob/grep/read 四个小写工具名
+            //      （没有真实工具时发「自禁用诱饵」，描述里写明不可用）
+            //   3. tool_choice = "none"（无客户端工具时；OFM applyFingerprint 逻辑）
+            //   4. 请求头：Authorization: Bearer public、User-Agent: opencode/1.18.31、
+            //      x-opencode-client: desktop、x-opencode-session/request（规范 id）、
+            //      x-opencode-project: global、Accept: text/event-stream
+            // 源头 issue：opencode-ai/opencode #14313。
             if (cfg.useFreeModel) {
                 val tools = JSONArray()
                 listOf("bash", "glob", "grep", "read").forEach { name ->
@@ -732,7 +780,9 @@ class LlmClient(private val cfg: LlmConfig) {
                 put("tools", tools)
                 put("tool_choice", "none")
             }
-            put("stream", false)
+            // 免费通道必须流式（OFM aggregate.js/adapter.js 全部强制 stream:true）；
+            // 自定义通道保持非流式，响应是单个 JSON。
+            put("stream", cfg.useFreeModel)
         }
     }
 
@@ -801,7 +851,7 @@ class LlmClient(private val cfg: LlmConfig) {
         }
 
         val choices = root.optJSONArray("choices")
-        if (choices == null || choices.length == 0) {
+        if (choices == null || choices.length() == 0) {
             Log.w(TAG, "返回里没有 choices：${raw.take(300)}")
             return Try.Retry("模型没返回任何内容")
         }
@@ -882,7 +932,7 @@ class LlmClient(private val cfg: LlmConfig) {
      * 域名解析抖一下。重发一次基本都能过去。
      *
      * 唯一例外是 SSL 握手失败 —— 那通常意味着证书/域名配置不对，
-     * 重发只会浪费时间，让用户更快看到真正的问题。
+     * 重发只会浪费时间，直接判死更快让用户看到真正的问题。
      */
     private fun throwableToTry(t: Throwable): Try = when (t) {
         // ⚠️ SocketTimeoutException 是 InterruptedIOException 的子类，
