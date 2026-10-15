@@ -463,14 +463,24 @@ private fun ModelSection(
     }
 }
 
-/** 免费模式可选的模型（id 要和 opencode.ai 网关认的一致） */
+/**
+ * 免费模式可选的模型（id 要和 opencode.ai 网关认的一致）。
+ *
+ * 这份清单按 2026-10-15 网关 /zen/v1/models 实时目录更新，并剔除了两类：
+ *  - 已下架：deepseek-v4-flash-free（已升级为 v4.1）、union-alpha、ling-3.0-flash-fin-free
+ *  - 中国大陆地域锁（网关直接 403 RegionError）：muse-spark-*、cat-jam-free，
+ *    且 muse-spark 走的是另一套 /responses 端点，国内手机也用不了
+ * 下面这些都是走标准 /chat/completions 的模型。
+ */
 private val freeModels = listOf(
-    FreeModel("deepseek-v4-flash-free", "DeepSeek V4 Flash"),
+    FreeModel("deepseek-v4.1-flash-free", "DeepSeek V4.1 Flash"),
     FreeModel("mimo-v2.6-flash-free", "MiMo V2.6 Flash"),
-    FreeModel("muse-spark-1.3-contributor-free", "Muse Spark 1.3"),
     FreeModel("space-bunny-free", "Space Bunny"),
-    FreeModel("union-alpha", "Union Alpha"),
-    FreeModel("ling-3.0-flash-fin-free", "Ling 3.0 Flash"),
+    FreeModel("nemotron-3.5-lightning-free", "Nemotron 3.5 Lightning"),
+    FreeModel("jev-1.13-free", "Jev 1.13"),
+    FreeModel("step-5-preview-free", "Step 5 Preview"),
+    FreeModel("longcat-2.5-preview-free", "LongCat 2.5 Preview"),
+    FreeModel("big-pickle", "Big Pickle"),
 )
 
 private data class FreeModel(val id: String, val label: String)
