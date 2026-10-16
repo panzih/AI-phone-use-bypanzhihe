@@ -7,6 +7,49 @@
 
 ---
 
+## 0.9.11
+
+> 这一版的改动来自一份项目评审报告（v0.9.9 基线，综合 7.9/10）。
+> 按报告的"优先改进（投产比排序）"取前四项落地。
+
+### 变更
+
+- **API Key 加密落盘**（消除唯一的安全硬伤）。AES-256-GCM，密钥在系统
+  Keystore 里、不可导出；`SharedPreferences` 里只有密文，root 过的机器上
+  把文件拷走也解不开。零新依赖 —— 没有用已被 Google 弃用的
+  `EncryptedSharedPreferences`（Jetpack Security），而是直接包了一层
+  Keystore（`data/SecretCrypto.kt`）。
+  - 老版本存过的明文 Key **读到即自动加密写回**，用户无感；
+  - 解不开的密文（换机/系统密钥被清）按"未填写"处理，绝不把密文当 Key 发出去；
+  - 加密失败时降级为明文保存 + 日志，不会出现"填了 Key 存不上"。
+- **公网 HTTP 地址的界面级警告**：接口地址填成公网 `http://` 时，
+  设置页在输入框下常驻一条黄色警告（原来是 LlmClient 里只有一条日志，
+  用户不会看）。判定规则抽成 `llm/EndpointSafety`，与 LlmClient 共用。
+- **加 CI**（`.github/workflows/ci.yml`）：push / PR 自动跑
+  `./gradlew :app:testDebugUnitTest`，失败时上传测试报告。
+  此前 16 个测试文件只能靠人肉跑。
+- **拆 `Agent.kt`**（第一刀，评审建议的两块）：
+  - `ChannelMigration`：主屏↔副屏迁移（建/销毁副屏、整栈搬运、失败降级、
+    用户接管检测），出口统一走一个"换通道"回调；
+  - `AutoSwitchWatcher`：「回桌面自动切副屏」的推断状态机（原来那组
+    "外面够不到"的状态字段）；
+  - `ActivityProbe`：dumpsys 活动任务栈查询，**解析做成纯函数并补了单测**
+    （跨 Display 段误判这类坑只能靠单测钉住）；
+  - 循环里那套"界面变了没有"的判据收进 `LoopCriteria` 对象 ——
+    换通道时的清零从"信标字段 + 循环自己消费"改成直接调用，
+    评审里点名的那处补丁消失。
+- 顺手修掉两个上游编译/工具链问题：`AboutScreen.kt` 漏 `Row` 的 import
+  （当前主线代码编译不过）、`LlmClient.kt` 里一个裸 NUL 字节
+  （改为等价的 `\u0000` 转义，运行时字节不变，工具链不再把源码当二进制）。
+
+### 测试
+
+- 新增 5 个测试文件：`SecretCryptoTest`（信封格式与兼容策略）、
+  `SettingsStoreTest`（盘上是密文 / 老明文迁移 / 解不开就按未填写）、
+  `ActivityProbeTest`（dumpsys 解析）、`EndpointSafetyTest`（公网/局域网判定边界）。
+
+---
+
 ## 0.9.10
 
 ### 变更

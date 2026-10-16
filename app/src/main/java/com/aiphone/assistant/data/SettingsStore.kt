@@ -9,18 +9,22 @@ import android.content.Context
  * 同步读取对启动速度毫无影响，而 SharedPreferences 是零依赖、零协程的。
  * DataStore 要引入 flow 和挂起，对这个规模是过度设计。
  *
- * 唯一的注意点是 API Key 存在明文里 —— 应用私有目录 + 沙箱隔离，
- * 对"自己用"这个定位够了。要更严的话应该上 EncryptedSharedPreferences，
- * 但那会引入 security-crypto 依赖，等真要分发时再说。
+ * **API Key 加密落盘**（见 [SecretCrypto]）：AES-256-GCM，密钥在系统
+ * Keystore 里、不可导出，应用沙箱里只有密文。root 过的机器上把
+ * `settings.xml` 拷走也解不开 —— 它需要那台设备系统钥匙串里的密钥。
+ * 老版本遗留的明文值会在读到后自动加密写回（迁移对用户无感）。
  */
-class SettingsStore(context: Context) {
+class SettingsStore(
+    context: Context,
+    private val crypto: SecretCrypto = SecretCrypto.withKeystore(),
+) {
 
     private val sp = context.applicationContext
         .getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     fun load(): AppSettings = AppSettings(
         baseUrl = sp.getString(KEY_BASE_URL, null) ?: DEFAULT.baseUrl,
-        apiKey = sp.getString(KEY_API_KEY, null) ?: DEFAULT.apiKey,
+        apiKey = loadApiKey(),
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         useFreeModel = sp.getBoolean(KEY_FREE_MODEL, DEFAULT.useFreeModel),
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
@@ -38,7 +42,7 @@ class SettingsStore(context: Context) {
     fun save(s: AppSettings) {
         sp.edit()
             .putString(KEY_BASE_URL, s.baseUrl)
-            .putString(KEY_API_KEY, s.apiKey)
+            .putString(KEY_API_KEY, crypto.seal(s.apiKey))
             .putString(KEY_MODEL, s.modelName)
             .putBoolean(KEY_FREE_MODEL, s.useFreeModel)
             .putString(KEY_THINKING, s.thinking.id)
@@ -50,6 +54,20 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_SAVE_SHOTS, s.saveScreenshots)
             .putBoolean(KEY_LOCAL_DISMISS, s.localDialogDismiss)
             .apply()
+    }
+
+    /**
+     * 读 API Key。顺手把老版本遗留的明文**就地加密写回**——
+     * 迁移不需要用户做任何事，也不需要版本判断：没有前缀的就是明文。
+     */
+    private fun loadApiKey(): String {
+        val raw = sp.getString(KEY_API_KEY, null) ?: return DEFAULT.apiKey
+        if (raw.isEmpty() || crypto.isSealed(raw)) return crypto.unseal(raw)
+        val sealed = crypto.seal(raw)
+        if (sealed != raw) {
+            sp.edit().putString(KEY_API_KEY, sealed).apply()
+        }
+        return raw
     }
 
     /** 只改一个字段也走完整保存，避免调用方忘了先 load */

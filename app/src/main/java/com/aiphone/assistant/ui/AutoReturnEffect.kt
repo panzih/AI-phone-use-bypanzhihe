@@ -75,7 +75,7 @@ fun AutoReturnOnForegroundEffect() {
  *
  * 这里只做**能在这里判断**的条件（有没有任务、在不在冷却、防抖），
  * 「当前是不是副屏模式」交给 Agent 判断 —— 真执行时
- * `handleReturnToMainScreen()` 自己会检查，不是副屏就直接忽略。
+ * `ChannelMigration.returnRequestedByUser()` 自己会检查，不是副屏就直接忽略。
  */
 private fun requestAutoReturnIfNeeded(scope: CoroutineScope) {
     // 没任务在跑：不能置请求，否则会被下一条任务的第一步消费掉

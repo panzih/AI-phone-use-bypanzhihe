@@ -1,0 +1,51 @@
+# 单测护栏。
+#
+# 这个项目的正确性策略是"**决策纯函数靠单测钉住**、真机行为靠导出日志复盘"
+# （见 RunGuards / ActionParser / WaitPolicy 的设计说明）。Tests 目录里已经
+# 攒了十几个测试文件，但此前只能靠人肉跑 —— 这次把它变成 push / PR 的门。
+#
+# 只跑 JVM 单测（testDebugUnitTest）：不需要模拟器、不需要真机，
+# 冷启动 3~5 分钟。instrumentation 测试的缺口（通道/Shizuku/UI）本来就
+# 不是这个 CI 能覆盖的，不在这里假装覆盖。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的旧运行没价值，新的来了就取消旧的
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # AGP 8.7 需要 JDK 17（build.gradle.kts 里 sourceCompatibility=17）
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 带 Gradle 缓存；第二次起省掉依赖下载的几分钟
+      - uses: gradle/actions/setup-gradle@v4
+
+      # GitHub 的 ubuntu 镜像自带 Android SDK（ANDROID_HOME 已设好），
+      # 所以不需要 local.properties，也不需要再装 SDK
+      - name: 跑单测
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      # 失败时把报告传上来，省得让人本地复现
+      - name: 上传测试报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore

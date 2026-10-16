@@ -126,6 +126,7 @@
     <string name="settings_model_free_hint">走社区免密聚合网关，不用填 API Key。有速率限制，别拿来跑长任务。</string>
     <string name="settings_model_free_pick">选择免费模型</string>
     <string name="settings_model_provider">接口地址</string>
+    <string name="settings_model_public_http_warning">这是公网明文 HTTP 地址：API Key 会以明文经过网络。能换 https:// 就换；换不了就只在放心的网络里用。</string>
     <string name="settings_model_apikey">API Key</string>
     <string name="settings_model_name">模型</string>
     <string name="settings_model_fetch">获取模型列表</string>

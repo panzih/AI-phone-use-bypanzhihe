@@ -220,7 +220,7 @@ class LlmClient(private val cfg: LlmConfig) {
      * 照抄 v0.3.12 ids.ts stableID('prj', 'opencode2dsh:default-project')，固定值。
      */
     private val freeProjectId: String by lazy {
-        val digest = MessageDigest.getInstance("SHA-256").digest("prj opencode2dsh:default-project".toByteArray())
+        val digest = MessageDigest.getInstance("SHA-256").digest("prj\u0000opencode2dsh:default-project".toByteArray())
         "prj_" + digest.sliceArray(0 until 12).joinToString("") { "%02x".format(it) }
     }
 
@@ -370,8 +370,7 @@ class LlmClient(private val cfg: LlmConfig) {
         }
 
         // 公网明文 HTTP 警告：API Key 会明文经过网络。
-        // 本地/局域网地址（localhost、127.0.0.1、10.0.2.2、192.168.x.x、10.x.x.x、172.16-31.x.x）
-        // 是本地模型服务的常见场景，不警告。
+        // 哪些算"本地不警告"由 EndpointSafety 统一判定（设置页共用同一份规则）。
         warnIfPublicHttp(cfg.baseUrl)
 
         // 上一次调用的中断标记属于上一次，清掉
@@ -703,19 +702,15 @@ class LlmClient(private val cfg: LlmConfig) {
      * 本地/局域网地址是本地模型服务的常见场景，不警告；
      * 公网 http:// 地址会把 API Key 明文传出去，打一条 warning 提醒。
      * 只在第一次遇到时打（用一个标志位，避免每步都刷屏）。
+     *
+     * 判据在 [EndpointSafety] —— 设置页用同一份规则做常驻警告，
+     * 这里只是补一条日志（日志用户不看，界面才看得见）。
      */
     private var httpWarned = false
 
     private fun warnIfPublicHttp(baseUrl: String) {
         if (httpWarned) return
-        val url = baseUrl.trim().lowercase()
-        if (!url.startsWith("http://")) return
-        // 提取 host 部分
-        val host = url.removePrefix("http://").substringBefore('/').substringBefore(':')
-        val isLocal = host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2" ||
-            host.startsWith("192.168.") || host.startsWith("10.") ||
-            (host.startsWith("172.") && host.substringAfter("172.").substringBefore(".").toIntOrNull() in 16..31)
-        if (!isLocal) {
+        if (EndpointSafety.cleartextWarning(baseUrl) != null) {
             Log.w("LlmClient", "⚠️ 正在使用公网明文 HTTP 地址（$baseUrl），API Key 会明文经过网络。建议改用 HTTPS。")
             httpWarned = true
         }

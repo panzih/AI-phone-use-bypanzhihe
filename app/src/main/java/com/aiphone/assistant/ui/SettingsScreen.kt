@@ -73,6 +73,7 @@ import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.ThinkingMode
+import com.aiphone.assistant.llm.EndpointSafety
 import com.aiphone.assistant.llm.ModelListFetcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -296,6 +297,36 @@ private fun ModelSection(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
             )
+
+            // 公网明文 HTTP 的常驻警告（评审报告第 3 节）：
+            // LlmClient 里只打日志 —— 用户不会看日志，这里钉在输入框下面。
+            // 判据与 LlmClient 共用 EndpointSafety，不会出现两处说法不一致。
+            EndpointSafety.cleartextWarning(s.baseUrl)?.let { warning ->
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.settings_model_public_http_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+            }
 
             Spacer(Modifier.height(12.dp))
 
