@@ -3,9 +3,14 @@ package com.aiphone.assistant.data
 /**
  * 操作方式。
  *
- * 目前只做无障碍 —— 它重启后自动恢复、不需要装任何额外东西。
- * ADB/Shizuku 那条路留着占位：能力更强（能截安全窗口），
- * 但无 root 时每次重启都要重新用无线调试授权一次，体验代价太大。
+ * 两条路都是真的能跑的，区别只在**动作和截图从哪儿走**：
+ *
+ *   无障碍      `dispatchGesture` + `takeScreenshot`。一次授权长期有效，
+ *               重启手机也不失效 —— 默认这条。
+ *   ADB/Shizuku 借 Shizuku 的 shell 身份发 `input` / `screencap`。**能点
+ *               无障碍点不动的地方**（安全窗口、某些系统弹窗）、**能截安全窗口**；
+ *               代价是无 root 时每次重启手机都要重新启动一次 Shizuku。
+ *               控件树仍然借无障碍（开着更准；不开就退化成"看截图用坐标"）。
  */
 enum class OperationMode(
     val id: String,
@@ -24,8 +29,10 @@ enum class OperationMode(
     ADB(
         id = "adb",
         label = "ADB / Shizuku",
-        available = false,
-        note = "暂未完成相关配置",
+        available = true,
+        note = "借 Shizuku 的 shell 身份点击/滑动/输入，能点无障碍点不动的地方、" +
+            "能截安全窗口。控件树仍走无障碍（开着更准，不开就只看截图用坐标）。" +
+            "⚠️ 没 root 时每次重启手机都要重新启动一次 Shizuku。",
     );
 
     companion object {

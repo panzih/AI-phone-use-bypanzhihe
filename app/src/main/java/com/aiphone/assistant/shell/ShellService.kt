@@ -3,6 +3,7 @@ package com.aiphone.assistant.shell
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -91,7 +92,52 @@ class ShellService : IShellService.Stub() {
         "命令执行失败：${t.javaClass.simpleName} ${t.message}"
     }
 
-    override fun execBytes(command: String): ByteArray = try {
+    override fun execBytes(command: String): ByteArray = runProcess(command)
+
+    /**
+     * 截屏并**在服务侧压成 JPEG** 再回传。
+     *
+     * ⚠️ 不压不行：`screencap -p` 出的是好几 MB 的 PNG，而 binder 的事务上限
+     * 约 1MB —— 直接把它当返回值送出去会抛 TransactionTooLargeException，
+     * 调用方只看到"截图永远失败"，从错误里看不出是尺寸问题
+     * （副屏那条路就是这么绕过来的：帧在服务侧压成 JPEG 才回）。
+     */
+    override fun screenshotJpeg(displayId: Int): ByteArray = try {
+        // displayId <= 0 就是主屏：`input`/`screencap` 不带 -d 时指主屏
+        val cmd = if (displayId <= 0) "screencap -p" else "screencap -p -d $displayId"
+        val png = runProcess(cmd)
+        if (png.isEmpty()) {
+            Log.w(TAG, "screenshotJpeg：$cmd 一个字节都没吐（多半是权限或屏不在）")
+            ByteArray(0)
+        } else {
+            val bmp = BitmapFactory.decodeByteArray(png, 0, png.size)
+            if (bmp == null) {
+                Log.w(TAG, "screenshotJpeg：解不出 PNG（${png.size} 字节）")
+                ByteArray(0)
+            } else {
+                val out = ByteArrayOutputStream(1 shl 18)
+                bmp.compress(Bitmap.CompressFormat.JPEG, 82, out)
+                bmp.recycle()
+                Log.i(
+                    TAG,
+                    "screenshotJpeg：display=$displayId " +
+                        "${png.size / 1024}KB PNG → ${out.size() / 1024}KB JPEG",
+                )
+                out.toByteArray()
+            }
+        }
+    } catch (t: Throwable) {
+        Log.w(TAG, "screenshotJpeg 失败：display=$displayId ${t.javaClass.simpleName} ${t.message}")
+        ByteArray(0)
+    }
+
+    /**
+     * 跑一条命令、把标准输出当**二进制**收回来。
+     *
+     * 本地进程（不过 binder），所以 `execBytes`（AIDL 出口）和
+     * `screenshotJpeg`（要在本地再加工一次）都走它。
+     */
+    private fun runProcess(command: String): ByteArray = try {
         val p = ProcessBuilder("sh", "-c", command).start()
         val out = ByteArrayOutputStream(1 shl 16)
         // 必须单独读：截图几百 KB，如果和 stderr 共用一条流会被污染
@@ -107,7 +153,7 @@ class ShellService : IShellService.Stub() {
         p.waitFor()
         out.toByteArray()
     } catch (t: Throwable) {
-        Log.w(TAG, "execBytes 失败：$command → ${t.message}")
+        Log.w(TAG, "跑命令失败：$command → ${t.javaClass.simpleName} ${t.message}")
         ByteArray(0)
     }
 

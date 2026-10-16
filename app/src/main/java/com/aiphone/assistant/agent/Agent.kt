@@ -512,8 +512,15 @@ class Agent(
 
             // 连续读不到控件树：这是**环境坏了**，不是模型的问题。
             // 单独计数，用来在止损消息里说清原因，并在提示词里提醒模型。
-            unreadableTreeSteps =
+            //
+            // ⚠️ 只对"本该读得到"的通道计数：副屏、以及 ADB 模式没开无障碍时，
+            // 读不到是那条通道的**形态**（模型本来就走截图 + 坐标），
+            // 数下去会把它在第 6 步误杀。
+            unreadableTreeSteps = if (controller.canDumpUiTree) {
                 RunGuards.nextUnreadableStreak(unreadableTreeSteps, treeRead.rootAvailable)
+            } else {
+                0
+            }
 
             // ---- 卡死止损 ----
             // 注入提示只到 2 次；再往下就是明知道没用还在烧钱，直接停。

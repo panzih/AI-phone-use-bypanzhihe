@@ -213,6 +213,31 @@ object ShizukuBridge {
             }
     }
 
+    /**
+     * 截主屏（`displayId = 0`）/指定屏，**在 shell 侧压成 JPEG 再回来**。
+     *
+     * ⚠️ 不能直接 `runBytes("screencap -p")`：PNG 有好几 MB，
+     * **超过 binder 的事务上限（约 1MB）** —— 回程会抛
+     * TransactionTooLargeException，调用方只拿到空字节，看起来就是
+     * "截图永远失败"。JPEG 只有一两百 KB。
+     */
+    suspend fun screenshotJpeg(context: Context, displayId: Int): ByteArray =
+        withContext(Dispatchers.IO) {
+            val problem = ensureBound(context)
+            if (problem != null) {
+                lastError = problem
+                return@withContext ByteArray(0)
+            }
+            runCatching { service?.screenshotJpeg(displayId) ?: ByteArray(0) }
+                .getOrElse {
+                    lastError = "截图异常：${it.javaClass.simpleName} ${it.message}"
+                    // 这条以前是静默的：binder 超限那种错从界面上只看到"抓不到画面"，
+                    // 查不动 —— 记一行，下次一眼能看出是尺寸还是权限
+                    android.util.Log.w("ShizukuBridge", "screenshotJpeg 失败：${it.message}")
+                    ByteArray(0)
+                }
+        }
+
     /** 在指定副屏启动应用，component 形如 "com.android.settings/.Settings" */
     suspend fun startOnDisplay(
         context: Context,
@@ -257,5 +282,5 @@ object ShizukuBridge {
     )
 
     /** 改了 ShellService 的实现就 +1（0.5.1 新增 destroyDisplay + 孤儿 :shell 清理） */
-    private const val SHELL_SERVICE_VERSION = 3
+    private const val SHELL_SERVICE_VERSION = 4
 }

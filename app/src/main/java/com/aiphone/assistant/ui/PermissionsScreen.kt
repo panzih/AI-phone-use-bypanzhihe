@@ -60,9 +60,11 @@ import com.aiphone.assistant.data.OperationMode
  *
  * ## 三处刻意的保留
  *
- * 1. **无障碍那行的 `enabled` 跟的是"操作方式"**：ADB 通道当前未接入
- *    （`OperationMode.ADB.available = false`），这时按钮要显示成"当前版本未接入"
- *    而不是"去授权"。
+ * 1. **无障碍那行的 `enabled` 跟的是"操作方式"**：如果哪天某条操作方式在当前
+ *    版本不可用（`OperationMode.*.available = false`），按钮要显示成"当前版本未接入"
+ *    而不是"去授权"。现在两条（无障碍 / ADB·Shizuku）都是可用的。
+ *    ⚠️ 顺带一条：ADB / Shizuku 那项**还要 Shizuku 真的在跑**才让选，否则标签上
+ *    直接写「先启动 Shizuku」—— 用户点不动的那一项，得能一眼看出缺什么。
  * 2. **副屏不是必选项**：它是 Shizuku 提供的高级通道（产品边界：普通用户永远
  *    不需要 Shizuku），所以文案里写明"可选"，右侧只显示状态、不做成待办事项。
  * 3. **本页只读 [MainUiState] 注入的状态**，不自己去问系统 —— 状态回查统一在
@@ -138,15 +140,31 @@ fun PermissionsScreen(
                     subtitle = s.mode.note,
                     current = s.mode,
                     options = OperationMode.entries.toList(),
-                    optionLabel = { if (it.available) it.label else "${it.label}（未接入）" },
-                    optionEnabled = { it.available },
+                    // ADB / Shizuku 只有 Shizuku 真的在跑时才让选；灰着的时候
+                    // 直接把"缺什么"写在选项上 —— 用户点不动的那一项，
+                    // 得能一眼看出为什么点不动。
+                    optionLabel = { mode ->
+                        when {
+                            !mode.available -> "${mode.label}（未接入）"
+                            mode == OperationMode.ADB && !state.shizukuReady ->
+                                "${mode.label}（先启动 Shizuku）"
+                            else -> mode.label
+                        }
+                    },
+                    optionEnabled = { mode ->
+                        mode.available && (mode != OperationMode.ADB || state.shizukuReady)
+                    },
                     onSelect = { onSettingsChange(s.copy(mode = it)) },
                 )
             }
             item {
                 PermissionRow(
                     title = stringResource(R.string.settings_a11y_label),
-                    desc = null,
+                    desc = if (s.mode == OperationMode.ADB) {
+                        "ADB 模式下它是可选的：开着读控件树（定位更准），不开也能跑（只看截图用坐标）。"
+                    } else {
+                        null
+                    },
                     granted = state.authorized,
                     enabled = s.mode.available,
                     actionText = stringResource(R.string.settings_goto_auth),

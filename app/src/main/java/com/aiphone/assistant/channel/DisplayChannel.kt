@@ -12,27 +12,35 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * 副屏通道：在虚拟屏幕上截图和注入触控。
+ * shell 通道：用 Shizuku 借来的 shell 身份截图、注入触控。
+ *
+ * 同一个类服务两种用法，**区别只在构造参数**：
+ *
+ * | | `displayId` | `label` | `tree` |
+ * |---|---|---|---|
+ * | 副屏（虚拟显示器） | 副屏 id | 「副屏」 | null（副屏读不到控件树） |
+ * | **ADB / Shizuku 操作方式** | **0（主屏）** | 「主屏（Shizuku）」 | **无障碍通道** |
+ *
+ * 主屏那一档是关键：动作和截图走 shell（`screencap -p` / `input tap`），
+ * **控件树仍然借无障碍** —— 所以在主屏上这条通道既不丢"元素编号列表"
+ * 这个定位主力，又能做到无障碍做不到的两件事：**点得动安全窗口/某些系统弹窗、
+ * 截得了安全窗口**（`screencap` 走 shell，不受 FLAG_SECURE 影响）。
+ * 没开无障碍时它自动退化成"看截图用坐标"，仍然能跑。
  *
  * ## 它和无障碍通道的根本区别
  *
- * | | 无障碍 | 副屏（这条） |
+ * | | 无障碍 | shell（这条） |
  * |---|---|---|
- * | 截图 | `takeScreenshot` | `ShizukuBridge.grabFrame`（ImageReader 回读） |
- * | 控件树 | **有**，定位主力 | **没有** |
+ * | 截图 | `takeScreenshot` | 主屏 `screencap -p` / 副屏 `grabFrame` |
+ * | 控件树 | **有**，定位主力 | 主屏借无障碍；副屏**没有** |
  * | 注入 | `dispatchGesture`（节点级/手势级） | `input -d <id>` |
  * | 触控目标 | 只能主屏 | 指定那块屏 |
  *
- * **没有控件树这一条影响很大**：模型拿不到"可点元素的编号列表"，
- * 只能看截图猜坐标，或者主动要一张图。准确率会比主屏模式低 ——
- * 这是这条通道天生的短板，不是实现问题。
+ * ## 副屏那一档为什么没有控件树
  *
- * 为什么副屏读不到控件树：`AccessibilityService` 的 `rootInActiveWindow`
- * 和手势注入都只认**默认显示器**，安卓没有给第三方应用"读副屏无障碍树"
- * 的口子。
- *
- * 实测依据（0.7.0 探针，AVD API35，TRUSTED 副屏、副屏上 Settings 处于
- * resumed）：
+ * `AccessibilityService` 的 `rootInActiveWindow` 和手势注入都只认**默认显示器**，
+ * 安卓没有给第三方应用"读副屏无障碍树"的口子。实测依据（0.7.0 探针，AVD API35，
+ * TRUSTED 副屏、副屏上 Settings 处于 resumed）：
  * - `getWindows()` 不返回任何副屏窗口（结果全部 displayId=0），拿不到 root；
  * - `dispatchGesture` 手势落到主屏（点击后主屏帧差异 4.27%、副屏 0%），
  *   它没有指定显示器的参数；
@@ -40,35 +48,50 @@ import kotlinx.coroutines.withContext
  *   —— 即只有截图能走无障碍，节点 / 手势不行。截图仍统一用 `grabFrame`
  *   （见 capability.canAccessSecureWindow：无障碍截图会过滤 FLAG_SECURE）。
  *
- * 另外：副屏的**前台应用名读不到**（那也要靠无障碍树）。所以
- * `ChannelController.currentPackage()` 在副屏模式下直接返回 null ——
- * "自己在前台就让位"那个防护在副屏上会自动跳过，这是对的：
- * 副屏上本来就不会有纸盒自己。
- *
- * ## 所以它适合什么
- *
- * 适合"让 AI 在另一块屏上跑固定流程"，同时用户还能正常用主屏。
- * 不适合需要精确定位控件的复杂界面 —— 那种场景留在主屏模式更好。
+ * 所以副屏那条路**模型拿不到"可点元素的编号列表"**，只能看截图猜坐标 ——
+ * 这是它天生的短板，不是实现问题。适合"让 AI 在另一块屏上跑固定流程"，
+ * 同时用户还能正常用主屏。
  */
 class DisplayChannel(
     private val context: Context,
     val displayId: Int,
     private val size: Pair<Int, Int>,
+    /** 给用户看的名字：「副屏」/「主屏（Shizuku）」 */
+    private val label: String = "副屏",
+    /**
+     * 控件树来源（可选）。
+     *
+     * 主屏（displayId=0）传无障碍通道 —— 于是这条通道也有元素列表；
+     * 副屏没有 → null，模型只能看截图猜坐标。借来的通道**不归本类释放**
+     * （它由 ChannelController 持有、跨任务复用）。
+     */
+    private val tree: AccessibilityChannel? = null,
 ) : DeviceChannel {
 
-    override val displayName: String = "副屏"
+    override val displayName: String = label
 
-    override val capability: ChannelCapability = ChannelCapability(
-        canScreenshot = true,
-        canInjectInput = true,
-        // 副屏读不到无障碍树 —— 这条决定了模型只能用坐标
-        canDumpUiTree = false,
-        canMultiTouch = false,
-        canSetText = false,
-        canAccessSecureWindow = true,
-        // Shizuku 无 root 时每次重启都要重新授权
-        survivesReboot = false,
-    )
+    /**
+     * ⚠️ 这几项是**动态**的：主屏那档借的是无障碍通道，而"借不借得到"取决于
+     * 无障碍服务此刻连着没有 —— 用 `tree != null` 判断会撒谎（没开无障碍时
+     * 仍然报"能读控件树"，于是 Agent 的"连续读不到树"止损会在第 6 步误杀，
+     * 实测踩过）。
+     */
+    private val a11yOnline: Boolean
+        get() = tree != null && com.aiphone.assistant.a11y.AutoService.isConnected
+
+    override val capability: ChannelCapability
+        get() = ChannelCapability(
+            canScreenshot = true,
+            canInjectInput = true,
+            // 有控件树可借（主屏 + 无障碍此刻在线）才有"元素列表"这个能力
+            canDumpUiTree = a11yOnline,
+            // 双指缩放 / 中文输入 shell 的 `input` 都做不到，借无障碍来做
+            canMultiTouch = a11yOnline,
+            canSetText = a11yOnline,
+            canAccessSecureWindow = true,
+            // Shizuku 无 root 时每次重启都要重新授权
+            survivesReboot = false,
+        )
 
     /** 上一次截图失败的原因，probe/报错时用 */
     @Volatile
@@ -97,12 +120,18 @@ class DisplayChannel(
     override suspend fun screenSize(): Pair<Int, Int>? = size
 
     override suspend fun screenshot(): ByteArray? = withContext(Dispatchers.IO) {
-        // 副屏画面进 ImageReader，直接从 shell 服务抓当前帧；
-        // screencap -d 对虚拟屏返回 Status -2、拿不到图
-        val bytes = ShizukuBridge.grabFrame(context)
+        // 主屏（displayId=0）：`screencap -p` 就是最直接的取图方式，
+        // 而且走的是 shell 身份 —— 安全窗口也截得到。
+        // 副屏：`screencap -d` 对虚拟屏返回 Status -2、拿不到图，
+        // 画面进的是 ImageReader，只能从 shell 服务抓当前帧。
+        val bytes = if (displayId == 0) {
+            AdbShell.screenshot(context)
+        } else {
+            ShizukuBridge.grabFrame(context)
+        }
         if (bytes.isEmpty()) {
-            lastShotError = "抓不到副屏 $displayId 的画面。副屏可能已经被撤掉，" +
-                "或者 shell 服务断开了。"
+            lastShotError = "抓不到$label（id=$displayId）的画面。" +
+                "屏幕可能已经没了，或者 shell 服务断开了。"
             Log.w(TAG, lastShotError!!)
             null
         } else {
@@ -112,21 +141,23 @@ class DisplayChannel(
     }
 
     /**
-     * 副屏没有控件树。
+     * 控件树交给 [tree]（主屏借无障碍）。
      *
-     * 返回 null 而不是空串：Agent 收到 null 时会在提示词里写
-     * "这次没能读到控件树，请直接用截图判断，并用 x/y 给坐标" ——
-     * 这正是副屏模式该走的路。
+     * 没有可借的（副屏、或用户没开无障碍）时返回 null 而不是空串：
+     * Agent 收到 null 时会在提示词里写"这次没能读到控件树，请直接用截图
+     * 判断，并用 x/y 给坐标" —— 这正是那条路该走的形态。
      */
-    override suspend fun dumpUiTree(): String? = null
+    override suspend fun dumpUiTree(): String? = tree?.dumpUiTree()
 
-    /** 副屏读不到控件树：明确回报"根节点拿不到"，而不是一句空文本 */
-    override suspend fun readTree(): UiTreeRead = UiTreeRead.unavailable()
+    /** 借不到控件树时明确回报"根节点拿不到"，而不是一句空文本 */
+    override suspend fun readTree(): UiTreeRead = tree?.readTree() ?: UiTreeRead.unavailable()
 
-    override suspend fun currentNodes(): List<com.aiphone.assistant.a11y.UiNode> = emptyList()
+    override suspend fun currentNodes(): List<com.aiphone.assistant.a11y.UiNode> =
+        tree?.currentNodes() ?: emptyList()
 
-    /** 副屏没有控件树，也就不存在"读到没读到"的区别 —— 一律 null */
-    override suspend fun currentNodesOrNull(): List<com.aiphone.assistant.a11y.UiNode>? = null
+    /** 借不到控件树，也就不存在"读到没读到"的区别 —— 一律 null */
+    override suspend fun currentNodesOrNull(): List<com.aiphone.assistant.a11y.UiNode>? =
+        tree?.currentNodesOrNull()
 
     override suspend fun perform(
         action: TouchAction,
@@ -134,11 +165,65 @@ class DisplayChannel(
         hint: com.aiphone.assistant.a11y.UiNode?,
     ): String? = withContext(Dispatchers.IO) {
         try {
-            // 副屏没有控件列表（currentNodes 为空），index 无法解析成坐标。
-            // 显式拒绝带 index 的动作，别让 x/y 默认 0 的 index 动作静默点到 (0,0)。
+            // 可借的无障碍通道：主屏那档才有，而且**必须此刻在线**
+            // （没开无障碍时借不到，下面各分支要给出"没有元素列表"的实话）
+            val borrow = tree?.takeIf { com.aiphone.assistant.a11y.AutoService.isConnected }
+
+            // 编号类动作：shell 的 `input` 不认识编号，但可以**借无障碍把编号
+            // 解析成坐标**（身份匹配那套保护照旧生效），再由 shell 点下去 ——
+            // 于是"元素列表"这个定位主力在 ADB 模式下也不丢，
+            // 而落点仍然是 shell 注入的（安全窗口也点得动）。
             if (action.targetIndex > 0) {
-                return@withContext "副屏没有元素列表，不能用 index。请只看截图、用 x / y 给坐标，不要给 index。"
+                if (borrow == null) {
+                    return@withContext "$label 没有元素列表，不能用 index。" +
+                        "请只看截图、用 x / y 给坐标，不要给 index。"
+                }
+                // 只有"点/长按/双击"这三种按编号做才有意义；其余（滚动、输入、按键…）
+                // 照下面的坐标逻辑走
+                when (action.kind) {
+                    TouchKind.TAP, TouchKind.LONG_PRESS, TouchKind.DOUBLE_TAP -> {
+                        val node = when (val t = borrow.resolveTapTarget(action.targetIndex, hint)) {
+                            is AccessibilityChannel.TapTarget.Failed -> return@withContext t.reason
+                            is AccessibilityChannel.TapTarget.Found -> t.node
+                        }
+                        onPoint?.invoke(node.centerX, node.centerY)
+                        return@withContext when (action.kind) {
+                            TouchKind.TAP -> ok(
+                                AdbShell.tap(context, displayId, node.centerX, node.centerY),
+                                "点击",
+                            )
+
+                            TouchKind.LONG_PRESS -> {
+                                val ms = action.durationMs.coerceIn(500, 10_000)
+                                ok(
+                                    AdbShell.swipe(
+                                        context, displayId,
+                                        node.centerX, node.centerY,
+                                        node.centerX, node.centerY, ms,
+                                    ),
+                                    "长按",
+                                )
+                            }
+
+                            else -> {
+                                val first =
+                                    AdbShell.tap(context, displayId, node.centerX, node.centerY)
+                                delay(120)
+                                val second =
+                                    AdbShell.tap(context, displayId, node.centerX, node.centerY)
+                                if (first.contains("错误") || second.contains("错误")) {
+                                    "双击失败"
+                                } else {
+                                    null
+                                }
+                            }
+                        }
+                    }
+
+                    else -> Unit
+                }
             }
+
             when (action.kind) {
                 // dismiss_dialog 在 Agent 层就转成 TAP，不会走到通道；兜底报错
                 TouchKind.DISMISS_DIALOG -> "内部错误：关闭弹窗未在端侧处理"
@@ -214,8 +299,13 @@ class DisplayChannel(
                     // input text 只认 ASCII，中文会静默失败 —— 如实报出来，
                     // 别让模型以为输进去了
                     if (action.text.any { it.code > 127 }) {
-                        "副屏上没法输入中文（input text 只支持 ASCII）。" +
-                            "这一步请改用主屏模式，或者让用户自己输入。"
+                        // 中文 shell 的 input 做不到，借无障碍的 ACTION_SET_TEXT
+                        if (borrow != null) {
+                            borrow.perform(action, onPoint, hint)
+                        } else {
+                            "$label 上没法输入中文（input text 只支持 ASCII），" +
+                                "无障碍又没开着。让用户自己输入，或者到「权限」页把无障碍开上。"
+                        }
                     } else {
                         ok(AdbShell.inputText(context, displayId, action.text), "输入")
                     }
@@ -240,9 +330,19 @@ class DisplayChannel(
                 }
 
                 TouchKind.PINCH_OUT, TouchKind.PINCH_IN ->
-                    "副屏上不支持双指手势（input 只能单指）"
+                    // 双指 shell 的 input 做不到（只支持单指），借无障碍的手势模拟
+                    if (borrow != null) {
+                        borrow.perform(action, onPoint, hint)
+                    } else {
+                        "$label 上不支持双指手势（input 只能单指）"
+                    }
 
-                TouchKind.MULTI_FINGER -> "副屏上不支持多指手势"
+                TouchKind.MULTI_FINGER ->
+                    if (borrow != null) {
+                        borrow.perform(action, onPoint, hint)
+                    } else {
+                        "$label 上不支持多指手势"
+                    }
             }
         } catch (t: Throwable) {
             "副屏操作失败：${t.javaClass.simpleName} ${t.message}"

@@ -87,4 +87,18 @@ interface IShellService {
      * @return 被销毁的 displayId（没有副屏可销毁返回 -1；失败返回 -2）
      */
     int destroyDisplay() = 6;
+
+    /**
+     * 截主屏（displayId=0）或指定屏，**在 shell 侧压成 JPEG 再回来**。
+     *
+     * ## 为什么要压
+     *
+     * `screencap -p` 出来的是好几 MB 的 PNG，而 **binder 的事务上限约 1MB** ——
+     * 直接回 `execBytes` 的结果会抛 TransactionTooLargeException，调用方只看到
+     * "截图永远失败"，从错误里根本看不出是尺寸问题（副屏那条路同理：帧是在
+     * 服务侧压成 JPEG 才回传的）。
+     *
+     * @return JPEG 字节；失败返回空数组
+     */
+    byte[] screenshotJpeg(int displayId) = 7;
 }

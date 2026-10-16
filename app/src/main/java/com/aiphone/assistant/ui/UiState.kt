@@ -78,6 +78,14 @@ data class MainUiState(
     /** Shizuku 当前状态（给「权限」页副屏状态行用），例如「已就绪」 */
     val shizukuState: String = "",
 
+    /**
+     * Shizuku 是不是真的**可用**（装了、在跑、也授权了）。
+     *
+     * 和 [shizukuState] 的区别：那是给人看的一句话，这是给界面做判断用的。
+     * 「操作方式」里的 ADB / Shizuku 只有在它为 true 时才让选。
+     */
+    val shizukuReady: Boolean = false,
+
     /** 设置页显示的日志统计，例如 "共 3 次记录 · 1.2 MB" */
     val logStats: String = "",
 

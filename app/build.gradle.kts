@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 54      // 0.9.14：任务结束不再重复发一张一样的收尾卡
-        versionName = "0.9.14"
+        versionCode = 55      // 0.9.15：「ADB / Shizuku」操作方式真的能用了
+        versionName = "0.9.15"
     }
 
     /**

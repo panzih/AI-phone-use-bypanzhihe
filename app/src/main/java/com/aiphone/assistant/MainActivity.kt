@@ -283,6 +283,9 @@ private fun AppRoot(
     /** Shizuku 当前状态（设置页「副屏」状态行用） */
     var shizukuState by remember { mutableStateOf("") }
 
+    /** Shizuku 是不是真的可用（「操作方式」里 ADB / Shizuku 能不能选，看它） */
+    var shizukuReady by remember { mutableStateOf(false) }
+
     /**
      * 本次任务是从上下文里的第几轮开始的。
      *
@@ -481,7 +484,9 @@ private fun AppRoot(
         macros = loadMacroSummaries(context)
         schedules = ScheduleStore.loadAll(context)
         exactAlarmGranted = Scheduler.canScheduleExact(context)
-        shizukuState = ShizukuBridge.state(context).label
+        val sz = ShizukuBridge.state(context)
+        shizukuState = sz.label
+        shizukuReady = sz == ShizukuBridge.State.READY
 
         scope.launch {
             val snapshot = withContext(Dispatchers.IO) {
@@ -918,7 +923,26 @@ private fun AppRoot(
         //    ForegroundServiceDidNotStartInTimeException 把整个 app 搞崩。
         //
         // 返回时不清空输入框：用户刚打的字还在，开完无障碍直接再点发送即可。
-        if (!runOnVirtualDisplay && !com.aiphone.assistant.a11y.AutoService.isConnected) {
+        //
+        // 操作方式是 ADB / Shizuku 时不看无障碍：那条路的"能不能用"问的是
+        // Shizuku（动作和截图都靠它）。无障碍这时是**可选**的 —— 开着读控件树，
+        // 没开就退化成"看截图用坐标"，所以不在这里拦。
+        val adbMode = settings.mode == com.aiphone.assistant.data.OperationMode.ADB
+        controller.preferAdbMode(adbMode)
+        if (adbMode) {
+            if (ShizukuBridge.state(context) != ShizukuBridge.State.READY) {
+                val why = ShizukuBridge.state(context).label
+                addLog(
+                    LogKind.ERROR,
+                    "操作方式是「ADB / Shizuku」，但 Shizuku 现在不可用（$why）。" +
+                        "到「权限」页把 Shizuku 启动并授权；" +
+                        "或者把「操作方式」切回无障碍。",
+                    "Shizuku 不可用",
+                )
+                toast = "Shizuku 不可用（$why）"
+                return
+            }
+        } else if (!runOnVirtualDisplay && !com.aiphone.assistant.a11y.AutoService.isConnected) {
             addLog(
                 LogKind.ERROR,
                 "还没开启无障碍服务。到「权限」页里开一下再发任务。",
@@ -1374,6 +1398,7 @@ private fun AppRoot(
                 overlayGranted = overlayGranted,
                 notifGranted = notifGranted,
                 shizukuState = shizukuState,
+                shizukuReady = shizukuReady,
                 exactAlarmGranted = exactAlarmGranted,
                 toast = toast,
             ),

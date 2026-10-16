@@ -211,6 +211,59 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
     fun lastParsedNodes(): List<UiNode> = lastNodes
 
     /**
+     * 编号解析的结果。
+     *
+     * [Failed.reason] 是**给用户/模型看的中文原因**，不是异常 —— 这条链路上
+     * 失败都是"如实告诉对方发生了什么"，不抛。
+     */
+    sealed interface TapTarget {
+        data class Found(val node: UiNode) : TapTarget
+        data class Failed(val reason: String) : TapTarget
+    }
+
+    /**
+     * 把「编号 / 身份线索」解析成**这一帧里对应的那个元素**。
+     *
+     * 单独抽出来是因为 ADB 模式（shell 注入）也要用它：shell 的 `input tap`
+     * 不认识编号，但可以照这里解析出来的坐标点下去 —— 于是"按身份找回、
+     * 找不回就如实失败"这套保护**两条通道完全一致**，不会出现
+     * "无障碍模式下很准、切到 ADB 模式就开始盲点第 N 个"。
+     *
+     * 每次调用都重新解析（节点对象不能跨帧复用，界面一变就失效）。
+     */
+    suspend fun resolveTapTarget(index: Int, hint: UiNode?): TapTarget =
+        withContext(Dispatchers.IO) {
+            val svc = service ?: return@withContext TapTarget.Failed("无障碍服务未连接")
+            val (w, h) = screenSize() ?: (1080 to 1920)
+            val nodes = svc.parseTreeDetailed(w, h, limit = TREE_LIMIT).nodes
+            lastNodes = nodes
+
+            if (hint != null) {
+                // 拿模型看到的那一帧当线索时，先按身份在新一帧里找回来
+                val m = NodeLocator.locate(hint, nodes, w)
+                    ?: return@withContext TapTarget.Failed(
+                        "这一步要点的「${hint.labelForLog()}」（当时是编号[$index]）" +
+                            "已经不在当前界面上了，说明界面变了。请重新观察界面元素后再点。",
+                    )
+                // 记下"怎么找回来的"：复盘时要能看出是身份匹配还是编号兜底
+                if (m.node.index != index) {
+                    android.util.Log.i(
+                        "AccessibilityChannel",
+                        "编号漂移：模型看到 [$index]「${hint.labelForLog()}」，" +
+                            "按${m.reason}在新一帧匹配到 [${m.node.index}]",
+                    )
+                }
+                TapTarget.Found(m.node)
+            } else {
+                val direct = nodes.firstOrNull { it.index == index }
+                    ?: return@withContext TapTarget.Failed(
+                        "找不到编号 $index 的元素。可能界面已经变了，请重新观察。",
+                    )
+                TapTarget.Found(direct)
+            }
+        }
+
+    /**
      * 按节点编号点击。
      *
      * 这是**比坐标点击更可靠**的一条路：坐标直接来自系统给的 bounds，
@@ -239,33 +292,11 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
     ): String? = withContext(Dispatchers.IO) {
         val svc = service ?: return@withContext "无障碍服务未连接"
 
-        // 每次操作都要重新解析 —— 节点对象不能跨帧复用，界面一变就失效
-        val (w, h) = screenSize() ?: (1080 to 1920)
-        val parsed = svc.parseTreeDetailed(w, h, limit = TREE_LIMIT)
-        val nodes = parsed.nodes
-        lastNodes = nodes
-
-        // 拿模型看到的那一帧当线索时，先按身份在新一帧里找回来
-        val match: NodeLocator.Match = if (hint != null) {
-            val m = NodeLocator.locate(hint, nodes, w)
-                ?: return@withContext "这一步要点的「${hint.labelForLog()}」" +
-                    "（当时是编号[$index]）已经不在当前界面上了，说明界面变了。" +
-                    "请重新观察界面元素后再点。"
-            // 记下"怎么找回来的"：复盘时要能看出是身份匹配还是编号兜底
-            if (m.node.index != index) {
-                android.util.Log.i(
-                    "AccessibilityChannel",
-                    "编号漂移：模型看到 [$index]「${hint.labelForLog()}」，" +
-                        "按${m.reason}在新一帧匹配到 [${m.node.index}]",
-                )
-            }
-            m
-        } else {
-            val direct = nodes.firstOrNull { it.index == index }
-                ?: return@withContext "找不到编号 $index 的元素。可能界面已经变了，请重新观察。"
-            NodeLocator.Match(direct, "编号")
+        // 解析编号（已经处理过"界面变了怎么找回"这件事，见 [resolveTapTarget]）
+        val resolved: UiNode = when (val t = resolveTapTarget(index, hint)) {
+            is TapTarget.Failed -> return@withContext t.reason
+            is TapTarget.Found -> t.node
         }
-        val resolved: UiNode = match.node
 
         // 先报落点再动手：用户看到的水波位置，就是这一下真正点下去的地方
         onPoint?.invoke(resolved.centerX, resolved.centerY)
@@ -273,6 +304,7 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
         // 取原始节点：节点级点击最准（不可点的容器会自动往上找可点的父节点）。
         // 取回来时再核对一次 bounds —— 万一刚才那一帧又变了，就不做节点级点击，
         // 直接用匹配到的中心坐标手势，至少落点是"身份匹配过"的那个控件
+        val (w, h) = screenSize() ?: (1080 to 1920)
         val target = svc.findNodeByIndex(resolved.index, w, h)
         val rect = android.graphics.Rect()
         target?.getBoundsInScreen(rect)

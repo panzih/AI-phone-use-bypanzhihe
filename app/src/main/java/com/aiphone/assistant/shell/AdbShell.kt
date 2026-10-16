@@ -131,9 +131,15 @@ object AdbShell {
     // 截图
     // ------------------------------------------------------------------
 
-    /** 截主屏 */
+    /**
+     * 截主屏。
+     *
+     * ⚠️ 回来的是 **JPEG**：`screencap -p` 的 PNG 有好几 MB，过不了 binder 的
+     * 事务上限（约 1MB），所以由 shell 侧压过一道再回传
+     * （见 `ShellService.screenshotJpeg`）。
+     */
     suspend fun screenshot(context: Context): ByteArray =
-        ShizukuBridge.runBytes(context, "screencap -p")
+        ShizukuBridge.screenshotJpeg(context, 0)
 
     /**
      * （旧链路）用 `screencap -d <id>` 截指定显示器。

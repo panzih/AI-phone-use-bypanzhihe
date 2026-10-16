@@ -29,24 +29,53 @@ import kotlinx.coroutines.withContext
 class ChannelController(private val context: Context) {
 
     /**
-     * 操作目标在哪块屏上。
+     * 操作目标在哪块屏上、动作从哪儿走。
      *
-     *   ACCESSIBILITY   主屏，走无障碍（默认，能力最全）
-     *   VIRTUAL_DISPLAY 副屏，走 Shizuku 的 shell 命令（没有控件树）
+     *   ACCESSIBILITY   主屏，走无障碍（默认，一次授权长期有效）
+     *   ADB_MAIN        主屏，走 Shizuku 的 shell（用户在「操作方式」里选了
+     *                   ADB / Shizuku）；控件树仍借无障碍，没开也能跑
+     *   VIRTUAL_DISPLAY 副屏，同样走 shell（没有控件树）
      *
      * 上层（Agent、技能）不需要知道用的是哪条 —— 它们只调
      * [probe]/[screenSize]/[readUiTree]/[captureFrame]/[execute]，
      * 由这里决定命令发到哪儿。
      */
-    enum class Mode { ACCESSIBILITY, VIRTUAL_DISPLAY }
+    enum class Mode { ACCESSIBILITY, ADB_MAIN, VIRTUAL_DISPLAY }
 
     private var accessibility: AccessibilityChannel? = null
     private var display: DisplayChannel? = null
+
+    /** 主屏 shell 通道（ADB / Shizuku 操作方式） */
+    private var adbMain: DisplayChannel? = null
+
+    /**
+     * 用户在「权限 → 操作方式」里选的是不是 ADB / Shizuku。
+     *
+     * 单独存一个布尔而不是直接复用 [mode]：主屏 shell 是**懒建**的
+     * （建它要问一次屏幕尺寸），而 mode 只有进/出副屏时才动。
+     */
+    @Volatile
+    private var preferredAdb = false
+
+    /** 任务开始前由界面按设置同步一次 */
+    fun preferAdbMode(on: Boolean) {
+        if (preferredAdb == on) return
+        preferredAdb = on
+        android.util.Log.i("ChannelController", if (on) "操作方式：ADB / Shizuku" else "操作方式：无障碍")
+    }
 
     @Volatile
     private var mode: Mode = Mode.ACCESSIBILITY
 
     val isVirtualDisplay: Boolean get() = mode == Mode.VIRTUAL_DISPLAY && display != null
+
+    /**
+     * 当前通道**能不能读到控件树**。
+     *
+     * Agent 用它决定"连续读不到树要不要止损"：副屏、以及没开无障碍的 ADB 模式
+     * 本来就读不到，那不是环境坏了，不该按失败计数。
+     */
+    val canDumpUiTree: Boolean get() = ensureChannel().capability.canDumpUiTree
 
     /**
      * 副屏 displayId；不在副屏模式时为 null。
@@ -85,12 +114,45 @@ class ChannelController(private val context: Context) {
      * 副屏没设置好时**回退到无障碍**而不是抛异常 —— 宁可走错通道让用户
      * 看见主屏在被操作，也不要因为一处状态不同步就整个崩掉。
      */
-    fun ensureChannel(): DeviceChannel =
-        if (isVirtualDisplay) {
-            display!!
-        } else {
-            accessibility ?: AccessibilityChannel(context).also { accessibility = it }
+    fun ensureChannel(): DeviceChannel = when {
+        isVirtualDisplay -> display!!
+        preferredAdb -> adbMain ?: buildAdbMain()
+        else -> accessibility ?: AccessibilityChannel(context).also { accessibility = it }
+    }
+
+    /**
+     * 主屏 shell 通道。
+     *
+     * 尺寸走 `DisplayManager.getDisplay(0)` 的 real size —— 不能拿应用自己的
+     * 窗口尺寸：窗口可能被分屏/挖孔裁过，而 `input tap` 收的是**整屏坐标**。
+     */
+    private fun buildAdbMain(): DisplayChannel {
+        val size = runCatching {
+            val dm = context.getSystemService(android.hardware.display.DisplayManager::class.java)
+            val d = dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+            val p = android.graphics.Point()
+            @Suppress("DEPRECATION")
+            d?.getRealSize(p)
+            if (p.x > 0 && p.y > 0) p.x to p.y else 0 to 0
+        }.getOrDefault(0 to 0).let { if (it.first > 0) it else fallbackSize() }
+
+        val tree = accessibility ?: AccessibilityChannel(context).also { accessibility = it }
+        return DisplayChannel(
+            context = context,
+            displayId = android.view.Display.DEFAULT_DISPLAY,
+            size = size,
+            label = "主屏（Shizuku）",
+            tree = tree,
+        ).also {
+            adbMain = it
+            android.util.Log.i("ChannelController", "启用 ADB / Shizuku 通道：主屏 $size")
         }
+    }
+
+    private fun fallbackSize(): Pair<Int, Int> = runCatching {
+        val m = context.resources.displayMetrics
+        (m.widthPixels to m.heightPixels).takeIf { it.first > 0 && it.second > 0 }
+    }.getOrNull() ?: (1080 to 1920)
 
     /**
      * 探测能不能用。
@@ -196,6 +258,7 @@ class ChannelController(private val context: Context) {
         accessibility = null
         display?.release()
         display = null
+        adbMain = null
         mode = Mode.ACCESSIBILITY
     }
 }
