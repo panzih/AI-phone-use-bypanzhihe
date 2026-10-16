@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 53      // 0.9.13：对话默认停在最后一条 + 新消息自动跟随
-        versionName = "0.9.13"
+        versionCode = 54      // 0.9.14：任务结束不再重复发一张一样的收尾卡
+        versionName = "0.9.14"
     }
 
     /**

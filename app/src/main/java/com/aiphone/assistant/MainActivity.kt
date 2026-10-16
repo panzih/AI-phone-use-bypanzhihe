@@ -854,11 +854,25 @@ private fun AppRoot(
                         },
                     )
 
-                    addLog(
-                        if (success) LogKind.RESULT else LogKind.ERROR,
-                        message,
-                        if (success) "任务完成" else "任务结束",
-                    )
+                    // 收尾卡只出现一次。
+                    //
+                    // Agent 在结束之前，往往已经用更具体的标签（「做不了」/「完成」/
+                    // 「模型出错」…）把同一句话说过一遍了；这里再原样发一张，
+                    // 用户看到的是**两段完全相同的文字**，像界面出了错。
+                    // 所以就地把那条升级成收尾卡 —— 每次任务结尾仍然恰好一张。
+                    val last = logs.lastOrNull()
+                    if (last != null && last.text == message) {
+                        logs[logs.lastIndex] = last.copy(
+                            kind = if (success) LogKind.RESULT else LogKind.ERROR,
+                            label = if (success) "任务完成" else "任务结束",
+                        )
+                    } else {
+                        addLog(
+                            if (success) LogKind.RESULT else LogKind.ERROR,
+                            message,
+                            if (success) "任务完成" else "任务结束",
+                        )
+                    }
                 }
 
                 override fun isStopRequested(): Boolean = stopRequested
