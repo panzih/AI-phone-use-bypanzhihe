@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 51      // 0.9.11：API Key 加密落盘、公网 HTTP 界面警告、加 CI、拆 Agent 迁移逻辑
-        versionName = "0.9.11"
+        versionCode = 52      // 0.9.12：免费通道不再发 thinking:disabled / 图片 detail（space-bunny 上游 400 修复）
+        versionName = "0.9.12"
     }
 
     /**

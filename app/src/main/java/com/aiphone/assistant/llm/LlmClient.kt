@@ -716,7 +716,14 @@ class LlmClient(private val cfg: LlmConfig) {
         }
     }
 
-    private fun buildBody(
+    /**
+     * 组装请求体。
+     *
+     * `internal` 是给单测留的口子：免费通道契约的字段策略都在这里，
+     * 上游对多余字段是严格校验的（见 thinking 的处理），必须有测试
+     * 钉住"发什么、绝对不发什么"（`FreeLaneBodyTest`）。
+     */
+    internal fun buildBody(
         system: String,
         history: List<ChatTurn>,
     ): JSONObject {
@@ -751,7 +758,17 @@ class LlmClient(private val cfg: LlmConfig) {
                                     "image_url",
                                     JSONObject().apply {
                                         put("url", "data:${mimeOf(image)};base64,${b64(image)}")
-                                        put("detail", cfg.detail)
+                                        // 免费通道不带 detail 字段。
+                                        // 2026-10-16 实测：space-bunny-free 的上游对
+                                        // detail:"original" 直接 400 invalid_request
+                                        // （"auto" / 不带字段都 200；把 image_url 摊平成
+                                        // 纯字符串也 400，形态别动）。
+                                        // 省略 = 由上游取默认值，是免费池的最小公倍数；
+                                        // "original" 保真度的损失可以接受 —— 免费通道
+                                        // 本来也没有别的保真度选项可用。
+                                        if (!cfg.useFreeModel) {
+                                            put("detail", cfg.detail)
+                                        }
                                     },
                                 )
                             }
@@ -772,8 +789,21 @@ class LlmClient(private val cfg: LlmConfig) {
             if (!cfg.thinking.thinkingOn) {
                 put("temperature", cfg.temperature)
             }
+            // thinking 字段：免费通道不发"明确关闭"形态。
+            //
+            // 2026-10-16 线上事故（0.9.11 用户实测）：OFF 档发
+            // `thinking:{"type":"disabled"}`，space-bunny-free 的上游对
+            // 非标准字段做严格校验，直接回 400 invalid_request。
+            // 同日 8 个免费模型 × 2 种形态的实测矩阵：只有 space-bunny 拒
+            // disabled，而 enabled + reasoning_effort 被所有还能跑通的模型
+            // 接受。"disabled" 对免费上游也不承载语义 —— 它们默认就不推理。
+            // 所以 OFF 档在免费通道干脆不带字段；自定义通道（DeepSeek /
+            // Kimi 等）保持原样，那边的 disabled 是有意义的。
             cfg.thinking.toggle?.let { toggle ->
-                put("thinking", JSONObject().put("type", toggle))
+                val offOnFreeLane = cfg.useFreeModel && cfg.thinking == ThinkingMode.OFF
+                if (!offOnFreeLane) {
+                    put("thinking", JSONObject().put("type", toggle))
+                }
             }
             cfg.thinking.effort?.let { put("reasoning_effort", it) }
             // 免费通道（opencode.ai 免密池）的客户端契约。

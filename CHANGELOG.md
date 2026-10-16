@@ -7,6 +7,31 @@
 
 ---
 
+## 0.9.12
+
+> 0.9.11 装机实测发现的线上问题：免费模型 + 思考模式 OFF 时，每一次
+> 模型调用都失败（"模型出错：请求被拒绝"）。排查时又在同族位置揪出第二处。
+
+### 修复
+
+- **免费通道在 OFF 档不再发送 `thinking:{"type":"disabled"}`**。
+  这个字段是 0.9 时代为 DeepSeek / Kimi 这类参数化思考的渠道设计的；
+  免费通道的 `space-bunny-free` 上游对请求体做严格 schema 校验，
+  见 `disabled` 就回 `400 Upstream request failed:
+  [invalid_request_error] invalid request`。
+  - 免费通道 OFF 档改为**不带这个字段**（`disabled` 对免费上游本就不承载
+    语义 —— 它们默认不推理）；`enabled` + `reasoning_effort` 照旧，
+    实测被所有还能跑通的免费模型接受；
+  - 自定义通道（DeepSeek / Kimi 等）行为不变。
+- **免费通道的截图消息不再带 `image_url.detail`**。同一个上游连
+  `detail:"original"`（App 里的固定默认值）也拒 —— `"auto"` 和不带字段
+  都 200。免费通道改为省略，由上游取默认值。
+- 两处例外都**不外溢到自定义通道**。回归测试 `FreeLaneBodyTest` 钉住
+  "各思考档 × 两类通道 × 带不带图"的请求体字段策略，包括绝对不能多发
+  的那些字段。
+
+---
+
 ## 0.9.11
 
 > 这一版的改动来自一份项目评审报告（v0.9.9 基线，综合 7.9/10）。
