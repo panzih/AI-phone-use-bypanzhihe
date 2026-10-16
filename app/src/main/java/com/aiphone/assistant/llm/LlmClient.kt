@@ -212,8 +212,17 @@ class LlmClient(private val cfg: LlmConfig) {
      */
     private val freeSessionId = "ses_" + invertedTimestampHex() + randomBase62(14)
 
-    /** 每请求一个的 request id，格式同 session（msg_ 前缀，12 hex + 14 base62）。 */
-    private fun freeRequestId(): String = "msg_" + invertedTimestampHex() + randomBase62(14)
+    /** 每请求一个的 request id：req_ 前缀 + 32 位随机 hex（照抄 v0.3.12 ids.ts randomID('req', 16)）。 */
+    private fun freeRequestId(): String = "req_" + randomHex(32)
+
+    /**
+     * project id：prj_ 前缀 + sha256('prj\x00opencode2dsh:default-project') 前 12 字节 hex。
+     * 照抄 v0.3.12 ids.ts stableID('prj', 'opencode2dsh:default-project')，固定值。
+     */
+    private val freeProjectId: String by lazy {
+        val digest = MessageDigest.getInstance("SHA-256").digest("prj opencode2dsh:default-project".toByteArray())
+        "prj_" + digest.sliceArray(0 until 12).joinToString("") { "%02x".format(it) }
+    }
 
     /**
      * 反相时间戳：12 位 hex，低 12 bit 是 counter=1（反相后为 0xffe），
@@ -238,6 +247,15 @@ class LlmClient(private val cfg: LlmConfig) {
         val rnd = java.util.Random()
         return StringBuilder().apply {
             repeat(length) { append(alphabet[rnd.nextInt(62)]) }
+        }.toString()
+    }
+
+    /** 生成指定长度的小写 hex 随机串。 */
+    private fun randomHex(length: Int): String {
+        val hex = "0123456789abcdef"
+        val rnd = java.util.Random()
+        return StringBuilder().apply {
+            repeat(length) { append(hex[rnd.nextInt(16)]) }
         }.toString()
     }
 
@@ -440,19 +458,22 @@ class LlmClient(private val cfg: LlmConfig) {
             // 自定义通道保持 application/json。
             setRequestProperty("Accept", if (cfg.useFreeModel) "text/event-stream" else "application/json")
             if (cfg.useFreeModel) {
-                // 免费通道：伪装成 opencode 桌面客户端
-                // 2026-10-15 新风控（issue #78 实测）：
-                //   UA > 1.18.33 时必须同时带 x-opencode-session-id（值同 session），
-                //   否则 403。UA 升到 1.18.34 并补上这个头。
+                // 免费通道：伪装成 opencode CLI 客户端
+                // 照抄 opencode2dsh v0.3.12 ids.ts disguiseHeaders()（实测 3/4 模型 200）：
+                //   UA = opencode/1.18.31 (platform arch; nodeX)
+                //   x-opencode-client = cli
+                //   x-opencode-session / x-session-affinity / X-Session-Id = session（三个都带）
+                //   x-opencode-request = req_<32hex>
+                //   x-opencode-project = prj_<24hex>
+                // 注意：v0.3.12 不带 x-opencode-session-id（那是 issue #78 的错误结论）
                 setRequestProperty("Authorization", "Bearer public")
-                setRequestProperty("User-Agent", "opencode/1.18.34")
-                setRequestProperty("x-opencode-client", "desktop")
+                setRequestProperty("User-Agent", "opencode/1.18.31 (linux arm64; node20.0.0)")
+                setRequestProperty("x-opencode-client", "cli")
                 setRequestProperty("x-opencode-session", freeSessionId)
-                setRequestProperty("x-opencode-session-id", freeSessionId)
-                // 网关对 request id 的正则是 msg_[0-9a-f]{12}[0-9A-Za-z]{14}，
-                // 即 12 位 hex + 14 位 base62 = 26 位（之前取了 27 位，格式不合法）
+                setRequestProperty("x-session-affinity", freeSessionId)
+                setRequestProperty("X-Session-Id", freeSessionId)
                 setRequestProperty("x-opencode-request", freeRequestId())
-                setRequestProperty("x-opencode-project", "global")
+                setRequestProperty("x-opencode-project", freeProjectId)
             } else {
                 setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
             }
@@ -664,9 +685,9 @@ class LlmClient(private val cfg: LlmConfig) {
      * 三种都要能用，所以按后缀判断，不硬编码。
      */
     private fun endpoint(): String {
-        // 2026-10-15 起：Bearer public 只能走 /interface/v1，/zen/v1 要 oc_sk_ 凭据
-        // （issue #78 实测：同机器同形状，/zen/v1 403，/interface/v1 200）
-        if (cfg.useFreeModel) return "https://opencode.ai/interface/v1/chat/completions"
+        // 免费通道走 /zen/v1（照抄 v0.3.12 catalog.ts ZEN_BASE_URL = https://opencode.ai/zen）
+        // 实测 2026-10-16：/zen/v1 + v0.3.12 契约 3/4 模型 200 成功
+        if (cfg.useFreeModel) return "https://opencode.ai/zen/v1/chat/completions"
         val base = cfg.baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) return "https://api.deepseek.com/v1/chat/completions"
         return when {
@@ -761,18 +782,18 @@ class LlmClient(private val cfg: LlmConfig) {
             }
             cfg.thinking.effort?.let { put("reasoning_effort", it) }
             // 免费通道（opencode.ai 免密池）的客户端契约。
-            // 2026-10-15 新风控（FishBottle7/opencode2dsh issue #78 实测通过）：
-            //   1. 端点必须是 /interface/v1（/zen/v1 现在要 oc_sk_ 凭据）
+            // 照抄 opencode2dsh v0.3.12（2026-10-16 实测 3/4 模型 HTTP 200）：
+            //   1. 端点 /zen/v1/chat/completions（Bearer public 可用）
             //   2. body.stream = true（非流式直接 403）
-            //   3. body.tools 必须声明 bash + read，且 parameters.properties
-            //      不能为空（空桩 403）——必须有真实参数名和类型
+            //   3. body.tools 必须声明 bash + read，parameters.properties 为空桩 {}
+            //      （v0.3.12 messages.ts: "Schemas and descriptions go uninspected"）
             //   4. tool_choice = "none"（无客户端工具时，模型不会真的调用）
-            //   5. UA > 1.18.33 时必须同时带 x-opencode-session-id 头
-            //   6. session id 的 12 位 hex 必须是反相时间戳（低 12bit ∈ [0,63]）
-            // 源头 issue：opencode-ai/opencode #14313；参考实现：opencode2dsh v0.3.12。
+            //   5. session id 的 12 位 hex 必须是反相时间戳（低 12bit ∈ [0,63]）
+            //   6. 请求头伪装 CLI：UA 1.18.31 + x-opencode-client:cli + 三个 session 头
+            // 源头：opencode2dsh v0.3.12 ids.ts / messages.ts / zen-adapter.ts / catalog.ts
             if (cfg.useFreeModel) {
                 val tools = JSONArray()
-                // bash：真实参数 command（string）
+                // bash：空桩 parameters（v0.3.12 freeLaneGateTool 原样）
                 tools.put(
                     JSONObject().apply {
                         put("type", "function")
@@ -780,31 +801,16 @@ class LlmClient(private val cfg: LlmConfig) {
                             "function",
                             JSONObject().apply {
                                 put("name", "bash")
-                                put("description", "Execute a shell command on the host system.")
-                                put(
-                                    "parameters",
-                                    JSONObject().apply {
-                                        put("type", "object")
-                                        put(
-                                            "properties",
-                                            JSONObject().apply {
-                                                put(
-                                                    "command",
-                                                    JSONObject().apply {
-                                                        put("type", "string")
-                                                        put("description", "The shell command to execute.")
-                                                    },
-                                                )
-                                            },
-                                        )
-                                        put("required", JSONArray().put("command"))
-                                    },
-                                )
+                                put("description", "Reserved for the host runtime; do not call it.")
+                                put("parameters", JSONObject().apply {
+                                    put("type", "object")
+                                    put("properties", JSONObject())
+                                })
                             },
                         )
                     },
                 )
-                // read：真实参数 path（string）
+                // read：空桩 parameters（v0.3.12 freeLaneGateTool 原样）
                 tools.put(
                     JSONObject().apply {
                         put("type", "function")
@@ -812,26 +818,11 @@ class LlmClient(private val cfg: LlmConfig) {
                             "function",
                             JSONObject().apply {
                                 put("name", "read")
-                                put("description", "Read the contents of a file from the host filesystem.")
-                                put(
-                                    "parameters",
-                                    JSONObject().apply {
-                                        put("type", "object")
-                                        put(
-                                            "properties",
-                                            JSONObject().apply {
-                                                put(
-                                                    "path",
-                                                    JSONObject().apply {
-                                                        put("type", "string")
-                                                        put("description", "The absolute or relative path of the file to read.")
-                                                    },
-                                                )
-                                            },
-                                        )
-                                        put("required", JSONArray().put("path"))
-                                    },
-                                )
+                                put("description", "Reserved for the host runtime; do not call it.")
+                                put("parameters", JSONObject().apply {
+                                    put("type", "object")
+                                    put("properties", JSONObject())
+                                })
                             },
                         )
                     },
