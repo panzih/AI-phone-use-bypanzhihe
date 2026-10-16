@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 52      // 0.9.12：免费通道不再发 thinking:disabled / 图片 detail（space-bunny 上游 400 修复）
-        versionName = "0.9.12"
+        versionCode = 53      // 0.9.13：对话默认停在最后一条 + 新消息自动跟随
+        versionName = "0.9.13"
     }
 
     /**

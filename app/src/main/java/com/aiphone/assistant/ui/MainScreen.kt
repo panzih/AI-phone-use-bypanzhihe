@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -57,6 +58,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -232,10 +235,78 @@ private fun DrawerItem(icon: ImageVector, title: String, onClick: () -> Unit, en
     )
 }
 
+/**
+ * 中间那块对话。
+ *
+ * ## 为什么是倒着排的
+ *
+ * 列表用倒序布局（[LazyColumn] 的 `reverseLayout` + `asReversed()`）：
+ * **下标 0 就是最新一条，它贴着底部**。
+ *
+ * 这样"打开应用就停在最后一条"不需要任何额外的滚动动作 —— 那是列表的
+ * **初始位置**。反过来做（正序 + 打开后滚一次）会有两个毛病：
+ * 第一帧先画顶部、下一帧才跳下去，看得见闪一下；而且"滚到最后一条"
+ * 只会把最后一条顶到视口**顶端**，它下面空一大片，像界面坏了。
+ *
+ * 还有一个顺带的好处：新消息永远是"从下面长出来"，不会把正在看的
+ * 那几条往上挤走。
+ */
 @Composable
 private fun TaskOutputArea(state: MainUiState, modifier: Modifier = Modifier) {
-    LazyColumn(modifier = modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(state.logs, key = { it.id }) { entry -> LogEntryRow(entry) }
+    val logs = state.logs
+    val listState = rememberLazyListState()
+
+    /**
+     * 用户是不是"停在最新一条上"。
+     *
+     * 倒序列表里最新一条的下标是 0，所以"它完整露着、没被下边缘切掉"
+     * 就等于"他还在底部"。
+     *
+     * 不用 `canScrollBackward`：内容不满一屏时它的锚点会被顶到第二条，
+     * 把"用户根本没动"误判成"用户翻走了"，于是新消息一条都不跟。
+     */
+    val atTail by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val newest = info.visibleItemsInfo.firstOrNull()
+            newest != null && newest.index == 0 && newest.offset >= info.viewportStartOffset
+        }
+    }
+
+    /**
+     * 组合阶段的一份快照。
+     *
+     * ⚠️ **必须在这里取，不能留到下面的 effect 里现读。**
+     * 新消息的路径是"写进 logs → 重组 → 最后才排版"；等 effect 跑起来时
+     * 排版已经完成，那时看到的已经是"下面多了一条没露出来的消息"，
+     * 现读只会得到"用户翻走了"，新消息一次都跟不上。
+     * 组合发生在排版之前，这里取到的才是"这条消息进来之前他停在哪"。
+     */
+    val wasAtTail = atTail
+
+    // 新消息进来 → 跟着滚到底部；用户自己翻上去看历史时不去拽他
+    LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty() && wasAtTail && listState.layoutInfo.totalItemsCount > 0) {
+            listState.animateScrollToItem(0)
+        }
+    }
+
+    // 用户点了发送（任务开跑）→ 无论刚才翻到了哪儿，都回到最新一条。
+    // 这里用瞬移而不是动画：翻出去很远时，动画会把整段历史拖一遍，很怪
+    LaunchedEffect(state.isRunning) {
+        if (state.isRunning && listState.layoutInfo.totalItemsCount > 0) {
+            listState.scrollToItem(0)
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        reverseLayout = true,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(logs.asReversed(), key = { it.id }) { entry -> LogEntryRow(entry) }
     }
 }
 
