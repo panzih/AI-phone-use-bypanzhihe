@@ -205,27 +205,40 @@ class LlmClient(private val cfg: LlmConfig) {
     /**
      * 免费通道的 session id：整个 App 进程复用一个，不然每请求新建会被 429。
      *
-     * 格式（网关正则 ses_[0-9a-f]{12}[0-9A-Za-z]{14}）：12 位 hex 时间前缀 +
-     * 14 位 base62 随机后缀。前 12 位用随机 hex 即可（真正的客户端是时间戳，
-     * 网关只校验格式，不校验时间），后 14 位用 base62 字母表。
+     * 2026-10-13 起网关不再只校验格式：12 位 hex 必须是**反相时间戳**
+     * （`~(Date.now() * 0x1000 + counter) & 48bit`），低 12 bit 解码后
+     * 必须落在 [0, 63]。随机 hex 只有 ~1.5% 概率命中，几乎必 403。
+     * 照抄 opencode2dsh v0.3.12 的 `invertedTimestampHex()`（issue #62）。
      */
-    private val freeSessionId = "ses_" + canonicalId()
+    private val freeSessionId = "ses_" + invertedTimestampHex() + randomBase62(14)
 
     /** 每请求一个的 request id，格式同 session（msg_ 前缀，12 hex + 14 base62）。 */
-    private fun freeRequestId(): String = "msg_" + canonicalId()
+    private fun freeRequestId(): String = "msg_" + invertedTimestampHex() + randomBase62(14)
 
-    /** 生成「12 位 hex + 14 位 base62」的网关规范 id 片段（共 26 位）。 */
-    private fun canonicalId(): String {
-        val rnd = java.util.Random()
-        val hex = StringBuilder().apply {
-            repeat(12) { append("0123456789abcdef"[rnd.nextInt(16)]) }
-        }.toString()
-        // base62：0-9 A-Z a-z
+    /**
+     * 反相时间戳：12 位 hex，低 12 bit 是 counter=1（反相后为 0xffe），
+     * 高 36 bit 是毫秒时间戳反相。网关只校验低 12 bit ∈ [0, 63]，
+     * 高 36 bit 不查（1970 年的时间戳也能过）。
+     *
+     * 为什么叫"反相"：opencode 官方客户端为了让 id 按字符串排序时最新的在前，
+     * 把时间戳按位取反了。真实 session 的时间段总是以 `ffe` 结尾，
+     * 就是 counter=1 反相后的结构性结果，不是魔法标记。
+     */
+    private fun invertedTimestampHex(): String {
+        val now = System.currentTimeMillis()
+        // now * 0x1000 + 1，然后按位取反，遮罩到 48 bit（12 hex）
+        val current = (now shl 12) or 1L
+        val inverted = current.inv() and 0xFFFFFFFFFFFFL
+        return inverted.toString(16).padStart(12, '0')
+    }
+
+    /** 生成指定长度的 base62 随机串（0-9 A-Z a-z）。 */
+    private fun randomBase62(length: Int): String {
         val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        val tail = StringBuilder().apply {
-            repeat(14) { append(alphabet[rnd.nextInt(62)]) }
+        val rnd = java.util.Random()
+        return StringBuilder().apply {
+            repeat(length) { append(alphabet[rnd.nextInt(62)]) }
         }.toString()
-        return hex + tail
     }
 
     /** 外部叫停（急停按钮 / 任务被停止）。置上之后不再重发 */
@@ -428,10 +441,14 @@ class LlmClient(private val cfg: LlmConfig) {
             setRequestProperty("Accept", if (cfg.useFreeModel) "text/event-stream" else "application/json")
             if (cfg.useFreeModel) {
                 // 免费通道：伪装成 opencode 桌面客户端
+                // 2026-10-15 新风控（issue #78 实测）：
+                //   UA > 1.18.33 时必须同时带 x-opencode-session-id（值同 session），
+                //   否则 403。UA 升到 1.18.34 并补上这个头。
                 setRequestProperty("Authorization", "Bearer public")
-                setRequestProperty("User-Agent", "opencode/1.18.31")
+                setRequestProperty("User-Agent", "opencode/1.18.34")
                 setRequestProperty("x-opencode-client", "desktop")
                 setRequestProperty("x-opencode-session", freeSessionId)
+                setRequestProperty("x-opencode-session-id", freeSessionId)
                 // 网关对 request id 的正则是 msg_[0-9a-f]{12}[0-9A-Za-z]{14}，
                 // 即 12 位 hex + 14 位 base62 = 26 位（之前取了 27 位，格式不合法）
                 setRequestProperty("x-opencode-request", freeRequestId())
@@ -647,7 +664,9 @@ class LlmClient(private val cfg: LlmConfig) {
      * 三种都要能用，所以按后缀判断，不硬编码。
      */
     private fun endpoint(): String {
-        if (cfg.useFreeModel) return "https://opencode.ai/zen/v1/chat/completions"
+        // 2026-10-15 起：Bearer public 只能走 /interface/v1，/zen/v1 要 oc_sk_ 凭据
+        // （issue #78 实测：同机器同形状，/zen/v1 403，/interface/v1 200）
+        if (cfg.useFreeModel) return "https://opencode.ai/interface/v1/chat/completions"
         val base = cfg.baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) return "https://api.deepseek.com/v1/chat/completions"
         return when {
@@ -741,42 +760,82 @@ class LlmClient(private val cfg: LlmConfig) {
                 put("thinking", JSONObject().put("type", toggle))
             }
             cfg.thinking.effort?.let { put("reasoning_effort", it) }
-            // 免费通道（opencode.ai 免密池）的客户端契约，照抄 OurFreeModel
-            // （MIT 协议，ofm-src/src/upstream.js，2026-09-24 实测通过）：
-            //   1. body.stream = true（非流式直接 403 FreeTierError）
-            //   2. body.tools 必须声明 bash/glob/grep/read 四个小写工具名
-            //      （没有真实工具时发「自禁用诱饵」，描述里写明不可用）
-            //   3. tool_choice = "none"（无客户端工具时；OFM applyFingerprint 逻辑）
-            //   4. 请求头：Authorization: Bearer public、User-Agent: opencode/1.18.31、
-            //      x-opencode-client: desktop、x-opencode-session/request（规范 id）、
-            //      x-opencode-project: global、Accept: text/event-stream
-            // 源头 issue：opencode-ai/opencode #14313。
+            // 免费通道（opencode.ai 免密池）的客户端契约。
+            // 2026-10-15 新风控（FishBottle7/opencode2dsh issue #78 实测通过）：
+            //   1. 端点必须是 /interface/v1（/zen/v1 现在要 oc_sk_ 凭据）
+            //   2. body.stream = true（非流式直接 403）
+            //   3. body.tools 必须声明 bash + read，且 parameters.properties
+            //      不能为空（空桩 403）——必须有真实参数名和类型
+            //   4. tool_choice = "none"（无客户端工具时，模型不会真的调用）
+            //   5. UA > 1.18.33 时必须同时带 x-opencode-session-id 头
+            //   6. session id 的 12 位 hex 必须是反相时间戳（低 12bit ∈ [0,63]）
+            // 源头 issue：opencode-ai/opencode #14313；参考实现：opencode2dsh v0.3.12。
             if (cfg.useFreeModel) {
                 val tools = JSONArray()
-                listOf("bash", "glob", "grep", "read").forEach { name ->
-                    tools.put(
-                        JSONObject().apply {
-                            put("type", "function")
-                            put(
-                                "function",
-                                JSONObject().apply {
-                                    put("name", name)
-                                    put(
-                                        "description",
-                                        "This tool is currently unavailable and must not be used.",
-                                    )
-                                    put(
-                                        "parameters",
-                                        JSONObject().apply {
-                                            put("type", "object")
-                                            put("properties", JSONObject())
-                                        },
-                                    )
-                                },
-                            )
-                        },
-                    )
-                }
+                // bash：真实参数 command（string）
+                tools.put(
+                    JSONObject().apply {
+                        put("type", "function")
+                        put(
+                            "function",
+                            JSONObject().apply {
+                                put("name", "bash")
+                                put("description", "Execute a shell command on the host system.")
+                                put(
+                                    "parameters",
+                                    JSONObject().apply {
+                                        put("type", "object")
+                                        put(
+                                            "properties",
+                                            JSONObject().apply {
+                                                put(
+                                                    "command",
+                                                    JSONObject().apply {
+                                                        put("type", "string")
+                                                        put("description", "The shell command to execute.")
+                                                    },
+                                                )
+                                            },
+                                        )
+                                        put("required", JSONArray().put("command"))
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+                // read：真实参数 path（string）
+                tools.put(
+                    JSONObject().apply {
+                        put("type", "function")
+                        put(
+                            "function",
+                            JSONObject().apply {
+                                put("name", "read")
+                                put("description", "Read the contents of a file from the host filesystem.")
+                                put(
+                                    "parameters",
+                                    JSONObject().apply {
+                                        put("type", "object")
+                                        put(
+                                            "properties",
+                                            JSONObject().apply {
+                                                put(
+                                                    "path",
+                                                    JSONObject().apply {
+                                                        put("type", "string")
+                                                        put("description", "The absolute or relative path of the file to read.")
+                                                    },
+                                                )
+                                            },
+                                        )
+                                        put("required", JSONArray().put("path"))
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
                 put("tools", tools)
                 put("tool_choice", "none")
             }
