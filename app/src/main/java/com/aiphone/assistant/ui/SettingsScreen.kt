@@ -270,6 +270,32 @@ private fun ModelSection(
     var fetchError by remember { mutableStateOf<String?>(null) }
     var showFreePicker by remember { mutableStateOf(false) }
 
+    // 免费模型的实时列表：打开选择器时**用接口读**
+    // （null 且不在读 = 读失败，退回内置名单；错误原因单独记着）
+    var freeFetching by remember { mutableStateOf(false) }
+    var freeLive by remember { mutableStateOf<List<FreeModel>?>(null) }
+    var freeFetchError by remember { mutableStateOf<String?>(null) }
+
+    fun loadFreeModels(force: Boolean = false) {
+        // 读过一次就用缓存：同一个界面里反复开关不必重复联网
+        if (!force && (freeLive != null || freeFetching)) return
+        freeFetching = true
+        freeFetchError = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { ModelListFetcher.fetchFree() }
+            }
+            freeFetching = false
+            result.onSuccess { ids -> freeLive = ids.map { FreeModel(it, freeLabel(it)) } }
+                .onFailure { e -> freeFetchError = e.message ?: e.javaClass.simpleName }
+        }
+    }
+
+    fun openFreePicker() {
+        showFreePicker = true
+        loadFreeModels()
+    }
+
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(8.dp))
 
@@ -409,9 +435,9 @@ private fun ModelSection(
                 )
             }
         } else {
-            // 免费模式：点开固定列表
+            // 免费模式：点开后**用接口实时读取**可选模型（失败退回内置名单）
             OutlinedButton(
-                onClick = { showFreePicker = true },
+                onClick = { openFreePicker() },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(stringResource(R.string.settings_model_free_pick)) }
         }
@@ -449,32 +475,66 @@ private fun ModelSection(
             )
         }
 
-        // 免费模式：固定列表
+        // 免费模式：实时列表（用接口读；失败退回内置名单）
         if (showFreePicker) {
+            val live = freeLive
+            val shown = live ?: freeModels
             AlertDialog(
                 onDismissRequest = { showFreePicker = false },
                 title = { Text(stringResource(R.string.settings_model_free_pick)) },
                 text = {
-                    androidx.compose.foundation.lazy.LazyColumn {
-                        items(freeModels) { m ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        onChange(s.copy(modelName = m.id))
-                                        showFreePicker = false
+                    Column {
+                        // 列表是从哪来的，如实写出来（这就是"用接口读取"的可见面）
+                        when {
+                            freeFetching -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "正在从接口读取模型列表 …",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            live != null -> Text(
+                                "已从接口实时读取（${live.size} 个）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            freeFetchError != null -> Text(
+                                "接口读取失败：$freeFetchError（下面用内置名单）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        androidx.compose.foundation.lazy.LazyColumn {
+                            items(shown) { m ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            onChange(s.copy(modelName = m.id))
+                                            showFreePicker = false
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                                ) {
+                                    Column {
+                                        Text(m.label, style = MaterialTheme.typography.bodyLarge)
+                                        Text(m.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    .padding(vertical = 8.dp, horizontal = 4.dp),
-                            ) {
-                                Column {
-                                    Text(m.label, style = MaterialTheme.typography.bodyLarge)
-                                    Text(m.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
                     }
                 },
-                confirmButton = {},
+                confirmButton = {
+                    TextButton(onClick = { loadFreeModels(force = true) }) {
+                        Text(stringResource(R.string.settings_model_free_reload))
+                    }
+                },
                 dismissButton = {
                     TextButton(onClick = { showFreePicker = false }) {
                         Text(stringResource(R.string.schedule_cancel))
@@ -487,6 +547,7 @@ private fun ModelSection(
 
         ThinkingModeSlider(
             current = s.thinking,
+            freeLane = s.useFreeModel,
             onChange = { onChange(s.copy(thinking = it)) },
         )
 
@@ -495,12 +556,15 @@ private fun ModelSection(
 }
 
 /**
- * 免费模式可选的模型（id 要和 opencode.ai 网关认的一致）。
+ * 免费模式的内置模型名单（**只当兜底**）。
  *
- * 这份清单按 2026-10-15 网关 /zen/v1/models 实时目录更新，并剔除了两类：
+ * 正常路径是打开选择器时用接口实时读取（[ModelListFetcher.fetchFree]）——
+ * 这份名单只在读不到时顶上，所以不需要"永远最新"，但仍然按 2026-10-15
+ * 网关 /zen/v1/models 的实时目录校对过，并剔除了三类：
  *  - 已下架：deepseek-v4-flash-free（已升级为 v4.1）、union-alpha、ling-3.0-flash-fin-free
  *  - 中国大陆地域锁（网关直接 403 RegionError）：muse-spark-*、cat-jam-free，
  *    且 muse-spark 走的是另一套 /responses 端点，国内手机也用不了
+ *  - 测试占位：test
  * 下面这些都是走标准 /chat/completions 的模型。
  */
 private val freeModels = listOf(
@@ -514,6 +578,26 @@ private val freeModels = listOf(
     FreeModel("big-pickle", "Big Pickle"),
 )
 
+/**
+ * 接口读回来的只有 id（如 `glm-5.3-flash-free`）。
+ *
+ * 内置名单里有的直接用现成的显示名；没见过的（新上架模型）现拼一个顺眼的：
+ * 去掉 `-free` 后缀、按连字符断词、首字母大写。少数本来就是缩写的词
+ * （GLM、VL …）按全大写显示，不然会变成"Glm""Vl"。
+ */
+private fun freeLabel(id: String): String =
+    freeModels.firstOrNull { it.id == id }?.label
+        ?: id.removeSuffix("-free")
+            .split('-', '_')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { part ->
+                if (part.lowercase() in ACRONYMS) part.uppercase()
+                else part.replaceFirstChar { c -> c.uppercase() }
+            }
+
+/** 拼显示名时保持全大写的词 */
+private val ACRONYMS = setOf("glm", "vl", "ai", "ui", "api", "ocr", "tts")
+
 private data class FreeModel(val id: String, val label: String)
 
 /**
@@ -521,10 +605,15 @@ private data class FreeModel(val id: String, val label: String)
  *
  * 没有开关了：滑块本身就是选择器。最右一档「默认」什么参数都不发，
  * 让服务端自己挑。
+ *
+ * **每一档下面直接显示「接口参数」** —— 档位不是一句形容，而是具体往
+ * 接口里发什么（`thinking.type` / `reasoning_effort`）。这在免费通道会
+ * 显示成不一样的话（OFF 不发），因为那才是真实请求（见 [ThinkingMode.apiFor]）。
  */
 @Composable
 private fun ThinkingModeSlider(
     current: ThinkingMode,
+    freeLane: Boolean,
     onChange: (ThinkingMode) -> Unit,
 ) {
     val options = ThinkingMode.entries
@@ -560,6 +649,17 @@ private fun ThinkingModeSlider(
             text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        // 接口事实行：这一档到底会发什么参数。用户拿它和抓包/日志对得上。
+        Text(
+            text = stringResource(
+                R.string.settings_model_thinking_api,
+                options[draft.toInt().coerceIn(0, options.lastIndex)].apiFor(freeLane),
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 2.dp),
         )
     }
 }

@@ -542,9 +542,25 @@ class LlmClient(private val cfg: LlmConfig) {
      * `choices[0].delta.content` 拼起来，再包成 `{"choices":[{"message":{"content":...}}]}`
      * 交给原来的 parseResponse —— 下游完全不用改。
      * `data: [DONE]` 表示结束；遇到解析不了的行直接跳过（SSE 里可能混心跳/注释）。
+     *
+     * ## 思维链（reasoning_content）也要读
+     *
+     * 思考模式打开时，模型先把思维链放在 `delta.reasoning_content`，正式回答
+     * 放在 `delta.content`（DeepSeek 文档：两者同级）。之前这里**只拼 content**，
+     * 思维链直接被丢掉 —— 平时的代价只是"看不见模型在想什么"，但有一类模型
+     * 会**把全部输出都放进 reasoning_content、content 留空**（免费池里有
+     * "固定思考、关不掉"的模型，网关会回 1210），这时整个回复会被当成空响应
+     * 触发三连重发，最后报"模型返回了空内容"——从错误里根本看不出是这回事。
+     *
+     * 现在：content 为空时用思维链兜底（和 [parseResponse] 的兜底策略一致），
+     * 两者都有时以 content 为准，并把思维链长度记进日志（这是"模型到底想没想"
+     * 的唯一可观测点）。
+     *
+     * `internal` 是给单测留的口子（同 [buildBody]）。
      */
-    private fun accumulateSse(raw: String): String {
+    internal fun accumulateSse(raw: String): String {
         val content = StringBuilder()
+        val reasoning = StringBuilder()
         raw.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (!trimmed.startsWith("data:")) return@forEach
@@ -559,6 +575,13 @@ class LlmClient(private val cfg: LlmConfig) {
             if (choices.length() == 0) return@forEach
             val delta = choices.optJSONObject(0)?.optJSONObject("delta") ?: return@forEach
             delta.optString("content")?.takeIf { it.isNotEmpty() }?.let { content.append(it) }
+            delta.optString("reasoning_content")?.takeIf { it.isNotEmpty() }?.let { reasoning.append(it) }
+        }
+        val answer = content.toString().ifBlank { reasoning.toString() }
+        if (content.isBlank() && reasoning.isNotBlank()) {
+            Log.i(TAG, "免费通道：模型只回了思维链（${reasoning.length} 字），用它兜底当回答")
+        } else if (reasoning.isNotBlank()) {
+            Log.i(TAG, "免费通道：模型输出含思维链 ${reasoning.length} 字（未进入动作解析）")
         }
         return JSONObject()
             .put(
@@ -566,7 +589,7 @@ class LlmClient(private val cfg: LlmConfig) {
                 JSONArray().put(
                     JSONObject().put(
                         "message",
-                        JSONObject().put("content", content.toString()),
+                        JSONObject().put("content", answer),
                     ),
                 ),
             )

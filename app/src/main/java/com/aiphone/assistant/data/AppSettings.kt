@@ -44,25 +44,34 @@ enum class OperationMode(
 /**
  * 思考模式（模型的思维链）。
  *
- * ## 五档，从最左拉到最右
+ * ## 五档，每一档都明确对应「接口上到底发什么」
  *
  *   OFF → LOW → HIGH → MAX → 默认
  *
- * 前四档是显式的强度，最右一档「默认」**什么参数都不发**，
- * 让服务端自己挑（DeepSeek 默认 HIGH，Kimi 默认 balance）。
+ * | 档位 | 请求体里实际发的内容 |
+ * |---|---|
+ * | OFF   | `thinking: {"type": "disabled"}` |
+ * | LOW   | `thinking: {"type": "enabled"}` + `reasoning_effort: "low"` |
+ * | HIGH  | `thinking: {"type": "enabled"}` + `reasoning_effort: "high"` |
+ * | MAX   | `thinking: {"type": "enabled"}` + `reasoning_effort: "max"` |
+ * | 默认  | 什么都不发（用接口自己的默认） |
  *
- * ## 为什么要有这个
+ * 参数名与取值来自 DeepSeek 接口文档（guides/thinking_mode）：
+ *   - 开关：`{"thinking": {"type": "enabled/disabled"}}`
+ *   - 强度：`{"reasoning_effort": "low/high/max"}`
+ *   - **思考默认开启，且默认 effort = high** —— 所以「什么都不发」实际就等于 HIGH
  *
- * DeepSeek 默认就是 HIGH —— 不发参数 = 每步都在最贵的档上。
- * 所以把控制权交给用户：不想推理就拉到 OFF，想用服务端默认就拉到最右。
+ * 以前这里只写"由服务端自己决定（DeepSeek 默认 HIGH，Kimi 默认 balance）"，
+ * 那是凭印象写的（Kimi 那句根本没有依据）。这一版把每一档改成**接口事实**：
+ * 界面上直接显示这一档会发什么参数，用户可以自己核对。
  *
- * ## 参数怎么发
+ * ## 免费通道的两个例外（接口实测，不是猜的）
  *
- *   OFF   → thinking.type=disabled
- *   LOW   → thinking.type=enabled, reasoning_effort=low
- *   HIGH  → thinking.type=enabled, reasoning_effort=high
- *   MAX   → thinking.type=enabled, reasoning_effort=max
- *   默认  → 一个参数都不发
+ *   - 免费网关**不接受** `thinking: {"type": "disabled"}`（space-bunny 直接 400），
+ *     所以 OFF 档在免费通道**不发这个字段**（上游本来默认就不推理）；
+ *   - 免费通道的 `reasoning_effort` 只是"被接受"，上游不一定真按它推理 ——
+ *     免费池里有的模型固定思考、关不掉（网关会回 1210），有的压根不推理。
+ *     真实行为只能以接口返回为准，[apiFor] 会把这两点如实地显示出来。
  */
 enum class ThinkingMode(
     val id: String,
@@ -70,6 +79,8 @@ enum class ThinkingMode(
     val note: String,
     val toggle: String?,
     val effort: String?,
+    /** 这一档实际发出去的接口参数（设置页原样显示，用户可以直接核对） */
+    val api: String,
 ) {
     OFF(
         id = "off",
@@ -77,6 +88,7 @@ enum class ThinkingMode(
         note = "不推理，直接给动作。最快最省，适合「点哪个按钮」这类简单判断",
         toggle = "disabled",
         effort = null,
+        api = "thinking.type = disabled",
     ),
     LOW(
         id = "low",
@@ -84,6 +96,7 @@ enum class ThinkingMode(
         note = "少量推理。速度接近 OFF，复杂界面比 OFF 稳",
         toggle = "enabled",
         effort = "low",
+        api = "thinking.type = enabled + reasoning_effort = low",
     ),
     HIGH(
         id = "high",
@@ -91,6 +104,7 @@ enum class ThinkingMode(
         note = "充分推理。慢一些、贵一些，绕圈子的任务更靠谱",
         toggle = "enabled",
         effort = "high",
+        api = "thinking.type = enabled + reasoning_effort = high",
     ),
     MAX(
         id = "max",
@@ -98,14 +112,28 @@ enum class ThinkingMode(
         note = "推理拉满。最慢最贵，只在你确认任务确实难的时候用",
         toggle = "enabled",
         effort = "max",
+        api = "thinking.type = enabled + reasoning_effort = max",
     ),
     DEFAULT(
         id = "default",
         label = "默认",
-        note = "什么都不发，由服务端自己决定（DeepSeek 默认 HIGH，Kimi 默认 balance）",
+        note = "什么都不发，由接口自己决定 —— DeepSeek 文档：思考默认开启、默认 effort = high；" +
+            "免费网关由上游各自决定（有的固定思考关不掉，有的不推理）",
         toggle = null,
         effort = null,
+        api = "（不发任何思考参数）",
     );
+
+    /**
+     * 在当前通道下，这一档**实际**会发什么 —— 给设置页原样显示。
+     *
+     * 免费通道有例外（OFF 不发），不这样分开写的话，界面上的说明会和
+     * 真实请求对不上 —— 那正是这次要改掉的毛病。
+     */
+    fun apiFor(freeLane: Boolean): String = when {
+        freeLane && this == OFF -> "不发（免费上游不接受 disabled）"
+        else -> api
+    }
 
     /**
      * 是不是真的在做思维链。

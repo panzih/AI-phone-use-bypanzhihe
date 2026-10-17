@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 55      // 0.9.15：「ADB / Shizuku」操作方式真的能用了
-        versionName = "0.9.15"
+        versionCode = 56      // 0.9.16：思考档位按接口来 + 免费模型列表用接口读 + 读 reasoning_content
+        versionName = "0.9.16"
     }
 
     /**

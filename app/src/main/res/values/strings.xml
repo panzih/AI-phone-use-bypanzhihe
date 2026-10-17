@@ -138,6 +138,8 @@
     <string name="settings_apikey_hide">隐藏</string>
     <string name="settings_mode_label">操作方式</string>
     <string name="settings_model_thinking">思考模式</string>
+    <string name="settings_model_thinking_api">接口参数：%1$s</string>
+    <string name="settings_model_free_reload">重新读取</string>
     <string name="settings_goto_auth">前往授权</string>
     <string name="settings_overlay_label">悬浮窗</string>
     <string name="settings_overlay_desc">AI 操作时显示的进度面板和急停按钮。没有它任务照常跑，但你既看不到进度也停不下来。</string>
