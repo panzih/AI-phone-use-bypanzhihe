@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 59      // 0.9.19：悬浮窗遮挡不透明度压到 0.80 以下（Android 12+ 吞注入点击的真凶）
-        versionName = "0.9.19"
+        versionCode = 60      // 0.9.20：对话显示改版（灰字小图标＝动作/结果/系统消息，正文＝AI 的话，靠右气泡＝用户的话）
+        versionName = "0.9.20"
     }
 
     /**

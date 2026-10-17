@@ -41,6 +41,23 @@ data class LogEntry(
     val label: String? = null,
 )
 
+/**
+ * 用户自己说出口的那句话用的标签。
+ *
+ * 界面上靠它把"用户说的"和"AI 说的"分开渲染：带 [LABEL_COMMAND] 的记录
+ * 显示成靠右的气泡（见 `MainScreen` 的 `LogEntryRow`）。写的一方在
+ * `MainActivity`（手动输入的任务），两边改要一起改。
+ */
+const val LABEL_COMMAND = "指令"
+
+/**
+ * 定时任务替用户说出口的那句话用的标签。
+ *
+ * 渲染上和 [LABEL_COMMAND] 同一类（都是靠右的气泡），区别只在气泡顶上
+ * 多一行「定时任务」—— 用户得能看出来这句不是他现在打的。
+ */
+const val LABEL_SCHEDULE = "定时任务"
+
 /** 主界面的完整状态。 */
 data class MainUiState(
     /** 当前页面 */

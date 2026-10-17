@@ -30,7 +30,11 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.AddComment
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.TaskAlt
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -68,6 +72,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -303,36 +308,178 @@ private fun TaskOutputArea(state: MainUiState, modifier: Modifier = Modifier) {
         state = listState,
         modifier = modifier,
         reverseLayout = true,
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        // 间距串起"谁跟着谁"：动作和它的结果挨得紧，段落之间松一点
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         items(logs.asReversed(), key = { it.id }) { entry -> LogEntryRow(entry) }
     }
 }
 
+/**
+ * 对话里"用户那一侧"的标签（[LABEL_COMMAND] / [LABEL_SCHEDULE]）。
+ *
+ * 手动输入的任务和到点自己跑起来的定时任务——两者都是用户（或者用户设好的
+ * 规矩）说出口的话，显示成靠右的气泡，和 AI 的输出一眼分开。
+ */
+private val USER_SIDE_LABELS = setOf(LABEL_COMMAND, LABEL_SCHEDULE)
+
+/**
+ * 「第 3 步」「第 3 步 · 思考」「第 3 步 · 动作」这类标签**不显示**。
+ *
+ * 步数已经由底部那条进度（"AI 正在执行 · 第 3 / 30 步"）实时报着，
+ * 一条消息再挂一个就只是噪音。带信息的照常显示（"第 3 步 · 失败"、
+ * "端侧处理"、"防幻觉"…）。
+ */
+private val ROUTINE_STEP_LABEL = Regex("^第 \\d+ 步( · (思考|动作))?$")
+
+/**
+ * 只带步数、没有别的话的标签（"第 3 步"），对应"正在请求模型 ..."这种**过程播报**。
+ *
+ * 它不是 AI 说的话，所以不按正文显示，收成一行小灰字（见 [LogEntryRow]）。
+ */
+private val STATUS_STEP_LABEL = Regex("^第 \\d+ 步$")
+
+/**
+ * 一条对话记录。
+ *
+ * ## 显示上刻意"安静"
+ *
+ * 旧版把**每一条**都画成一张带底色的卡片，一屏里七八种颜色互相打架 ——
+ * 用户真正要读的（AI 说了什么）和顺带要看的（AI 做了什么）分不出主次。
+ * 现在按"谁在说话"分三类：
+ *
+ *   - AI 的话（THOUGHT）＝**正文**：不套气泡、不铺底色，就是一段字；
+ *   - 动作 / 结果 / 系统消息 ＝ 一行小灰字，前面一个小图标，
+ *     像日志一样从正文里"沉"下去；
+ *   - 用户自己发的话（"指令"/"定时任务"）＝ 靠右的气泡，唯一有颜色的一块。
+ *
+ * 出错单独给红色（ERROR）：那是必须被看见的一条。
+ */
 @Composable
 private fun LogEntryRow(entry: LogEntry) {
-    val container = when (entry.kind) {
-        LogKind.THOUGHT -> MaterialTheme.colorScheme.surfaceVariant
-        LogKind.ACTION -> MaterialTheme.colorScheme.primaryContainer
-        LogKind.RESULT -> MaterialTheme.colorScheme.secondaryContainer
-        LogKind.ERROR -> MaterialTheme.colorScheme.errorContainer
-        LogKind.SYSTEM -> MaterialTheme.colorScheme.surface
+    val caption = entry.label?.takeIf { !ROUTINE_STEP_LABEL.matches(it) }
+    // "正在请求模型 ..."：AI 没说话，只是过程在走 —— 收成一行小灰字
+    val status = entry.kind == LogKind.THOUGHT && entry.label != null && STATUS_STEP_LABEL.matches(entry.label)
+    when {
+        caption != null && caption in USER_SIDE_LABELS ->
+            CommandBubble(text = entry.text, caption = caption)
+
+        status -> QuietLine(
+            icon = Icons.Filled.Sync,
+            title = null,
+            body = entry.text,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        entry.kind == LogKind.THOUGHT ->
+            Narration(text = entry.text, caption = caption)
+
+        else -> QuietLine(
+            icon = when (entry.kind) {
+                LogKind.ACTION -> Icons.Filled.TouchApp
+                LogKind.RESULT -> Icons.Filled.TaskAlt
+                LogKind.ERROR -> Icons.Filled.ErrorOutline
+                else -> Icons.Filled.Info
+            },
+            title = caption,
+            body = entry.text,
+            color = if (entry.kind == LogKind.ERROR) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
-    val onContainer = when (entry.kind) {
-        LogKind.THOUGHT -> MaterialTheme.colorScheme.onSurfaceVariant
-        LogKind.ACTION -> MaterialTheme.colorScheme.onPrimaryContainer
-        LogKind.RESULT -> MaterialTheme.colorScheme.onSecondaryContainer
-        LogKind.ERROR -> MaterialTheme.colorScheme.onErrorContainer
-        LogKind.SYSTEM -> MaterialTheme.colorScheme.outline
+}
+
+/** AI 说的话：正文样式，顶多带一行小灰字的上标（"端侧处理"之类） */
+@Composable
+private fun Narration(text: String, caption: String?) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(
+            // 带上标（"端侧处理"/"重发"）时上面空得多一点：那一行属于下面这段话，
+            // 不能让它跟上一段贴得比自己的正文还近
+            top = if (caption != null) 10.dp else 4.dp,
+            bottom = 2.dp,
+        ),
+    ) {
+        if (caption != null) {
+            Text(
+                text = caption,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
-    Surface(color = container, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            if (entry.label != null) {
-                Text(text = entry.label, style = MaterialTheme.typography.labelMedium, color = onContainer, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(4.dp))
+}
+
+/**
+ * 一行小灰字（动作 / 结果 / 系统消息 / 报错）。
+ *
+ * [title] 有值时当小标题、正文另起一行；没有时标题和正文并成一行 ——
+ * 绝大多数动作只有一句话（"点击「搜索框」"），并排更紧凑。
+ */
+@Composable
+private fun QuietLine(icon: ImageVector, title: String?, body: String, color: Color) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.padding(top = 1.dp).size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            if (title != null) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = color,
+                )
+                Spacer(Modifier.height(2.dp))
             }
-            Text(text = entry.text, style = MaterialTheme.typography.bodyMedium, color = onContainer)
+            Text(text = body, style = MaterialTheme.typography.bodyMedium, color = color)
+        }
+    }
+}
+
+/**
+ * 用户发的那句话：靠右的气泡。
+ *
+ * 左边留一道固定空白，气泡**最大**只能长到那儿 —— 用
+ * `weight(1f, fill = false)` 而不是写死最大宽度：短句子收着、
+ * 长句子换行，屏幕变宽变窄都不用改数字。
+ */
+@Composable
+private fun CommandBubble(text: String, caption: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Spacer(Modifier.width(48.dp))
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 4.dp),
+            modifier = Modifier.weight(1f, fill = false),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                // "指令"不用写出来（谁发的显而易见），定时任务要 —— 它是这条消息的来路
+                if (caption != LABEL_COMMAND) {
+                    Text(
+                        text = caption,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                    )
+                    Spacer(Modifier.height(2.dp))
+                }
+                Text(text = text, style = MaterialTheme.typography.bodyLarge)
+            }
         }
     }
 }

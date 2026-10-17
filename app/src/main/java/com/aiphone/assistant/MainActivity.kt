@@ -63,6 +63,8 @@ import com.aiphone.assistant.skill.SkillContext
 import com.aiphone.assistant.skill.SkillRegistry
 import com.aiphone.assistant.ui.AboutScreen
 import com.aiphone.assistant.ui.AutoReturnOnForegroundEffect
+import com.aiphone.assistant.ui.LABEL_COMMAND
+import com.aiphone.assistant.ui.LABEL_SCHEDULE
 import com.aiphone.assistant.ui.LogEntry
 import com.aiphone.assistant.ui.LogKind
 import com.aiphone.assistant.ui.MainScreen
@@ -765,7 +767,7 @@ private fun AppRoot(
             if (settings.maxSteps <= 0) "最大步数：不限" else "最大步数：${settings.maxSteps}",
             tag = "任务",
         )
-        addLog(LogKind.ACTION, task, "指令")
+        addLog(LogKind.ACTION, task, LABEL_COMMAND)
 
         if (settings.apiKey.isBlank()) {
             val msg = "还没填 API Key。到「设置 → 模型」里填一个再试。"
@@ -1298,7 +1300,7 @@ private fun AppRoot(
     LaunchedEffect(pendingTask) {
         val task = pendingTask ?: return@LaunchedEffect
         if (task.isBlank()) return@LaunchedEffect
-        addLog(LogKind.ACTION, task, "定时任务")
+        addLog(LogKind.ACTION, task, LABEL_SCHEDULE)
         input = task
         // 这条任务的副屏选项要在 submit() 之前放好 —— submit 里会读它
         runOnVirtualDisplay = pendingUseVirtualDisplay
