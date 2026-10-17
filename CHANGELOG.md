@@ -7,6 +7,55 @@
 
 ---
 
+## 0.9.17
+
+> 用户反馈：「副屏有问题，看日志」。日志里四件事：move-stack 报
+> `Unknown rootTaskId`、把**桌面**给 force-stop 了、副屏切过去却是空的、
+> AI 第一步就「抓不到副屏画面」。全是真 bug，这版全修。
+
+### 修了什么
+
+- **桌面候选剔掉 FallbackHome**（`a11y/AutoService.resolveHomePackages`）——
+  这是"自动迁副屏从来没触发过"的**总根因**：每台 AOSP 设备都有
+  `com.android.settings/.FallbackHome`（开机早期的占位假桌面，priority=-1000），
+  按包名归到 `com.android.settings` 名下 → 整个设置包被当成"桌面候选"：
+  **打开设置 = 被判定"回到桌面"**（logcat 实证：`检测到回桌面（com.android.settings）`）、
+  目标跟踪永远追踪不到设置、`watcher.ready()` 永远不成立。
+  现在按 priority 过滤（真桌面 = 0，FallbackHome = -1000），
+  蓝叠实测桌面候选从 `[launcher, settings]` 变成 `[launcher]`。
+- **整栈迁移用对任务 id**（`agent/ActivityProbe.kt` + `ChannelMigration.moveStack`）：
+  Android 13 的 `am display move-stack` 要**根任务** id，而
+  `topResumedActivity … t<id>` 给的是子任务 id —— 桌面/启动器的活动几乎总在
+  子任务里（实测：`Task{…#196…rootTaskId=195}`，拿 196 去迁直接
+  `Unknown rootTaskId=196`）。现在迁移前先把根任务 id 解析出来。
+- **不再搬桌面/启动器**（`ChannelMigration.moveRequestedByUser`）：前台是桌面时
+  改迁 **AI 正在操作的那个应用**（和"前台是纸盒自己"同一套兜底）；真没目标就
+  明确拒绝（"先让 AI 打开要操作的应用，再切到副屏"）。以前会拿桌面的任务去迁，
+  失败后**force-stop 桌面**再试图在副屏拉启动器 —— 桌面被杀、副屏必空。
+  无障碍没连上时用 PackageManager 解析默认桌面兜底。
+- **副屏重开之后要验证应用真的出现了**：以前"重开命令成功"就直接切过去，
+  拉不起来的应用会让 AI 面对空屏。现在最多等 5 秒确认应用出现在副屏，
+  等不到 → **销毁副屏、留在主屏、如实报错**（不再瞎切）。
+- **抓帧有了"第一帧空窗"的重试**（`DisplayChannel.screenshot`）：VirtualDisplay
+  是"有内容画上去才出帧"的，刚建屏立刻抓必然空。现在小等几轮（最多 ~1 秒）
+  再放弃，错误文案也改成区分"还没画出第一帧"和"副屏上没有应用"。
+- **`open_app` 先解析组件再启动**（`shell/AdbShell.startAppOnDisplay`）：
+  `-a MAIN -c LAUNCHER -p 包名` 在部分 ROM 上解析不到 —— 真实案例：蓝叠上的
+  B站，隐式形式直接 "unable to resolve Intent"，而 `resolve-activity` 能给出
+  `.MainActivityV2`、`-n` 启动成功。解析不到再退回隐式形式。
+
+### 验证（蓝叠 0.9.17）
+
+- 桌面候选修复：`无障碍服务已连接，桌面候选：[com.uncube.launcher3]`（settings 已剔除）。
+- B站 手动启动验证：`am start -n tv.danmaku.bili/.MainActivityV2` 成功
+  （旧的隐式形式在这台蓝叠上始终 "unable to resolve"）。
+- 175 例单测全绿（新增根任务解析 3 例）。
+- **自动迁出端到端跑通**（11:15 轮）：长等待中按 HOME → 1.5 秒内
+  `检测到回桌面（com.uncube.launcher3）` → 建副屏 displayId=6 → 切副屏模式，
+  `am stack list` 实证 settings 根任务落在 displayId=6 且 `visible=true`，
+  模型带图收尾后副屏随任务结束销毁。此前几轮没触发是测试脚本把 HOME 按
+  在长等待武装之前（非应用问题）。真机上仍值得再试一轮「任务中按 HOME」。
+
 ## 0.9.16
 
 > 用户要求：「思考模式改一下，档位要读取、用接口，还有『默认』档的说明也改一下」。

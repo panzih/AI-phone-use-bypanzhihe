@@ -115,16 +115,33 @@ object AdbShell {
         packageName: String,
         component: String? = null,
     ): String {
-        // 只知道包名时用 MAIN/LAUNCHER 隐式启动：不需要知道 Activity 名，
-        // 系统自己找启动入口。给组件名则点名启动（更精确）
-        val cmd = if (component != null) {
-            "am start --display $displayId -n $component"
+        // 只知道包名时：先问系统要启动入口（resolve-activity），**点名启动**。
+        // 直接 `-a MAIN -c LAUNCHER -p pkg` 在部分 ROM 上解析不到 —— 真实案例
+        // （2026-10-17 蓝叠）：B站 用隐式形式直接 "unable to resolve Intent"，
+        // 而 `resolve-activity` 能给出 `.MainActivityV2`、`-n` 启动成功。
+        // 解析不到再退回隐式形式（老设备/老行为兜底）。
+        val resolved = component
+            ?: resolveLaunchComponent(context, packageName)?.let { "$packageName/$it" }
+        val cmd = if (resolved != null) {
+            "am start --display $displayId -n $resolved"
         } else {
             "am start --display $displayId " +
                 "-a android.intent.action.MAIN " +
                 "-c android.intent.category.LAUNCHER -p $packageName"
         }
         return ShizukuBridge.run(context, cmd)
+    }
+
+    /**
+     * 问系统要某个包的启动入口组件。
+     * `resolve-activity --brief` 的输出最后一行是 `包名/组件名`，取那个组件名。
+     */
+    private suspend fun resolveLaunchComponent(context: Context, pkg: String): String? {
+        val out = ShizukuBridge.run(context, "cmd package resolve-activity --brief $pkg")
+        return out.lineSequence()
+            .map { it.trim() }
+            .lastOrNull { it.startsWith("$pkg/") }
+            ?.substringAfter('/')
     }
 
     // ------------------------------------------------------------------

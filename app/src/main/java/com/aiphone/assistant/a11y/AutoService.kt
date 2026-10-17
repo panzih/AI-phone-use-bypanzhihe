@@ -108,6 +108,13 @@ class AutoService : AccessibilityService() {
     private fun resolveHomePackages(): Set<String> = runCatching {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         packageManager.queryIntentActivities(intent, 0)
+            // ⚠️ 必须剔掉 FallbackHome（com.android.settings/.FallbackHome）：
+            // 它是每台 AOSP 设备都有的**开机早期占位假桌面**（priority=-1000），
+            // 但它挂在 com.android.settings 包名下 —— 不剔的话整个 settings
+            // 包都会被当成"桌面候选"：打开设置 = "回到桌面"、目标跟踪永远
+            // 追踪不到设置、自动迁副屏永远不触发（0.9.17 蓝叠实测翻车现场）。
+            // 真桌面（launcher）priority=0；FallbackHome 是 -1000。
+            .filter { it.priority >= 0 }
             .map { it.activityInfo.packageName }
             .filter { it != packageName }
             .toSet()

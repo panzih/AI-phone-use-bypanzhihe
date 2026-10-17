@@ -34,6 +34,18 @@ class ActivityProbe(private val context: Context) {
     /** 该 taskId 是否还在活动列表（迁移前校验缓存） */
     suspend fun taskExists(taskId: Int): Boolean = dumpContainsTask(dump(), taskId)
 
+    /**
+     * 这个 task 的**根任务** id。
+     *
+     * `am display move-stack` 在 Android 13 上要的是**根任务** id
+     * （`moveRootTaskToTaskDisplayArea` 只认 RootTask）。而
+     * `topResumedActivity ... t<id>` 给的是**子任务** id —— 桌面/启动器
+     * 这类应用的任务几乎总是子任务（真实案例：蓝叠上 launcher 活动在
+     * `Task{... #196 ... rootTaskId=195}` 里，拿 196 去 move-stack 直接
+     * `Unknown rootTaskId=196`）。普通应用的任务通常本身就是根任务。
+     */
+    suspend fun rootTaskIdOf(taskId: Int): Int = parseRootTaskId(dump(), taskId)
+
     /** 指定 display 段顶部 resumed 任务：(taskId, 包名)。null = 读不到 */
     suspend fun currentTaskOnDisplay(displayId: Int): Pair<Int, String>? =
         parseTopResumedTask(dump(), displayId)
@@ -80,6 +92,23 @@ class ActivityProbe(private val context: Context) {
         /** 整个 dump 里含不含这个 task（`am` 输出里 task 的形态是 ` t<id>}`） */
         internal fun dumpContainsTask(dump: String, taskId: Int): Boolean =
             dump.contains(" t$taskId}")
+
+        /**
+         * 从 dump 里解析 taskId 对应的**根任务** id。
+         *
+         * 子任务的行带 `rootTaskId=<N>`（实测样例）：
+         * ```
+         * * Task{4430802 #196 type=home I=com.uncube.launcher3/... rootTaskId=195 ...}
+         * ```
+         * 命中 → 返回 195。没有 `rootTaskId=` 字段的（本身就是根任务）原样返回。
+         * 解析不出来时也原样返回 —— 宁可按原 id 试一次拿真实报错，也不静默换目标。
+         */
+        internal fun parseRootTaskId(dump: String, taskId: Int): Int {
+            val child = Regex("""Task\{\S+\s+#$taskId\s[^}]*?rootTaskId=(\d+)""")
+                .find(dump)
+                ?: return taskId
+            return child.groupValues[1].toIntOrNull() ?: taskId
+        }
 
         /**
          * 指定 display 段第一个 topResumedActivity 的 (taskId, 包名)。

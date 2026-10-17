@@ -127,11 +127,26 @@ class DisplayChannel(
         val bytes = if (displayId == 0) {
             AdbShell.screenshot(context)
         } else {
-            ShizukuBridge.grabFrame(context)
+            // 刚建屏/刚切过来时 ImageReader 里**还没有第一帧** —— VirtualDisplay
+            // 是"有内容画上去才出帧"的。立刻抓必然空，别把"还没画出来"报成
+            // "屏幕没了"：小等几轮再放弃（副屏真是空的话，这几百毫秒是
+            // 该付的代价 —— 那本来就是错误路径）。
+            var shot = ShizukuBridge.grabFrame(context)
+            var tries = 0
+            while (shot.isEmpty() && tries < 4) {
+                delay(250)
+                shot = ShizukuBridge.grabFrame(context)
+                tries++
+            }
+            shot
         }
         if (bytes.isEmpty()) {
-            lastShotError = "抓不到$label（id=$displayId）的画面。" +
-                "屏幕可能已经没了，或者 shell 服务断开了。"
+            lastShotError = if (displayId == 0) {
+                "抓不到主屏画面，shell 服务可能断开了。"
+            } else {
+                "抓不到$label（id=$displayId）的画面：要么是刚建屏还没画出第一帧，" +
+                    "要么副屏上没有应用在跑。"
+            }
             Log.w(TAG, lastShotError!!)
             null
         } else {

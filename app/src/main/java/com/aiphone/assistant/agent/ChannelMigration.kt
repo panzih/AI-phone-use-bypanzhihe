@@ -94,15 +94,18 @@ class ChannelMigration(
             return false
         }
         val (taskId, pkg) = top
-        if (pkg == selfPackage) {
-            // 用户点开纸盒看一眼、再点「切到副屏」—— 这时前台是纸盒自己，
-            // 但我们要搬的是 **AI 正在操作的那个应用**，不是"现在前台是谁"。
-            // 所以退回用上一步记下的目标；只有真的从来没记过才让人先去开应用。
-            // （批 3 附加项：原来这里一律拒绝，等于用户一碰纸盒就切不了副屏）
+        // 桌面/启动器**不能搬**：搬它 = force-stop 桌面 + 试图在副屏拉启动器
+        // （系统不让 home 跑在虚拟屏上，副屏必然是空的，AI 就瞎了 —— 0.9.16 的
+        // 线上事故）。这两种情况和"前台是纸盒自己"一样，都改迁 **AI 正在操作的
+        // 那个应用**；真没目标就拒绝，把话说清楚。
+        val isHome = isHomePackage(pkg)
+        if (pkg == selfPackage || isHome) {
             val t = watcher.targetPkg
-            if (t.isNullOrBlank()) {
-                val msg = "请先让 AI 打开要操作的应用，再切到副屏" +
-                    "（现在前台还是纸盒自己，也没记录到目标应用）。"
+            if (t.isNullOrBlank() || isHomePackage(t)) {
+                val msg = if (isHome)
+                    "现在前台是桌面/启动器，没有可搬到副屏的应用 —— 先让 AI 打开要操作的应用，再切到副屏。"
+                else
+                    "请先让 AI 打开要操作的应用，再切到副屏（现在前台还是纸盒自己，也没记录到目标应用）。"
                 logger?.line(msg, "副屏")
                 onEvent(Agent.EventKind.THOUGHT, msg, "副屏")
                 return false
@@ -115,7 +118,11 @@ class ChannelMigration(
                 onEvent(Agent.EventKind.THOUGHT, msg, "副屏")
                 return false
             }
-            logger?.line("前台是纸盒自己，改为迁移上次操作的目标应用：$t", "副屏")
+            logger?.line(
+                if (isHome) "前台是桌面，改为迁移 AI 正在操作的应用：$t"
+                else "前台是纸盒自己，改为迁移上次操作的目标应用：$t",
+                "副屏",
+            )
             return performMoveToVirtualDisplay(tid, t, automatic = false).also { moved ->
                 if (moved) openMirrorPage()
             }
@@ -408,6 +415,20 @@ class ChannelMigration(
                 watcher.suppressAutoMoveFor(AutoSwitchWatcher.AUTO_FAIL_COOLDOWN_MS)
                 return false
             }
+            // 重开命令返回成功 ≠ 应用真的在副屏上画出来了。以前不看结果就切过去，
+            // 遇到拉不起来的应用，AI 面对一块空屏、第一步就是「抓不到画面」。
+            // 等它出现（冷启动要几秒），等不到就收手、留在主屏 —— 空屏绝不上。
+            if (!awaitTaskOnDisplay(pkg, vdId, timeoutMs = 5_000)) {
+                val dr = ShizukuBridge.destroyDisplay(ctx)
+                vdCreatedByAgent = false
+                val tail = if (dr >= 0) "（副屏已收回）" else "（副屏没收回，可到副屏调试页手动销毁）"
+                val msg = "「$pkg」在副屏上等了 5 秒也没出现，已留在主屏$tail。" +
+                    "可能这个应用被限制后台启动，或者它在这台设备上拉不起来。"
+                logger?.error(msg, "副屏")
+                onEvent(Agent.EventKind.ERROR, msg, "副屏")
+                watcher.suppressAutoMoveFor(AutoSwitchWatcher.AUTO_FAIL_COOLDOWN_MS)
+                return false
+            }
         }
 
         // 3) 校验：整栈迁移时该 task 确实到了新 display
@@ -451,15 +472,62 @@ class ChannelMigration(
         ShizukuBridge.run(ctx, "am start --display 0 -n $component -f 0x10000000")
     }
 
-    /** 整栈迁移：`am display move-stack <taskId> <displayId>`。成功无输出。 */
+    /**
+     * 整栈迁移：`am display move-stack <根任务id> <displayId>`。成功无输出。
+     *
+     * ⚠️ Android 13 上这条命令要的是**根任务** id —— 拿子任务 id 去发会得到
+     * `Unknown rootTaskId=<id>`（桌面/启动器的活动几乎总在子任务里）。
+     * 所以先用 [ActivityProbe.rootTaskIdOf] 把根 id 查出来。
+     */
     private suspend fun moveStack(taskId: Int, displayId: Int): Boolean {
+        val rootId = probe.rootTaskIdOf(taskId)
+        if (rootId != taskId) {
+            logger?.line("任务 $taskId 是子任务，按根任务 $rootId 迁移", "副屏")
+        }
         val out = ShizukuBridge.run(
             controller.appContext,
-            "am display move-stack $taskId $displayId",
+            "am display move-stack $rootId $displayId",
         )
         val ok = out.isBlank()
         if (!ok) logger?.line("move-stack 输出：${out.trim()}", "副屏")
         return ok
+    }
+
+    /**
+     * 这个包是不是桌面/启动器。
+     *
+     * 优先用无障碍服务收集的集合（实测准）；服务没连上时退回 PackageManager
+     * 解析默认桌面（ADB 模式下无障碍也可能没连，别让"认不出桌面"把 force-stop
+     * 桌面的事故再演一遍）。
+     */
+    private fun isHomePackage(pkg: String): Boolean {
+        if (AutoService.get()?.isHomePackage(pkg) == true) return true
+        if (homePkgFallback.isEmpty()) {
+            val homeIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+                .addCategory(android.content.Intent.CATEGORY_HOME)
+            val info = runCatching {
+                controller.appContext.packageManager.resolveActivity(homeIntent, 0)
+            }.getOrNull()
+            info?.activityInfo?.packageName?.let { homePkgFallback.add(it) }
+        }
+        return pkg in homePkgFallback
+    }
+
+    /** PackageManager 兜底解析出来的桌面包名（懒加载，可能为空 = 解析不到） */
+    private val homePkgFallback = mutableSetOf<String>()
+
+    /**
+     * 等「pkg 的任务出现在 displayId 上」。
+     *
+     * 重开命令返回成功 ≠ 窗口已经画出来（冷启动要几秒）。轮询到出现或超时。
+     */
+    private suspend fun awaitTaskOnDisplay(pkg: String, displayId: Int, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (probe.currentTaskOnDisplay(displayId)?.second == pkg) return true
+            delay(400)
+        }
+        return false
     }
 
     /**

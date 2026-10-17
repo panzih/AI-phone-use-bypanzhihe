@@ -117,4 +117,34 @@ class ActivityProbeTest {
         assertTrue(seg0.startsWith("Display #0"))
         assertFalse("主屏段不能吃掉副屏段", seg0.contains("t201"))
     }
+
+    // ---------- parseRootTaskId（move-stack 要根任务 id） ----------
+
+    /** 真实形态（2026-10-17 蓝叠 Android 13）：home 的活动在**子任务**里，子任务带 rootTaskId */
+    private val android13Dump = """
+        ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)
+        Display #0 (activities from top to bottom):
+          * Task{fbdba76 #195 type=home U=0 visible=false mode=fullscreen sz=1}
+            * Task{4430802 #196 type=home I=com.uncube.launcher3/com.bluestacks.launcher.activity.HomeActivity U=0 rootTaskId=195 visible=false sz=1}
+              topResumedActivity=ActivityRecord{ab12cd u0 com.uncube.launcher3/...HomeActivity t196}
+          * Task{fa7c66a #190 type=standard A=10078:com.aiphone.assistant U=0 visible=true sz=4}
+            topResumedActivity=ActivityRecord{82d58e7 u0 com.aiphone.assistant/.MainActivity} t190}
+    """.trimIndent()
+
+    @Test
+    fun `子任务要换成根任务id`() {
+        // launcher 活动在 t196，它的根任务是 195 —— 拿 196 去 move-stack
+        // 会得到 "Unknown rootTaskId=196"（0.9.16 线上事故）
+        assertEquals(195, ActivityProbe.parseRootTaskId(android13Dump, 196))
+    }
+
+    @Test
+    fun `本身是根任务的_原样返回`() {
+        assertEquals(190, ActivityProbe.parseRootTaskId(android13Dump, 190))
+    }
+
+    @Test
+    fun `解析不出来_原样返回_不静默换目标`() {
+        assertEquals(999, ActivityProbe.parseRootTaskId(android13Dump, 999))
+    }
 }
