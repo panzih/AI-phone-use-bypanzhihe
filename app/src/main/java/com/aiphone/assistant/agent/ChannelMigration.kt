@@ -86,7 +86,13 @@ class ChannelMigration(
             logger?.line("已经在副屏运行，忽略重复的切换请求", "副屏")
             return false
         }
-        val top = probe.currentTaskOnDisplay(0)
+        val top = probe.currentTaskOnDisplay(0) ?: run {
+            // 0.9.18：启动/切屏空窗期 dumpsys 可能短暂读不到 topResumed
+            // （蓝叠实证：open_app 刚发出、B站冷启动中 → 读不到 taskId →
+            // 一次点击白白拒绝）。等 800ms 重试一次再放弃。
+            delay(800)
+            probe.currentTaskOnDisplay(0)
+        }
         if (top == null) {
             val msg = "迁移失败：没能从系统读到当前前台任务（taskId）。"
             logger?.error(msg, "副屏")
@@ -380,6 +386,12 @@ class ChannelMigration(
         automatic: Boolean,
     ): Boolean {
         val ctx = controller.appContext
+        // 0.9.18：迁移全程应用会被系统短暂拉前台（建屏、切通道、弹镜像页），
+        // 这些 self-inflicted 的 resume 不能被当成"用户要回主屏"去触发自动回迁
+        // —— 蓝叠实证：手动切副屏成功 0.8 秒后被自动回迁弹回主屏。
+        // 迁移一开始就压 10 秒，盖住整个窗口；期间用户要回主屏随时可以按
+        // 悬浮窗上的「切回主屏」（手动按钮不走这条压制）。
+        OverlayBus.suppressAutoReturnFor(MIGRATION_SUPPRESS_AUTO_RETURN_MS)
         // 切之前抓主屏物理尺寸（副屏照抄它）
         val mainSize = controller.screenSize()?.takeIf { it.first > 0 && it.second > 0 }
         if (mainSize == null) {
@@ -448,11 +460,62 @@ class ChannelMigration(
         // 5) 切通道（此刻无注入在进行）
         controller.enterVirtualDisplay(vdId, mainSize)
 
+        // 5.5) 0.9.18 首帧预检：「应用在副屏上活着」≠「画得出来」。蓝叠实证：
+        // B站 START 后半秒被搬上副屏，任务在、activity 也在，但窗口永远没画
+        // 出来 —— AI 面对一块读不到树、截不了图的死屏，只能止损。抓得到一帧
+        // 才承认迁移成功；抓不到就整体回滚，绝不让 AI 盲跑。
+        if (awaitVdFirstFrame() == null) {
+            return rollBackMigration(taskId, vdId, pkg)
+        }
+
         val lead = if (automatic) "已检测到你回到桌面，自动" else "已"
         logger?.line("${lead}切到副屏（display=$vdId），AI 改用截图 + 坐标操作", "副屏")
         onEvent(Agent.EventKind.ACTION, "${lead}切到副屏运行", "副屏")
         switchChannel("副屏")
         return true
+    }
+
+    /**
+     * 副屏首帧预检（0.9.18）：抓到一帧才算迁移成功。
+     *
+     * `captureFrame` 内部自带 ~1 秒的首帧重试；这里再给几轮机会 ——
+     * 冷启动的应用画出第一帧要几秒。健康路径第一轮就过（帧已经在），
+     * 全部失败才认定这块副屏救不回来。
+     */
+    private suspend fun awaitVdFirstFrame(): ByteArray? {
+        repeat(FRAME_PROBE_ATTEMPTS) { attempt ->
+            val shot = runCatching {
+                withContext(Dispatchers.IO) { controller.captureFrame() }
+            }.getOrNull()
+            if (shot != null && shot.isNotEmpty()) return shot
+            if (attempt < FRAME_PROBE_ATTEMPTS - 1) delay(400)
+        }
+        logger?.error(
+            "副屏首帧预检失败：${controller.lastScreenshotError() ?: "抓不到画面"}",
+            "副屏",
+        )
+        return null
+    }
+
+    /**
+     * 迁移验收不过关的统一回滚（0.9.18）：副屏通道切回主屏、应用搬回主屏并抬到
+     * 前台、销毁副屏、如实报错。`vdCreatedByAgent` 一并清位，收尾不重销。
+     */
+    private suspend fun rollBackMigration(taskId: Int, vdId: Int, pkg: String): Boolean {
+        val ctx = controller.appContext
+        controller.exitVirtualDisplay()
+        moveStack(taskId, 0)
+        bringTaskToFront(taskId, pkg)
+        val dr = ShizukuBridge.destroyDisplay(ctx)
+        vdCreatedByAgent = false
+        switchChannel("主屏")
+        val tail = if (dr >= 0) "（副屏已收回）" else "（副屏没收回，可到副屏调试页手动销毁）"
+        val msg = "「$pkg」搬到副屏后没能真正跑起来（抓不到画面），已整体搬回主屏继续$tail。" +
+            "可能是应用刚启动就被搬、或它在这台设备的虚拟屏上画不出来。"
+        logger?.error(msg, "副屏")
+        onEvent(Agent.EventKind.ERROR, msg, "副屏")
+        watcher.suppressAutoMoveFor(AutoSwitchWatcher.AUTO_FAIL_COOLDOWN_MS)
+        return false
     }
 
     /**
@@ -548,6 +611,25 @@ class ChannelMigration(
     }
 
     companion object {
+        /**
+         * 首帧预检的轮数（0.9.18）。
+         *
+         * 每轮一次 `captureFrame`（内部自带 ~1s 首帧重试）+ 轮间 400ms，
+         * 全部失败 = 这块副屏救不回来，走回滚。健康路径第一轮就过，
+         * 不增加正常迁移的耗时。
+         */
+        const val FRAME_PROBE_ATTEMPTS = 4
+
+        /**
+         * 弹镜像页后压制「自动回迁」的时长（0.9.18）。
+         *
+         * 迁移全程应用会被系统短暂拉前台（建屏、切通道、弹镜像页），这些
+         * self-inflicted 的 resume 不该被当成"用户要回主屏"。10 秒盖住整个
+         * 迁移窗口 + 镜像页弹出；用户真要回主屏，随时可以按悬浮窗上的
+         * 「切回主屏」（手动按钮不走这条压制）。
+         */
+        const val MIGRATION_SUPPRESS_AUTO_RETURN_MS = 10_000L
+
         /**
          * 「用户把应用挪回主屏」要连续命中几次才认定（副屏模式，批 3 附加项）。
          *

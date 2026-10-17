@@ -1088,8 +1088,17 @@ class Agent(
                         return
                     }
                     WaitOutcome.SWITCH_REQUESTED -> {
-                        switchPendingCount = p.actions.size - i
-                        break
+                        // 0.9.18 死锁护栏：目标还没记上时，open_app 正是目标的唯一
+                        // 来源 —— 掐了它 = 应用永远起不来 = 目标永远为空 = 切换请求
+                        // 永远被拒（蓝叠实证：用户连点「切到副屏」4 次，前 3 次全撞进
+                        // 这个环）。放行 open_app 把应用拉起来，下一步边界自然拿着
+                        // 真目标完成切换。
+                        if (switchMustYieldToOpenApp(action.kind, watcher.targetPkg)) {
+                            // 放行：继续执行这个动作
+                        } else {
+                            switchPendingCount = p.actions.size - i
+                            break
+                        }
                     }
                     WaitOutcome.AUTO_DESKTOP_SWITCH -> {
                         if (migration.autoMove()) {
@@ -1260,9 +1269,16 @@ class Agent(
                                 return
                             }
                             WaitOutcome.SWITCH_REQUESTED -> {
-                                results.add("$single → 因切换通道中止")
-                                switchPendingCount = p.actions.size - i - 1
-                                break
+                                // 0.9.18：启动意图已经发出，此刻中止 = observeForeground
+                                // 没机会跑、目标记不上，用户的切换请求也拿不到目标
+                                // （死锁的另一半）。没有目标时放行走完收尾（补验证 +
+                                // 记目标），切换请求留给下一步边界 —— 那时目标已就位，
+                                // 一次成功。有目标时维持原样：中止并交边界处理。
+                                if (!switchMustYieldToOpenApp(action.kind, watcher.targetPkg)) {
+                                    results.add("$single → 因切换通道中止")
+                                    switchPendingCount = p.actions.size - i - 1
+                                    break
+                                }
                             }
                             WaitOutcome.AUTO_DESKTOP_SWITCH -> {
                                 val moved = migration.autoMove()
@@ -1477,6 +1493,11 @@ class Agent(
      */
     private suspend fun yieldForegroundIfNeeded() {
         if (foregroundYielded) return
+        // 0.9.18：副屏模式下截图来自 ImageReader（虚拟屏里没有纸盒的悬浮窗），
+        // 操作也走副屏通道 —— 主屏让位（按 HOME）既无意义还扰民，直接跳过。
+        // 0.9.17 蓝叠实证：副屏模式截一张图白按一次 HOME、白等 600ms，
+        // 还把用户正在用的主屏顶掉。
+        if (controller.isVirtualDisplay) return
         val pkg = withContext(Dispatchers.IO) { controller.currentPackage() }
         if (pkg != null && pkg != selfPackage) {
             foregroundYielded = true
@@ -1954,6 +1975,17 @@ class Agent(
          * 100ms 对 60Hz 来说是 6 帧，足够。
          */
         const val OVERLAY_SETTLE_MS = 100L
+
+        /**
+         * 0.9.18 死锁护栏的判据：**目标还没记上时，切换请求必须给 open_app 让路**。
+         *
+         * `watcher.targetPkg` 唯一的来源是"应用真的到了前台"，而把应用拉到前台的
+         * 正是 open_app。切换请求若把 open_app 掐死，目标永远出不来，切换请求
+         * 就永远被"先让 AI 打开要操作的应用"拒掉 —— 用户连点多少次都没用
+         * （0.9.17 蓝叠实证：4 次点击，前 3 次全撞进这个环，任务卡死）。
+         */
+        internal fun switchMustYieldToOpenApp(actionKind: TouchKind, targetPkg: String?): Boolean =
+            actionKind == TouchKind.OPEN_APP && targetPkg.isNullOrBlank()
 
         /**
          * 按 HOME 让开后等界面切走：**上限**，不是固定等待。
