@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 58      // 0.9.18：切换请求不再掐死 open_app（死锁）+ 副屏首帧预检回滚 + 副屏模式不按 HOME 让位
-        versionName = "0.9.18"
+        versionCode = 59      // 0.9.19：悬浮窗遮挡不透明度压到 0.80 以下（Android 12+ 吞注入点击的真凶）
+        versionName = "0.9.19"
     }
 
     /**

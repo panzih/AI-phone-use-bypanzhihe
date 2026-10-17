@@ -95,17 +95,21 @@ class RippleView(context: Context) : View(context) {
             val fade = (1f - t)
 
             // 外圈：实线环
+            // 0.9.19：窗口 alpha 压到 0.3（见 OverlayService——避开 Android 12+
+            // 「不信任触摸」的 0.80 遮挡上限）。画笔值会被窗口系数整体乘下去，
+            // 顶到 255 也只有 0.3 亮度 —— 靠同一个圈多画几遍把亮度叠回来
+            // （SRC_OVER 逐层合成，0.3 画 4 遍 ≈ 0.76）。
             ringPaint.color = COLOR
             ringPaint.alpha = (255 * fade).toInt().coerceIn(0, 255)
-            canvas.drawCircle(r.x, r.y, radius, ringPaint)
+            repeat(4) { canvas.drawCircle(r.x, r.y, radius, ringPaint) }
 
-            // 内圈：同心，跟着一起扩散
+            // 内圈：同心，跟着一起扩散（3 遍 ≈ 0.66，接近原来的 0.55 倍亮度）
             ringPaint.alpha = (140 * fade).toInt().coerceIn(0, 255)
-            canvas.drawCircle(r.x, r.y, radius * 0.62f, ringPaint)
+            repeat(3) { canvas.drawCircle(r.x, r.y, radius * 0.62f, ringPaint) }
 
-            // 淡淡的填充，让圈以内的区域也有颜色 —— 就是"大圆减小圆"看着的那块
+            // 淡淡的填充：160 × 0.3 = 48，正好等于压低前的值，画一遍就够
             fillPaint.color = COLOR
-            fillPaint.alpha = (48 * fade).toInt().coerceIn(0, 255)
+            fillPaint.alpha = (160 * fade).toInt().coerceIn(0, 255)
             canvas.drawCircle(r.x, r.y, radius, fillPaint)
         }
 

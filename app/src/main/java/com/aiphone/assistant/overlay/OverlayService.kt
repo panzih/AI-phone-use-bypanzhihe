@@ -253,6 +253,12 @@ class OverlayService : Service() {
         ).also {
             it.width = dp(CARD_WIDTH_DP)
             it.height = dp(CARD_HEIGHT_DP)
+            // 0.9.19：Android 12+ 的「不信任触摸」保护——屏幕上叠加的不透明
+            // 遮挡 > 0.80 时，系统直接丢弃注入的点击（a11y/adb 都算）。卡片
+            // 默认 alpha=1.0 会被钳到 0.80，再叠上 0.80 的全屏水波层 =
+            // 0.96 → 点在卡片区域内的 AI 点击全被吞（蓝叠实证：搜索框在卡片
+            // 正下方，点了没反应）。两层显式压低：0.7 + 0.3×0.7 → 组合 0.79。
+            it.alpha = 0.7f
             this.cardParams = it
         }
         val buttonParams = baseParams(
@@ -260,7 +266,11 @@ class OverlayService : Service() {
             x = 0,
             y = dp(72),
             flags = FLAGS_BUTTON,
-        )
+        ).also {
+            // 0.9.19：同 cardParams —— 面板也在全屏水波层（0.3）之下，
+            // 默认 1.0 会让面板区域组合到 1.0；B 站底部 tab 栏就在面板附近。
+            it.alpha = 0.7f
+        }
 
         // 逐个加，哪一个失败都不影响另一个 —— 但**必须把失败打出来**。
         // 静默失败会让"悬浮窗没出现"变成一个完全无从下手的现象。
@@ -281,6 +291,10 @@ class OverlayService : Service() {
         ).also {
             it.width = WindowManager.LayoutParams.MATCH_PARENT
             it.height = WindowManager.LayoutParams.MATCH_PARENT
+            // 0.9.19：见 cardParams 处的注释——全屏层 0.3 + 卡片 0.7 → 组合
+            // 0.79，不触发「不信任触摸」丢弃。水波自身的视觉反馈靠内部画笔
+            // alpha（RippleView），窗口 alpha 只做整体系数。
+            it.alpha = 0.3f
         }
         runCatching { wm.addView(ripple, rippleParams); rippleView = ripple }
             .onSuccess { android.util.Log.i(TAG, "水波层已添加") }
