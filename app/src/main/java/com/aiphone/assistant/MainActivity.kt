@@ -1019,6 +1019,32 @@ private fun AppRoot(
         // （冷却只在同一次任务内用来防乒乓，跨任务没有意义）
         OverlayBus.clearAutoReturnSuppression()
 
+        // 「语音测试」= T40 的探针：发一段 1 秒静音，看这个通道收不收音频。
+        // 不录音、不上传任何用户声音 —— 这一趟只为拿一个状态码。
+        if (task == "语音测试" || task.equals("audio test", ignoreCase = true)) {
+            input = ""
+            addLog(LogKind.THOUGHT, "正在测语音输入（发一段 1 秒静音，不涉及你的录音）…", "语音")
+            scope.launch {
+                // 探针用一份临时客户端：submit() 这一层没有任务级的 llm
+                val probe = LlmClient(
+                    LlmConfig(
+                        baseUrl = settings.baseUrl,
+                        apiKey = settings.apiKey,
+                        model = settings.modelName,
+                        useFreeModel = settings.useFreeModel,
+                        thinking = settings.thinking,
+                    )
+                )
+                val r = withContext(Dispatchers.IO) { probe.probeAudio() }
+                addLog(
+                    if (r.ok) LogKind.RESULT else LogKind.ERROR,
+                    com.aiphone.assistant.llm.AudioProbe.describe(r),
+                    "语音",
+                )
+            }
+            return
+        }
+
         // 「复盘」= 回看上一趟、只出结论不下动作，不碰手机
         if (ReviewShortcut.matches(task)) {
             input = ""

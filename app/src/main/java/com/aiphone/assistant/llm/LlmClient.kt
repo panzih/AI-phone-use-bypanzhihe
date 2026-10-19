@@ -717,6 +717,45 @@ class LlmClient(private val cfg: LlmConfig) {
     // ------------------------------------------------------------------
 
     /**
+     * 语音能力探针（T40）：发一段 1 秒静音 WAV，看这个通道收不收 `input_audio`。
+     *
+     * 不重试、不流式 —— 这一趟只要一个状态码。任何异常都折成 `code = 0`，
+     * 调用方拿 [AudioProbe.describe] 就能说清是"不支持"还是"连不上"。
+     */
+    fun probeAudio(): AudioProbe.Outcome {
+        val wav = AudioProbe.silentWav()
+        val b64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
+        val body = AudioProbe.buildBody(cfg.model, b64).toByteArray(Charsets.UTF_8)
+        return try {
+            val conn = (java.net.URL(endpoint()).openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15_000
+                readTimeout = 30_000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                if (cfg.useFreeModel) {
+                    setRequestProperty("Authorization", "Bearer public")
+                    setRequestProperty("User-Agent", "opencode/1.18.31 (linux arm64; node20.0.0)")
+                    setRequestProperty("x-opencode-client", "cli")
+                } else {
+                    setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
+                }
+            }
+            conn.setFixedLengthStreamingMode(body.size)
+            conn.outputStream.use { it.write(body) }
+            val code = conn.responseCode
+            val text = runCatching {
+                (if (code in 200..299) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader()?.readText().orEmpty()
+            }.getOrDefault("")
+            conn.disconnect()
+            AudioProbe.Outcome(code in 200..299, code, text)
+        } catch (t: Throwable) {
+            AudioProbe.Outcome(false, 0, "${t.javaClass.simpleName}: ${t.message}")
+        }
+    }
+
+    /**
      * 拼接口地址。
      *
      * 用户填什么的都有：`https://api.deepseek.com`、
