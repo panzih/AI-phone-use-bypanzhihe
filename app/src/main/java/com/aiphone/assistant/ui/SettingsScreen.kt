@@ -548,6 +548,7 @@ private fun ModelSection(
         ThinkingModeSlider(
             current = s.thinking,
             freeLane = s.useFreeModel,
+            baseUrl = s.baseUrl,
             onChange = { onChange(s.copy(thinking = it)) },
         )
 
@@ -614,10 +615,14 @@ private data class FreeModel(val id: String, val label: String)
 private fun ThinkingModeSlider(
     current: ThinkingMode,
     freeLane: Boolean,
+    baseUrl: String,
     onChange: (ThinkingMode) -> Unit,
 ) {
-    val options = ThinkingMode.entries
-    val index = options.indexOf(current).coerceAtLeast(0)
+    // 档位**随模型/服务商变**：DeepSeek 没有 medium，免费网关没有 max。
+    // 当前选的那档不在列表里（比如刚从 DeepSeek 换到别的）就落到最右的「默认」，
+    // 绝不发一个这个服务商不认的 effort 过去（那是 400，不是"档位失效"）。
+    val options = ThinkingMode.levelsFor(baseUrl, freeLane)
+    val index = options.indexOf(current).takeIf { it >= 0 } ?: options.lastIndex
     var draft by remember(index) { mutableFloatStateOf(index.toFloat()) }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {

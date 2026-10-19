@@ -45,4 +45,43 @@ class ThinkingModeTest {
         // 文档原文：思考默认开启、默认 effort = high
         assertTrue("要写明默认档等于 high：$note", note.contains("high"))
     }
+
+    // ---------------------------------------------------------------
+    // levelsFor：滑块上摆哪几档，必须是对这个服务商**真能发**的
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `DeepSeek 的滑块里没有 medium`() {
+        // 文档只认 low/high/max；摆一档发过去 400 的，比不摆更糟
+        val levels = ThinkingMode.levelsFor("https://api.deepseek.com", freeLane = false)
+        assertFalse(levels.contains(ThinkingMode.MEDIUM))
+        assertTrue(levels.contains(ThinkingMode.MAX))
+    }
+
+    @Test
+    fun `免费通道不摆 max`() {
+        // 上游各异，max 只是"被接受"，不代表真按它推理；不给用户这个错觉
+        val levels = ThinkingMode.levelsFor("https://opencode.ai/zen", freeLane = true)
+        assertFalse(levels.contains(ThinkingMode.MAX))
+        assertTrue(levels.contains(ThinkingMode.HIGH))
+    }
+
+    @Test
+    fun `其他服务商给 medium`() {
+        val levels = ThinkingMode.levelsFor("https://api.openai.com", freeLane = false)
+        assertTrue(levels.contains(ThinkingMode.MEDIUM))
+        assertFalse(levels.contains(ThinkingMode.MAX))
+    }
+
+    @Test
+    fun `默认档永远在最右`() {
+        listOf(
+            ThinkingMode.levelsFor("https://api.deepseek.com", false),
+            ThinkingMode.levelsFor("https://opencode.ai/zen", true),
+            ThinkingMode.levelsFor("https://whatever.example", false),
+        ).forEach { levels ->
+            assertEquals(ThinkingMode.DEFAULT, levels.last())
+            assertEquals("最右一档是默认，用户不调就是它", levels.last().id, "default")
+        }
+    }
 }

@@ -177,6 +177,8 @@ object LogExporter {
         appendLine("  logs/runs/     每次任务的完整记录（$runCount 次，共 $stepCount 步）")
         appendLine("    run.log        每一步的文字记录；含该步**原样发给模型**的界面元素列表")
         appendLine("    report.json    结构化记录；每条 step 里的 uiTree 就是那一刻模型看到的元素")
+        appendLine("    prompts/       每步原样发给模型的 user 消息（step_01_a.txt …）")
+        appendLine("    steps/         每步一份 md：问了什么 / 模型原始输出 / 端侧结果，一页看完")
         appendLine("    ui/step_NN.txt 上面那份元素列表的单独副本（读不到控件树时也会留，写明原因）")
         appendLine("    screenshots/   模型主动要的截图")
         appendLine("  logs/diag/     自检、设备列表这类一次性输出")

@@ -183,6 +183,14 @@ class Agent(
     private var cacheHitTokens = 0
     private var cacheMissTokens = 0
 
+    /**
+     * 这趟用的系统提示词（复评时复用）。
+     *
+     * 复用它是为了**命中缓存**：同一段系统提示词 + 同一段历史 + 最后追加一条
+     * "请复盘"，前面全部命中；换一套提示词的话，几万 token 全按未命中计价。
+     */
+    private var systemPrompt: String = ""
+
     /** 这次任务是否已经把纸盒让到后台（lazy，全程只让一次） */
     private var foregroundYielded = false
 
@@ -346,6 +354,7 @@ class Agent(
             memorySnapshot,
             modelName = settings.modelName,
         )
+        systemPrompt = system
         val memoryChars = memorySnapshot?.length ?: 0
         logger?.line(
             when {
@@ -386,6 +395,10 @@ class Agent(
         // 收尾闸拦过几次（跨步累计）。只拦一次：模型第二次仍坚持就放行，
         // 免得和"任务确实已经完成"的正常情况来回拉锯
         var finishRefusals = 0
+
+        // 上一轮的输入 token 数（缓存自检用）：严格追加的前提下，这一整段
+        // 下一轮都该命中；命中明显少于它 = 有人改了历史，而这不会报错、只会烧钱
+        var lastPromptTokens = 0
 
         // 上一批动作的执行结果。它会拼进**下一条** user 消息里，
         // 而不是单独发一条 —— 这样整条对话是严格追加，缓存才命中得了。
@@ -432,16 +445,24 @@ class Agent(
             migration.refreshMoveButton()
 
             // 用户按了「切到副屏」：在动作间隙完成迁移；成功后从下一步起读副屏
+            //
+            // T32：迁移期间显式进「暂停」态 —— 迁移要搬任务栈、建虚拟屏，
+            // 这几秒里既不该读树也不该发请求（读到的也是搬家途中的半截界面）。
+            // 这不是用户按的暂停，所以结束后**无条件**恢复，不改变用户的暂停选择。
             if (OverlayBus.moveToVdRequested) {
+                OverlayBus.markPaused(true)
                 val moved = migration.moveRequestedByUser()
                 OverlayBus.clearMoveToVirtualDisplay()
+                OverlayBus.markPaused(false)
                 if (moved) continue
             }
 
             // 用户按了「切回主屏」（副屏模式绿按钮）：动作间隙回迁；成功后从下一步起读主屏
             if (OverlayBus.returnFromVdRequested) {
+                OverlayBus.markPaused(true)
                 val back = migration.returnRequestedByUser()
                 OverlayBus.clearReturnFromVd()
+                OverlayBus.markPaused(false)
                 if (back) continue
             }
 
@@ -737,6 +758,8 @@ class Agent(
                 // 现在整条对话严格递增、每个字节都可复现：
                 //     [system][user1(+图)][assistant1][user2(+图)]...
                 history.add(ChatTurn(ChatTurn.USER, userText, pendingImage))
+                // 原样落盘：导出包里要能看到"我们问了什么"，而不只是模型答了什么
+                logger?.recordPrompt(step, userText)
 
                 listener.onEvent(EventKind.THOUGHT, "正在请求模型 ...", "第 $step 步")
                 val callStart = System.currentTimeMillis()
@@ -845,6 +868,20 @@ class Agent(
                                 if (pendingImage != null) "（本轮带图）" else "",
                             "模型",
                         )
+                        // ---- 命中自检 ----
+                        // 光有"前缀复用 N/N 条"不够：那只比了消息条数。这里用服务端
+                        // 真给的命中数比"上一轮的全部输入"，对不上就当场报警 ——
+                        // 缓存断了不会报错，只会让输入按 50 倍价计费。
+                        if (RunGuards.cacheBroke(lastPromptTokens, result.cacheHitTokens)) {
+                            logger?.warn(
+                                "缓存断了（第 $step 步）：上一轮输入 $lastPromptTokens token，" +
+                                    "这一轮只命中 ${result.cacheHitTokens}。" +
+                                    "查一下这段时间里历史有没有被改过（改一个字就全断）",
+                                "缓存",
+                            )
+                        }
+                        lastPromptTokens = result.promptTokens
+
                         // 前缀复用率是"我们这一侧有没有把前缀维持住"的答案。
                         // 它高、而服务端命中率低 → 前缀没问题，是服务端缓存的事；
                         // 它本身就低 → 我们的请求构造有问题，历史被改动了
@@ -2059,6 +2096,35 @@ class Agent(
         logger?.setOutcome(success, message)
         logger?.close()
         listener.onFinished(success, message)
+    }
+
+    /**
+     * 复评：拿这趟的完整历史再问一次"哪一步错了"，**不重放动作**。
+     *
+     * 和 [run] 的区别只有一点：结果只交给人看，不解析成动作 ——
+     * 所以复评不会碰手机。系统提示词和历史都原样复用（见 [systemPrompt]），
+     * 这一段几乎全是缓存命中，成本比新开一趟任务低一个数量级。
+     *
+     * @param instruction 用户想让它复盘什么；空的话用默认那三问
+     */
+    suspend fun review(instruction: String = ""): LlmResult {
+        if (allHistory.isEmpty()) {
+            return LlmResult.Fail("还没有可复盘的任务：先跑一趟再来。")
+        }
+        val ask = if (instruction.isBlank()) {
+            AgentPrompt.REVIEW_INSTRUCTION
+        } else {
+            AgentPrompt.REVIEW_INSTRUCTION + "\n\n（这次特别看一下：$instruction）"
+        }
+        return withContext(Dispatchers.IO) {
+            llm.chat(
+                system = systemPrompt.ifBlank {
+                    AgentPrompt.system(modelName = settings.modelName)
+                },
+                history = allHistory + ChatTurn(ChatTurn.USER, ask),
+                shouldAbort = { isStopped() },
+            )
+        }
     }
 
     /** 状态卡上显示的一行：单个动作直接写，一批就写第一个 + 总数 */

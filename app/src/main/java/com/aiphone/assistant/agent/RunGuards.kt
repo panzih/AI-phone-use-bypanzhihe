@@ -29,6 +29,18 @@ internal object RunGuards {
     fun treeObservable(rootAvailable: Boolean, elementCount: Int): Boolean =
         rootAvailable && elementCount > 0
 
+    /**
+     * 这一轮是不是"缓存断了"。
+     *
+     * 判据：上一轮的输入 `prevPromptTokens` 这一段，这一轮理应全部命中
+     * （对话是严格追加的），实际命中却明显少了。
+     *
+     * @param slack 容差。官方的最小缓存单元是 64 token —— 尾部不到一个单元的
+     *        那截本来就不会命中，所以留这么点余量，免得每步都误报
+     */
+    fun cacheBroke(prevPromptTokens: Int, hitTokens: Int, slack: Int = 64): Boolean =
+        prevPromptTokens > slack && hitTokens + slack < prevPromptTokens
+
     /** 累加"界面没变化"的步数；不可观测时直接归零，不把空气算进去 */
     fun nextSameTreeCount(previous: Int, treeHash: Int, lastTreeHash: Int): Int =
         if (treeHash != 0 && treeHash == lastTreeHash) previous + 1 else 0

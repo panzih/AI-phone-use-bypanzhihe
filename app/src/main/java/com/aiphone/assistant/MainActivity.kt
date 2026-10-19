@@ -28,6 +28,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.aiphone.assistant.agent.Agent
 import com.aiphone.assistant.agent.AgentPrompt
+import com.aiphone.assistant.agent.ReviewShortcut
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.CarriedContext
@@ -42,6 +43,7 @@ import com.aiphone.assistant.data.stepsLabel
 import com.aiphone.assistant.llm.ChatTurn
 import com.aiphone.assistant.llm.LlmClient
 import com.aiphone.assistant.llm.LlmConfig
+import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.AppLog
 import com.aiphone.assistant.log.AutoCapture
 import com.aiphone.assistant.log.LogExporter
@@ -264,6 +266,13 @@ private fun AppRoot(
     var settings by remember { mutableStateOf(store.load()) }
     var isRunning by remember { mutableStateOf(false) }
     var stopRequested by remember { mutableStateOf(false) }
+
+    /**
+     * 上一趟任务的 Agent。复评要用它手里的完整历史 + 系统提示词 ——
+     * 复用同一份才能吃到缓存（见 Agent.review 的说明）。
+     */
+    var lastAgent by remember { mutableStateOf<Agent?>(null) }
+    var reviewing by remember { mutableStateOf(false) }
     // 「真的停下来了」以 Agent 为准：它在等待点广播，界面只照它显示。
     // 不用本地开关的原因很简单 —— 点了暂停到它真停下之间有几十毫秒，
     // 那段时间界面已经说"已暂停"、而 AI 还在动，是最让人心慌的错位。
@@ -892,6 +901,9 @@ private fun AppRoot(
             },
         )
 
+        // 复评要用的那趟引用：run 之前就记下，任务失败也能复盘
+        lastAgent = agent
+
         val finalHistory = try {
             agent.run(task)
             // 把模型这一侧的历史接住，随对话一起落盘 —— 下一次任务
@@ -908,6 +920,34 @@ private fun AppRoot(
         modelHistory = finalHistory
         modelFingerprints = llm.fingerprintChain()
         // 上下文已保存是内部状态，不再作为一条日志显示给用户
+    }
+
+    /**
+     * 复评：拿上一趟的历史问"哪一步错了"。
+     *
+     * 和正常任务共用 `isRunning` 那套「忙」状态，但**不**起悬浮窗、**不**碰无障碍 ——
+     * 因为它一个动作都不会执行（[Agent.review] 的返回值只往对话里写）。
+     */
+    fun reviewLast(target: Agent, instruction: String) {
+        if (isRunning) return
+        reviewing = true
+        isRunning = true
+        addLog(LogKind.THOUGHT, "正在复盘这一趟（不会动手机）…", "复盘")
+        scope.launch {
+            val r = target.review(
+                instruction.takeIf { it !in setOf("复盘", "复评", "回顾") }.orEmpty()
+            )
+            reviewing = false
+            isRunning = false
+            when (r) {
+                is LlmResult.Ok -> {
+                    r.text.trim().lines().filter { it.isNotBlank() }.forEach {
+                        addLog(LogKind.THOUGHT, it, "复盘")
+                    }
+                }
+                is LlmResult.Fail -> addLog(LogKind.ERROR, r.message, "复盘失败")
+            }
+        }
     }
 
     fun submit() {
@@ -978,6 +1018,18 @@ private fun AppRoot(
         // 批 3：上一轮任务留下的「自动回迁冷却」会压住这一轮，开新任务时清掉。
         // （冷却只在同一次任务内用来防乒乓，跨任务没有意义）
         OverlayBus.clearAutoReturnSuppression()
+
+        // 「复盘」= 回看上一趟、只出结论不下动作，不碰手机
+        if (ReviewShortcut.matches(task)) {
+            input = ""
+            val target = lastAgent
+            if (target == null) {
+                addLog(LogKind.SYSTEM, "还没有可复盘的任务：先跑一趟再来。", "复盘")
+            } else {
+                reviewLast(target, task)
+            }
+            return
+        }
 
         // 本地快捷指令：在发送框直接说「操作记录 / 开始录制」等，进录制页，不发给模型。
         // 录制入口已下架，这条短路也要一起关 —— 否则从输入框还能绕进那个页面

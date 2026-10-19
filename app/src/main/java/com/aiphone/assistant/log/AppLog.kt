@@ -57,6 +57,16 @@ class RunLogger internal constructor(
      * 复盘时可以直接按步号打开，也方便把某一步单独发给别人。
      */
     private val uiDir = File(runDir, UI_SUBDIR).apply { mkdirs() }
+
+    /** 每步**实际发给模型的那条 user 消息**（原样）。T36：导出时要能复现"它当时看到了什么指令" */
+    private val promptDir = File(runDir, PROMPT_SUBDIR).apply { mkdirs() }
+
+    /** 每步一份人读的 md（导出包里最常被翻的东西） */
+    private val stepMdDir = File(runDir, STEP_MD_SUBDIR).apply { mkdirs() }
+
+    /** 步号 → 这一步问过模型的几次 user 消息（要图/调技能会同一 step 问多次） */
+    private val stepPrompts = LinkedHashMap<Int, MutableList<String>>()
+
     private val reportFile = File(runDir, REPORT_NAME)
 
     /** 结构化记录，close() 时一次性写成 report.json */
@@ -214,6 +224,88 @@ class RunLogger internal constructor(
 
     private fun uiFileName(step: Int): String = "step_%02d.txt".format(step)
 
+    /**
+     * 记下这一步**原样发给模型**的 user 消息。
+     *
+     * 同一 step 可能问不止一次（模型要截图 / 要调技能时，这一轮不算新的一步），
+     * 所以按步号累积，文件名带序号：`step_03_a.txt`、`step_03_b.txt`。
+     * 以前这些只存在于内存里的 `history`，导出时拿不到 —— 复盘时只能看到
+     * 模型"说了什么"，看不到"我们问了什么"，等于少了一半证据。
+     */
+    fun recordPrompt(step: Int, text: String) {
+        synchronized(lock) {
+            if (closed) return
+            val list = stepPrompts.getOrPut(step) { mutableListOf() }
+            list.add(text)
+            runCatching {
+                val name = "step_%02d_%s.txt".format(step, ('a' + list.size - 1))
+                File(promptDir, name).writeText(text)
+            }
+        }
+    }
+
+    /**
+     * 每步一份 md：把"问了什么 / 看了什么 / 回了什么 / 结果如何"放在一页里。
+     *
+     * 为什么另做一份而不是只留 report.json：JSON 适合程序读，人复盘时
+     * 要的是能直接翻的文档（导出包里被翻得最多的就是它）。
+     */
+    private fun writeStepMarkdown() {
+        runCatching {
+            for (i in 0 until steps.length()) {
+                val o = steps.optJSONObject(i) ?: continue
+                val step = o.optInt("step")
+                val sb = StringBuilder()
+                sb.appendLine("# 第 $step 步")
+                sb.appendLine()
+                sb.appendLine("- 时间：${o.optLong("at")}")
+                o.optString("screenshot").takeIf { it.isNotBlank() && it != "null" }?.let {
+                    sb.appendLine("- 截图：`screenshots/$it`")
+                }
+                o.optString("uiTreeFile").takeIf { it.isNotBlank() && it != "null" }?.let {
+                    sb.appendLine("- 界面元素：`ui/$it`")
+                }
+                sb.appendLine()
+
+                val prompts = stepPrompts[step]
+                if (prompts != null) {
+                    prompts.forEachIndexed { idx, prompt ->
+                        sb.appendLine("## 发给模型的 user 消息${if (prompts.size > 1) "（第 ${idx + 1} 次）" else ""}")
+                        sb.appendLine("```text")
+                        sb.appendLine(prompt)
+                        sb.appendLine("```")
+                        sb.appendLine()
+                    }
+                }
+
+                o.optString("thought").takeIf { it.isNotBlank() }?.let {
+                    sb.appendLine("## 模型的思考")
+                    sb.appendLine(it)
+                    sb.appendLine()
+                }
+                o.optString("rawModelOutput").takeIf { it.isNotBlank() && it != "null" }?.let {
+                    sb.appendLine("## 模型原始输出")
+                    sb.appendLine("```json")
+                    sb.appendLine(it)
+                    sb.appendLine("```")
+                    sb.appendLine()
+                }
+                o.optString("action").takeIf { it.isNotBlank() && it != "null" }?.let {
+                    sb.appendLine("## 动作")
+                    sb.appendLine(it)
+                    sb.appendLine()
+                }
+                o.optString("result").takeIf { it.isNotBlank() && it != "null" }?.let {
+                    sb.appendLine("## 端侧结果")
+                    sb.appendLine(it)
+                    sb.appendLine()
+                }
+
+                File(stepMdDir, "step_%02d.md".format(step)).writeText(sb.toString())
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // 收尾
     // ------------------------------------------------------------------
@@ -238,6 +330,8 @@ class RunLogger internal constructor(
                     put("steps", steps)
                 }
                 reportFile.writeText(root.toString(2))
+                // 每步一份 md：导出包里最常被翻的就是它
+                writeStepMarkdown()
             }
         }
     }
@@ -258,6 +352,12 @@ class RunLogger internal constructor(
     companion object {
         const val LOG_NAME = "run.log"
         const val REPORT_NAME = "report.json"
+
+        /** 每步原样发给模型的 user 消息：`prompts/step_01_a.txt` */
+        const val PROMPT_SUBDIR = "prompts"
+
+        /** 每步一份可读 md：`steps/step_01.md` */
+        const val STEP_MD_SUBDIR = "steps"
         const val SHOT_SUBDIR = "screenshots"
         const val UI_SUBDIR = "ui"
         const val LOGCAT_TAG = "纸盒"

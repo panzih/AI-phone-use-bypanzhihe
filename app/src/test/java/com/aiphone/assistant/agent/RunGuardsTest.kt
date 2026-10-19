@@ -241,4 +241,25 @@ class RunGuardsTest {
             )
         )
     }
+
+    // ---------------------------------------------------------------
+    // 5. 缓存自检（0.9.24 T34）：严格追加的前提下，命中数不该明显低于上一轮
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `命中数明显低于上一轮输入就是断了`() {
+        assertTrue(RunGuards.cacheBroke(prevPromptTokens = 5000, hitTokens = 1200))
+    }
+
+    @Test
+    fun `差在容差以内不算断`() {
+        // 官方最小缓存单元 64 token，尾部那截本来就不命中
+        assertFalse(RunGuards.cacheBroke(prevPromptTokens = 5000, hitTokens = 5000))
+        assertFalse(RunGuards.cacheBroke(prevPromptTokens = 5000, hitTokens = 4960))
+    }
+
+    @Test
+    fun `第一轮没有上一轮，不报断`() {
+        assertFalse(RunGuards.cacheBroke(prevPromptTokens = 0, hitTokens = 0))
+    }
 }

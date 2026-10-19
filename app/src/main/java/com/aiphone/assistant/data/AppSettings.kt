@@ -98,6 +98,14 @@ enum class ThinkingMode(
         effort = "low",
         api = "thinking.type = enabled + reasoning_effort = low",
     ),
+    MEDIUM(
+        id = "medium",
+        label = "MED",
+        note = "中等推理。给只认 medium 的服务商用；DeepSeek 不认这一档，所以它不出现在 DeepSeek 的滑块上",
+        toggle = "enabled",
+        effort = "medium",
+        api = "thinking.type = enabled + reasoning_effort = medium",
+    ),
     HIGH(
         id = "high",
         label = "HIGH",
@@ -141,11 +149,38 @@ enum class ThinkingMode(
      * 只用来决定要不要传 temperature：在做思维链就传了也没用。
      * OFF 明确关了；DEFAULT 不发参数，服务端可能开也可能关，保守起见不传。
      */
-    val thinkingOn: Boolean get() = this == LOW || this == HIGH || this == MAX
+    val thinkingOn: Boolean get() = this == LOW || this == MEDIUM || this == HIGH || this == MAX
 
     companion object {
         fun fromId(id: String?): ThinkingMode =
             entries.firstOrNull { it.id == id } ?: DEFAULT
+
+        /**
+         * 这个通道/服务商**实际支持**的档位，按「从弱到强、默认放最右」排好。
+         *
+         * ## 为什么要按服务商分，而不是全列出来
+         *
+         * 把六档全摆出来看着整齐，实际是骗人：DeepSeek 只认 low/high/max，
+         * 拉到 MEDIUM 发过去是 400；反过来某些 OpenAI 兼容服务只认 low/medium/high，
+         * 根本没有 max。滑块上摆一个"发了就报错"的档位，比不给更糟。
+         *
+         * ## 数据从哪来（老实说：没有远程接口）
+         *
+         * 2026-10-19 查过一圈：`/zen/v1/models` 只回模型 id；models.dev 的
+         * `api.json` 有 5.8MB（手机端不适合拉）；DeepSeek 的 `/models` 也不带能力位。
+         * 所以这里按**服务商家族**判定，规则写在下面，改的时候只改这一处：
+         *   - 免费网关：上游各异，给最保守的四档（关/低/高/默认）
+         *   - DeepSeek 官方：文档写死 low/high/max
+         *   - 其他 OpenAI 兼容：低/中/高（medium 是 OpenAI 的官方取值）
+         *
+         * 哪天接上真正的能力接口，只需要把这里换成"读回来的列表"，
+         * 调用方（滑块）不用动。
+         */
+        fun levelsFor(baseUrl: String, freeLane: Boolean): List<ThinkingMode> = when {
+            freeLane -> listOf(OFF, LOW, HIGH, DEFAULT)
+            baseUrl.contains("deepseek", ignoreCase = true) -> listOf(OFF, LOW, HIGH, MAX, DEFAULT)
+            else -> listOf(OFF, LOW, MEDIUM, HIGH, DEFAULT)
+        }
     }
 }
 
