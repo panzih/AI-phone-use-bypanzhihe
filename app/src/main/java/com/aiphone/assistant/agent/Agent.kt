@@ -134,6 +134,20 @@ class Agent(
     var stopRequested: Boolean = false
 
     /**
+     * 已经跟用户说过"暂停了"没有。只影响提示重复，不影响状态 ——
+     * 每轮都刷一条"已暂停"会把日志和对话刷满。
+     */
+    private var pauseAnnounced = false
+
+    /**
+     * 当前在第几步 —— 只给"等待期间的暂停"用。
+     *
+     * [awaitStable] / [awaitWithStop] 在轮询里也要能停住（不然一个 30 秒的
+     * 长等待按了暂停还得等完），而它们拿不到循环里的 `step` 变量。
+     */
+    private var currentStep = 0
+
+    /**
      * 这次任务结束时，模型那一侧攒下的完整历史。
      *
      * 调用方在 [run] 返回后读它、存进 [com.aiphone.assistant.data.ContextStore]，
@@ -392,7 +406,9 @@ class Agent(
         val stepLimit = if (maxSteps <= 0) Int.MAX_VALUE else maxSteps
 
         for (step in 1..stepLimit) {
-            if (isStopped()) {
+            currentStep = step
+            // 暂停点①：步开头。返回 false = 用户在暂停期间按了停止
+            if (!awaitResume(step)) {
                 finish(false, "你停止了任务（第 $step 步）")
                 return
             }
@@ -660,7 +676,8 @@ class Agent(
             }
 
             ask@ while (true) {
-                if (isStopped()) {
+                // 暂停点②：发请求之前（模型要图/要技能会在这里绕回，也停得住）
+                if (!awaitResume(step)) {
                     finish(false, "你停止了任务（第 $step 步，模型调用前）")
                     return
                 }
@@ -683,6 +700,15 @@ class Agent(
                     }
                 }
 
+                // 暂停期间用户补的话：拼进**这一条** user 消息（不单独发一条，
+                // 否则对话就不算严格追加，缓存前缀从这里断开）
+                val userNote = OverlayBus.drainUserNotes().takeIf { it.isNotEmpty() }
+                    ?.joinToString("\n\n")
+                if (userNote != null) {
+                    logger?.line("用户补充指令：$userNote", "暂停")
+                    listener.onEvent(EventKind.THOUGHT, "收到补充指令：$userNote", "暂停")
+                }
+
                 val userText = AgentPrompt.stepMessage(
                     step = step,
                     maxSteps = maxSteps,
@@ -696,6 +722,7 @@ class Agent(
                     imageNote = imageNote,
                     skillNote = skillNote,
                     noTreeReason = noTreeReason,
+                    userNote = userNote,
                 )
 
                 // ⚠️ 必须把**实际发出去的这条消息**原样追加进 history ——
@@ -1080,6 +1107,11 @@ class Agent(
             // 但同一批里画面几乎没变，多截只是多花钱
             var shotsThisBatch = 0
             for ((i, action) in p.actions.withIndex()) {
+                // 暂停点③：每个动作之前 —— 暂停不该"再把这一批跑完"
+                if (!awaitResume(step)) {
+                    finish(false, "你停止了任务（执行第 $step 步第 ${i + 1} 个动作之前）")
+                    return
+                }
                 // 动作间隙统一查中断：急停立刻收尾；切换请求 break、交本步 tail 留痕，
                 // 下一轮 for(step) 开头 261/268 处理迁移/回迁（0.8.2）
                 when (interruption()) {
@@ -1581,6 +1613,9 @@ class Agent(
     private suspend fun awaitWithStop(ms: Long): WaitOutcome {
         var left = ms
         while (left > 0) {
+            // 长等待里也要停得住：暂停的时间**不计入** left，
+            // 恢复后把剩下的等完 —— 否则"暂停 10 秒"会白送 10 秒
+            if (!awaitResume(currentStep)) return WaitOutcome.STOPPED
             val out = interruption()
             if (out != WaitOutcome.DONE) return out
             val chunk = minOf(left, STOP_POLL_MS)
@@ -1588,6 +1623,47 @@ class Agent(
             left -= chunk
         }
         return interruption()
+    }
+
+    /**
+     * 「暂停」的落点：循环在这里真正停住，直到用户点继续或停止。
+     *
+     * ## 为什么必须是一个显式的等待点，而不是"每步查一下 pauseRequested"
+     *
+     * 查一下只能让**下一步**不开始；用户按暂停时最想要的是"现在别再动了"——
+     * 当前这一批剩下的动作、当前这次请求都该停。所以三个地方各插一次：
+     * 步开头、每个动作之前、发请求之前。停住之后**不读控件树、不发请求**，
+     * 所以暂停期间消耗是零（这和"停止"只差在能不能接着走）。
+     *
+     * 暂停期间用户补的话进 [OverlayBus.drainUserNotes]，由调用方拼进下一条
+     * user 消息 —— 不单独发消息，否则对话就不是严格追加，缓存前缀会断。
+     *
+     * @return true = 可以继续；false = 用户在等待期间按了停止
+     */
+    private suspend fun awaitResume(step: Int): Boolean {
+        if (isStopped()) return false
+        if (!OverlayBus.pauseRequested) return true
+
+        if (!pauseAnnounced) {
+            pauseAnnounced = true
+            OverlayBus.markPaused(true)
+            OverlayBus.setPhase(AgentPhase.PAUSED)
+            val msg = "已暂停（第 $step 步）。可以在输入框里补一句话，点发送并进下一轮。"
+            logger?.line(msg, "暂停")
+            listener.onEvent(EventKind.THOUGHT, msg, "暂停")
+        }
+        // 轮询间隔取 150ms：比 [STOP_POLL_MS] 短，是因为"按了继续要马上动"
+        // 比"按了停止要马上停"更影响手感，而 150ms 的轮询开销可以忽略
+        while (OverlayBus.pauseRequested) {
+            if (isStopped()) return false
+            delay(PAUSE_POLL_MS)
+        }
+        if (isStopped()) return false
+
+        pauseAnnounced = false
+        OverlayBus.markPaused(false)
+        logger?.line("继续执行（第 $step 步）", "暂停")
+        return true
     }
 
     /** 这个动作要不要做“动作后验证”：第一版只验证最可靠的导航类点击/返回 */
@@ -1722,6 +1798,13 @@ class Agent(
         var sawTree = false
 
         while (true) {
+            // 等界面稳定期间同样可暂停 —— 这里不暂停的话，一次"点完等它静下来"
+            // 会一直把界面读下去，用户按了暂停还在读树
+            // （暂停时长会被算进 elapsed，但那只影响"最少等多久"这一档，
+            //  不会提前放行动作，实测无副作用）
+            if (OverlayBus.pauseRequested) {
+                if (!awaitResume(currentStep)) return StableResult(WaitOutcome.STOPPED)
+            }
             // parseNodes() 自己就切到 IO 线程了，不用再包一层 withContext
             val t0 = System.nanoTime()
             val frame = controller.parseNodesOrNull()
@@ -1842,6 +1925,12 @@ class Agent(
         // 无条件清掉挂起的通道切换请求，兜住所有终止路径（0.8.2 审阅加固）
         OverlayBus.clearMoveToVirtualDisplay()
         OverlayBus.clearReturnFromVd()
+        // 暂停状态也必须收干净：留着的话下一次任务一开头就以为"用户还在暂停"，
+        // 而按钮上已经写着「已暂停」——那是最难查的一类僵死。
+        pauseAnnounced = false
+        OverlayBus.clearPause()
+        // 暂停期间打了字、任务却已经结束的那几句，不能带进下一次任务
+        OverlayBus.clearUserNotes()
 
         // 收尾：只要还在副屏、或建过副屏（哪怕迁移失败提前返回），都销毁，不留残屏（0.8.0 验收⑤）
         // （"是不是建过副屏"只有迁移自己知道，所以整段收尾交给它）
@@ -2000,6 +2089,14 @@ class Agent(
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
+
+        /**
+         * 暂停时多久看一次"用户点继续了没有"。
+         *
+         * 50ms：暂停期间**不发请求、不读树**，轮询本身几乎没有成本；
+         * 而"点了继续，两百毫秒后还没动"是很明显的迟滞感。
+         */
+        const val PAUSE_POLL_MS = 50L
 
         // 自动切副屏的判据常量已随状态机迁到 AutoSwitchWatcher（0.9.11）：
         // DESKTOP_DEBOUNCE_MS / TARGET_FRESH_MS / SELF_HOME_SUPPRESS_MS / AUTO_FAIL_COOLDOWN_MS

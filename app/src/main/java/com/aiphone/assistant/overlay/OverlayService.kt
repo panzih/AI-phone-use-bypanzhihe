@@ -87,6 +87,10 @@ class OverlayService : Service() {
     /** 底部按钮上的文字。录制模式下要把它从「急停」改成「停止」 */
     private var stopLabel: TextView? = null
 
+    /** 「暂停 / 继续」按钮与它的文字（录制时整块隐藏） */
+    private var pauseButton: View? = null
+    private var pauseLabel: TextView? = null
+
     /**
      * 状态卡的窗口参数。
      *
@@ -399,19 +403,75 @@ class OverlayService : Service() {
     }
 
     /**
-     * 底部按钮面板：上面「切到副屏」、下面「急停」，垂直排列。
-     * 一个窗口装两个按钮，天然保证「切到副屏」在急停正上方。
+     * 底部按钮面板：上面「切到副屏」，中间「暂停/继续」，下面「急停」。
+     *
+     * 「暂停」是新加的：以前只有一个「急停」，按了就是**单向结束**，
+     * 用户想让 AI 停一下、自己补一句话再让它接着干，是没有路的。
+     * 现在按暂停真的停（不读树、不发请求），补的话并进下一轮；
+     * 急停仍然保留，只是从"唯一出口"变成了"真的不要了"的那个出口。
      */
     private fun buildButtonPanel(): View {
         val move = buildMoveButton()
+        val pause = buildPauseButton()
         val stop = buildStopButton()
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             addView(move)
             addView(
+                pause,
+                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) },
+            )
+            addView(
                 stop,
-                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) },
+                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) },
+            )
+        }
+    }
+
+    /**
+     * 「暂停 / 继续」。文案由 Agent 的真实状态刷（[updatePauseButton]）——
+     * 点击时只给一个"收到了"的即时回显，不当成最终状态。
+     */
+    private fun buildPauseButton(): View {
+        val label = TextView(this).apply {
+            text = "暂停"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(10), dp(24), dp(10))
+        }
+        pauseLabel = label
+        return LinearLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(Color.parseColor(PAUSE_COLOR))
+            }
+            elevation = dp(6).toFloat()
+            addView(label)
+            isClickable = true
+            pauseButton = this
+            setOnClickListener {
+                OverlayBus.togglePause()
+                // 先按"用户意图"回显，Agent 真正停下/继续后会用真实状态再刷一次
+                label.text = if (OverlayBus.pauseRequested) "继续" else "暂停"
+            }
+        }
+    }
+
+    /** 暂停 / 继续按钮的真实状态（由 Agent 调，别人别调） */
+    fun updatePauseButton(paused: Boolean) {
+        main.post {
+            val btn = pauseButton ?: return@post
+            val label = pauseLabel ?: return@post
+            if (OverlayBus.recordingMode) {
+                btn.visibility = View.GONE
+                return@post
+            }
+            btn.visibility = View.VISIBLE
+            label.text = if (paused) "继续" else "暂停"
+            (btn.background as? GradientDrawable)?.setColor(
+                Color.parseColor(if (paused) RESUME_COLOR else PAUSE_COLOR)
             )
         }
     }
@@ -573,6 +633,8 @@ class OverlayService : Service() {
             currentText.text = "正在：手动操作手机"
             nextText.text = "下一步：点下面的按钮结束录制"
             stopLabel?.text = "停止"
+            // 录制时「暂停」没有意义（暂停的是 AI 循环，不是录制）
+            pauseButton?.visibility = View.GONE
         }
     }
 
@@ -606,6 +668,8 @@ class OverlayService : Service() {
 
     fun updateStatus(step: Int, maxSteps: Int, current: String, nextHint: String) {
         main.post {
+            // 普通任务里「暂停」要在（录制结束回到任务时它可能还是 GONE）
+            pauseButton?.visibility = View.VISIBLE
             stepText.text = stepsLabel(step, maxSteps)
             currentText.text = "正在：$current"
             nextText.text = if (nextHint.isBlank()) "下一步：—" else "下一步：$nextHint"
@@ -636,6 +700,10 @@ class OverlayService : Service() {
         /** 状态卡尺寸（dp）。固定尺寸是为了绕开 WRAP_CONTENT 窗口的测量坑 */
         private const val CARD_WIDTH_DP = 236
         private const val CARD_HEIGHT_DP = 118
+
+        /** 「暂停」按钮（琥珀）/「继续」按钮（绿） */
+        private const val PAUSE_COLOR = "#F9A825"
+        private const val RESUME_COLOR = "#2E7D32"
         private const val CHANNEL_ID = "aiphone_overlay"
         private const val NOTIFICATION_ID = 1001
 

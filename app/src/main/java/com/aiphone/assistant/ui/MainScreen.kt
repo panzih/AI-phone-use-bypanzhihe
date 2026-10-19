@@ -40,11 +40,14 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -91,6 +94,8 @@ fun MainScreen(
     onInputChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
+    onPauseToggle: () -> Unit,
+    isPaused: Boolean,
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
@@ -149,7 +154,9 @@ fun MainScreen(
                     onValueChange = onInputChange,
                     onSubmit = onSubmit,
                     onStop = onStop,
+                    onPauseToggle = onPauseToggle,
                     isRunning = state.isRunning,
+                    isPaused = isPaused,
                     runningHint = state.progress.ifBlank { stringResource(R.string.running_hint) },
                 )
             },
@@ -490,7 +497,9 @@ private fun InputBar(
     onValueChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
+    onPauseToggle: () -> Unit,
     isRunning: Boolean,
+    isPaused: Boolean,
     runningHint: String,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
@@ -505,7 +514,14 @@ private fun InputBar(
                     value = value,
                     onValueChange = onValueChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text(stringResource(R.string.input_hint)) },
+                    placeholder = {
+                        Text(
+                            stringResource(
+                                if (isRunning && isPaused) R.string.input_hint_paused
+                                else R.string.input_hint
+                            )
+                        )
+                    },
                     maxLines = 4,
                     shape = RoundedCornerShape(24.dp),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Send),
@@ -513,6 +529,27 @@ private fun InputBar(
                 )
                 Spacer(Modifier.width(8.dp))
                 if (isRunning) {
+                    // 暂停期间必须有「发送」：用户停下来的目的就是补一句话，
+                    // 没有发送键的话他只能靠输入法的回车，等于把功能藏起来
+                    if (isPaused) {
+                        FilledIconButton(
+                            onClick = onSubmit,
+                            enabled = value.isNotBlank(),
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.input_send))
+                        }
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    // 暂停 / 继续：暂停期间输入框仍可用，敲的东西会并进下一轮
+                    FilledTonalIconButton(onClick = onPauseToggle, modifier = Modifier.size(48.dp)) {
+                        Icon(
+                            if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                            stringResource(if (isPaused) R.string.input_resume else R.string.input_pause),
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    // 急停：真的结束这一趟，不是"停一下"
                     FilledIconButton(onClick = onStop, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Filled.Stop, stringResource(R.string.input_stop))
                     }
@@ -525,9 +562,22 @@ private fun InputBar(
             if (isRunning) {
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    if (isPaused) {
+                        Icon(
+                            Icons.Filled.Pause,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.tertiary,
+                        )
+                    } else {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    }
                     Spacer(Modifier.width(8.dp))
-                    Text(text = runningHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = if (isPaused) stringResource(R.string.running_paused_hint) else runningHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

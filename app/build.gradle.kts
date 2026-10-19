@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 60      // 0.9.20：对话显示改版（灰字小图标＝动作/结果/系统消息，正文＝AI 的话，靠右气泡＝用户的话）
-        versionName = "0.9.20"
+        versionCode = 61      // 0.9.21：暂停 / 真急停（暂停后能补话，急停在长等待里 0.3 秒内落地）
+        versionName = "0.9.21"
     }
 
     /**

@@ -33,6 +33,12 @@ enum class AgentPhase(val label: String, val color: Int) {
     RETRYING("模型没响应，准备重发", 0xFFFF7043.toInt()),
     ACTING("正在操作手机", 0xFFEF5350.toInt()),
     WAITING_SYSTEM("等待系统响应", 0xFF66BB6A.toInt()),
+
+    /**
+     * 用户按了暂停。和「待命」分开：待命是任务没跑，
+     * 暂停是任务还在、只是停在半路等人，界面上一眼要能分清。
+     */
+    PAUSED("已暂停（可继续补充指令）", 0xFFFFB300.toInt()),
 }
 
 object OverlayBus {
@@ -61,6 +67,72 @@ object OverlayBus {
 
     fun requestStop() {
         stopRequested = true
+        // 停止优先于暂停：挂着"暂停"时按停止，要让等待循环立刻退出
+        pauseRequested = false
+    }
+
+    /**
+     * 用户按了「暂停」。
+     *
+     * 和 [stopRequested] 是两件事：暂停**可恢复**，而且暂停期间用户还能往输入框里
+     * 补一句话（见 [pushUserNote]）。Agent 在动作间隙把循环停在这里，
+     * 恢复前不读控件树、不发请求 —— 所以它不是"假暂停"，是真的不花钱。
+     */
+    @Volatile
+    var pauseRequested: Boolean = false
+        private set
+
+    /** Agent 真的停下来了（界面按钮与提示看它，不看 pauseRequested） */
+    private val _paused = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val paused: kotlinx.coroutines.flow.StateFlow<Boolean> = _paused
+
+    fun requestPause() {
+        pauseRequested = true
+    }
+
+    fun requestResume() {
+        pauseRequested = false
+    }
+
+    fun togglePause() {
+        pauseRequested = !pauseRequested
+    }
+
+    /** 只有 Agent 调：把"真的停下来了"这件事广播出去（悬浮窗按钮文案跟着变） */
+    fun markPaused(value: Boolean) {
+        _paused.value = value
+        service?.updatePauseButton(value)
+    }
+
+    fun clearPause() {
+        pauseRequested = false
+        _paused.value = false
+        // 按钮文案也要跟着回「暂停」：任务结束时不刷的话，悬浮窗会停在
+        // 「继续」上，下一次任务看着像还没开始
+        service?.updatePauseButton(false)
+    }
+
+    /**
+     * 暂停期间用户补充的指令。Agent 在组装下一条 user 消息时取走。
+     *
+     * 用队列而不是单个变量：用户可能连发两句（"顺便"补一句、"再"补一句），
+     * 后一句盖掉前一句等于白说。
+     */
+    private val userNotes = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    fun pushUserNote(text: String) {
+        if (text.isNotBlank()) userNotes.add(text.trim())
+    }
+
+    fun drainUserNotes(): List<String> = buildList {
+        while (true) {
+            val note = userNotes.poll() ?: break
+            add(note)
+        }
+    }
+
+    fun clearUserNotes() {
+        userNotes.clear()
     }
 
     /**

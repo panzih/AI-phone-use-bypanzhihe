@@ -328,6 +328,8 @@ $catalog
      * @param noTreeReason 控件树为空时，**说明为什么空**。三种原因（纸盒自己在
      *        前台 / 副屏 / 界面本身读不到）该让模型做的事完全不同，所以由
      *        Agent 判断后传进来；不传时用 [DEFAULT_NO_TREE_REASON]。
+     * @param userNote 用户**在暂停期间**补的话。非空时说明任务被暂停过，
+     *        并且用户对做法有新的要求 —— 它的优先级高于原任务里的相同部分。
      */
     fun stepMessage(
         step: Int,
@@ -342,6 +344,7 @@ $catalog
         imageNote: String? = null,
         skillNote: String? = null,
         noTreeReason: String? = null,
+        userNote: String? = null,
     ): String = buildString {
         appendLine("当前是" + stepsLabel(step, maxSteps) + "。")
         appendLine("用户的任务：$task")
@@ -349,6 +352,15 @@ $catalog
         // 这样整条对话就是"严格的追加"，前缀永远不变，缓存才命中得了。
         if (!lastResult.isNullOrBlank()) {
             appendLine("上一批动作的执行结果：$lastResult")
+        }
+        // 暂停期间用户补的话。放在这里而不是拼进"用户的任务"：
+        // 上面那行必须逐字不变（它出现在每一轮里），改它就是每一轮都变——
+        // 好在每轮本来就是新消息，这里只是让"补充"有个固定的位置。
+        if (!userNote.isNullOrBlank()) {
+            appendLine()
+            appendLine("# 用户在你暂停时补充的指令")
+            appendLine(userNote)
+            appendLine("（用户是在你停下来的这段时间里说的。和原任务冲突的地方，以这段为准。）")
         }
         if (!interruption.isNullOrBlank()) {
             appendLine()

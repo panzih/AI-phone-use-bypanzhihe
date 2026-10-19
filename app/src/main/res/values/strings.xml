@@ -33,6 +33,10 @@
     <string name="input_hint">告诉 AI 下一步做什么 · 说「操作记录」可录制技能</string>
     <string name="input_send">发送</string>
     <string name="input_stop">停止</string>
+    <string name="input_pause">暂停</string>
+    <string name="input_resume">继续</string>
+    <string name="input_hint_paused">补充一句，发送后会并进下一轮</string>
+    <string name="running_paused_hint">已暂停 · 输入框可以继续说话，点继续恢复</string>
     <string name="running_hint">AI 正在执行 ...</string>
     <string name="settings_title">设置</string>
     <string name="recording_title">操作记录</string>

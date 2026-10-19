@@ -14,6 +14,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -262,6 +263,10 @@ private fun AppRoot(
     var settings by remember { mutableStateOf(store.load()) }
     var isRunning by remember { mutableStateOf(false) }
     var stopRequested by remember { mutableStateOf(false) }
+    // 「真的停下来了」以 Agent 为准：它在等待点广播，界面只照它显示。
+    // 不用本地开关的原因很简单 —— 点了暂停到它真停下之间有几十毫秒，
+    // 那段时间界面已经说"已暂停"、而 AI 还在动，是最让人心慌的错位。
+    val isPaused by OverlayBus.paused.collectAsState()
     // 正在打包日志。日志大的时候打包是分钟级的活，界面必须有个交代，
     // 否则用户连点几下都只看到"没反应"，只能认为按钮坏了
     var exporting by remember { mutableStateOf(false) }
@@ -906,7 +911,19 @@ private fun AppRoot(
 
     fun submit() {
         val task = input.trim()
-        if (task.isBlank() || isRunning) return
+        if (task.isBlank()) return
+        // 暂停期间发出去的话不是新任务，而是"补一句" —— 并进下一轮。
+        // 独立于 submit 的主流程：那边一进来就会清输入框、判权限、起悬浮窗，
+        // 全部是为"开一趟新任务"准备的，对一句话来说全是副作用。
+        if (isRunning) {
+            if (isPaused) {
+                OverlayBus.pushUserNote(task)
+                input = ""
+                addLog(LogKind.ACTION, task, LABEL_COMMAND)
+                toast = "已并进下一轮"
+            }
+            return
+        }
         if (deletingLogs) {
             toast = context.getString(R.string.log_delete_in_progress)
             return
@@ -1354,11 +1371,26 @@ private fun AppRoot(
             onInputChange = { input = it },
             onSubmit = { submit() },
             onStop = {
-                // 只是"请求停止"。Agent 会在每一步开始前和执行动作前检查，
-                // 不会把正在发出的那一次注入砍断。
+                // 真急停：单向结束这一趟。Agent 在每个动作前、每次请求前都查，
+                // 正在等的那次请求由它自己的看门狗掀掉连接。
                 stopRequested = true
-                addLog(LogKind.ERROR, "已请求停止，等当前这一步走完", "停止")
+                OverlayBus.requestStop()
+                OverlayBus.clearPause()
+                addLog(LogKind.ERROR, "已停止，正在收尾", "停止")
             },
+            onPauseToggle = {
+                OverlayBus.togglePause()
+                addLog(
+                    LogKind.SYSTEM,
+                    if (OverlayBus.pauseRequested) {
+                        "已请求暂停，等它走到动作间隙。暂停时可以直接在这里打字补充指令。"
+                    } else {
+                        "已请求继续"
+                    },
+                    if (OverlayBus.pauseRequested) "暂停" else "继续",
+                )
+            },
+            isPaused = isPaused,
             onControlPhone = { screen = Screen.CONTROL },
             onRecording = { screen = Screen.RECORDING },
             onSchedules = { screen = Screen.SCHEDULES },
