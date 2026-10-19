@@ -65,6 +65,16 @@ object OverlayBus {
         stopRequested = false
     }
 
+    /**
+     * 状态条右侧的三个数字：缓存命中率 / 首字节耗时 / 本轮 token。
+     *
+     * 由 Agent 在每次拿到模型结果后刷一次。**不是每帧都刷** ——
+     * 这些数字只在"一次请求回来"时才有新值，中途刷新只是自欺欺人。
+     */
+    fun updateMetrics(hitPercent: Int?, ttftMs: Long, tokens: Int) {
+        service?.updateMetrics(hitPercent, ttftMs, tokens)
+    }
+
     fun requestStop() {
         stopRequested = true
         // 停止优先于暂停：挂着"暂停"时按停止，要让等待循环立刻退出

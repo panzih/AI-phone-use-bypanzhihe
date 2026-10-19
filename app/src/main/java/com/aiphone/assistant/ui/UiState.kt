@@ -58,6 +58,18 @@ const val LABEL_COMMAND = "指令"
  */
 const val LABEL_SCHEDULE = "定时任务"
 
+/**
+ * 「操作记录」（录制技能）的入口要不要露出来。
+ *
+ * 2026-10-19 用户要求先下架：「先把它从侧面那个隐藏区，因为没有做好，这有很多 bug」。
+ * 关掉的是**入口**，不是功能 —— `RecordingScreen`、`MacroStore`、已录技能照旧可用，
+ * 哪天修好了把这个改回 true 就行。
+ *
+ * ⚠️ 只关抽屉不够：输入框里说「操作记录」会由 [com.aiphone.assistant.record.RecordingShortcut]
+ * 直接跳进录制页，绕开抽屉。两处都要看这个开关。
+ */
+const val RECORDING_ENTRY_ENABLED = false
+
 /** 主界面的完整状态。 */
 data class MainUiState(
     /** 当前页面 */

@@ -102,6 +102,8 @@ class OverlayService : Service() {
     private lateinit var phaseText: TextView
     private lateinit var stepText: TextView
     private lateinit var currentText: TextView
+    private lateinit var hitText: TextView
+    private lateinit var ttftText: TextView
     private lateinit var nextText: TextView
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -255,14 +257,15 @@ class OverlayService : Service() {
             y = dp(56),
             flags = FLAGS_PASSIVE,
         ).also {
-            it.width = dp(CARD_WIDTH_DP)
+            // 横向条：铺满"屏幕宽 - 两边各 12dp"，高度固定 56dp
+            it.width = resources.displayMetrics.widthPixels - dp(24)
             it.height = dp(CARD_HEIGHT_DP)
             // 0.9.19：Android 12+ 的「不信任触摸」保护——屏幕上叠加的不透明
             // 遮挡 > 0.80 时，系统直接丢弃注入的点击（a11y/adb 都算）。卡片
             // 默认 alpha=1.0 会被钳到 0.80，再叠上 0.80 的全屏水波层 =
             // 0.96 → 点在卡片区域内的 AI 点击全被吞（蓝叠实证：搜索框在卡片
             // 正下方，点了没反应）。两层显式压低：0.7 + 0.3×0.7 → 组合 0.79。
-            it.alpha = 0.7f
+            it.alpha = 0.75f
             this.cardParams = it
         }
         val buttonParams = baseParams(
@@ -298,7 +301,9 @@ class OverlayService : Service() {
             // 0.9.19：见 cardParams 处的注释——全屏层 0.3 + 卡片 0.7 → 组合
             // 0.79，不触发「不信任触摸」丢弃。水波自身的视觉反馈靠内部画笔
             // alpha（RippleView），窗口 alpha 只做整体系数。
-            it.alpha = 0.3f
+            // 0.15 而不是 0.3：卡片那层提到了 0.75，两层合成 1-(0.25×0.85)=0.79，
+            // 正好卡在「不信任触摸」的 0.80 下面（0.9.19 那次就是叠到 0.96 被吞点击）
+            it.alpha = 0.15f
         }
         runCatching { wm.addView(ripple, rippleParams); rippleView = ripple }
             .onSuccess { android.util.Log.i(TAG, "水波层已添加") }
@@ -337,9 +342,21 @@ class OverlayService : Service() {
      * 三行：第几步 / 正在做什么 / **下一步要做什么**。
      * 第三行是给用户预判用的 —— 觉得不对就能在事情发生前按急停。
      */
+    /**
+     * 顶部横向状态条（0.9.23 T35）。
+     *
+     * 以前是左上角一块竖向小卡（236×118dp），只有阶段 / 步数 / 正在做 / 下一步。
+     * 现在改成横条（形状照手机后摄模组），右边多三个数字：
+     * **缓存命中率 / TTFT / 本轮 token** —— 这三个决定"这趟贵不贵、慢不慢"，
+     * 以前只在 run.log 里，用户得导日志才看得到。
+     *
+     * 布局（一行装下，窄屏也不裁切）：
+     *   ● 阶段/步数 │ 正在做什么 / 下一步 │ 缓存 92% / TTFT 0.8s
+     *
+     * ⚠️ 窗口尺寸仍是**固定值**（见 showOverlay）：WRAP_CONTENT 的悬浮窗
+     * 只在 addView/updateViewLayout 时量一次，文字变长不会自己撑开。
+     */
     private fun buildStatusCard(): View {
-        // 阶段行：一个小圆点 + 文字。圆点用颜色区分阶段，
-        // 扫一眼就知道它在忙什么，不用读字。
         phaseDot = View(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -348,57 +365,78 @@ class OverlayService : Service() {
         }
         phaseText = TextView(this).apply {
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             text = AgentPhase.IDLE.label
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
-
         stepText = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextColor(Color.parseColor("#B0FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
             text = "准备中 ..."
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         currentText = TextView(this).apply {
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            maxLines = 2
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         nextText = TextView(this).apply {
             setTextColor(Color.parseColor("#FFD54F"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            maxLines = 2
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        hitText = TextView(this).apply {
+            setTextColor(Color.parseColor("#E6FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            gravity = Gravity.END
+            text = "缓存 —"
+            maxLines = 1
+        }
+        ttftText = TextView(this).apply {
+            setTextColor(Color.parseColor("#E6FFFFFF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            gravity = Gravity.END
+            text = "TTFT —"
+            maxLines = 1
+        }
+
+        fun column(vararg views: View) = LinearLayout(this@OverlayService).apply {
+            orientation = LinearLayout.VERTICAL
+            for (v in views) addView(v, LinearLayout.LayoutParams(-2, -2))
         }
 
         return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Color.parseColor("#CC1B1B1B"))
+                cornerRadius = dp(28).toFloat()
+                // 底色给足不透明度：窗口 alpha 0.75 时，透出来的是背后的应用标题栏，
+                // 白字叠深字看着像"字压字"（实测过）。0.94 的底色 + 0.75 窗口
+                // ≈ 0.71 有效遮挡，仍在 0.79 的「不信任触摸」红线以内
+                setColor(Color.parseColor("#FF1B1B1B"))
             }
-            setPadding(dp(12), dp(10), dp(14), dp(10))
+            setPadding(dp(12), dp(8), dp(14), dp(8))
 
-            // 第一行：圆点 + 阶段
             addView(
-                LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    addView(
-                        phaseDot,
-                        LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(6) },
-                    )
-                    addView(phaseText)
-                }
+                phaseDot,
+                LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(8) },
             )
-
-            addView(stepText, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(6) })
-            addView(currentText, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
-            addView(nextText, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+            // 左侧列给**固定宽度**：交给它自己量的话，phaseText 一长就会压到中间那列上
+            // （实测 1080×2400 上「等待系统响应」和「正在：等待 8000ms」叠在一起）
+            addView(column(phaseText, stepText), LinearLayout.LayoutParams(dp(92), -2))
+            addView(
+                column(currentText, nextText),
+                LinearLayout.LayoutParams(0, -2, 1f).apply {
+                    leftMargin = dp(10)
+                    rightMargin = dp(8)
+                },
+            )
+            addView(column(hitText, ttftText), LinearLayout.LayoutParams(dp(118), -2))
         }
     }
 
@@ -638,6 +676,23 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * 右侧那三个数字（由 Agent 每次拿到模型结果后刷）。
+     *
+     * @param hitPercent 缓存命中率，null = 这一轮没有统计（比如免费通道没给 usage）
+     */
+    fun updateMetrics(hitPercent: Int?, ttftMs: Long, tokens: Int) {
+        main.post {
+            hitText.text = if (hitPercent == null) "缓存 —" else "缓存 $hitPercent%"
+            val t = when {
+                ttftMs <= 0 -> "TTFT —"
+                ttftMs < 1000 -> "TTFT ${ttftMs}ms"
+                else -> "TTFT %.1fs".format(ttftMs / 1000.0)
+            }
+            ttftText.text = if (tokens > 0) "$t · ${tokens}tok" else t
+        }
+    }
+
     /** 切换阶段。圆点颜色和文字一起变 */
     fun updatePhase(phase: AgentPhase) {
         main.post {
@@ -697,9 +752,8 @@ class OverlayService : Service() {
     companion object {
         private const val TAG = "OverlayService"
 
-        /** 状态卡尺寸（dp）。固定尺寸是为了绕开 WRAP_CONTENT 窗口的测量坑 */
-        private const val CARD_WIDTH_DP = 236
-        private const val CARD_HEIGHT_DP = 118
+        /** 状态条高度（dp）。宽度按屏幕算，固定尺寸是为了绕开 WRAP_CONTENT 的测量坑 */
+        private const val CARD_HEIGHT_DP = 56
 
         /** 「暂停」按钮（琥珀）/「继续」按钮（绿） */
         private const val PAUSE_COLOR = "#F9A825"

@@ -810,6 +810,19 @@ class Agent(
                         cacheHitTokens += result.cacheHitTokens
                         cacheMissTokens += result.cacheMissTokens
 
+                        // 状态条右侧三个数字：这一轮的命中率、首字节耗时、token 量。
+                        // 用**本轮**而不是累计值 —— 用户要判断的是"刚才这次请求贵不贵"
+                        val stepCacheTotal = result.cacheHitTokens + result.cacheMissTokens
+                        OverlayBus.updateMetrics(
+                            hitPercent = if (stepCacheTotal > 0) {
+                                result.cacheHitTokens * 100 / stepCacheTotal
+                            } else {
+                                null
+                            },
+                            ttftMs = llm.lastTtftMs,
+                            tokens = result.promptTokens + result.completionTokens,
+                        )
+
                         // ---- 上下文长度兜底 ----
                         // 上下文不裁剪（缓存按前缀匹配），所以得防着撑爆模型窗口。
                         // 用服务端返回的真实 prompt_tokens，比本地估算准。

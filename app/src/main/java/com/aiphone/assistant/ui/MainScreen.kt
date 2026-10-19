@@ -223,7 +223,10 @@ private fun AppDrawer(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             Spacer(Modifier.height(8.dp))
             DrawerItem(icon = Icons.Filled.PhoneAndroid, title = stringResource(R.string.drawer_control_phone), onClick = onControlPhone)
-            DrawerItem(icon = Icons.Filled.FiberManualRecord, title = stringResource(R.string.drawer_recording), onClick = onRecording)
+            // 录制入口已下架（见 RECORDING_ENTRY_ENABLED 的说明）：功能还在，入口先收起来
+            if (RECORDING_ENTRY_ENABLED) {
+                DrawerItem(icon = Icons.Filled.FiberManualRecord, title = stringResource(R.string.drawer_recording), onClick = onRecording)
+            }
             DrawerItem(icon = Icons.Filled.Schedule, title = stringResource(R.string.drawer_schedules), onClick = onSchedules)
             Spacer(Modifier.weight(1f))
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))

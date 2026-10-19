@@ -332,6 +332,19 @@ class LlmClient(private val cfg: LlmConfig) {
      *
      * 两次的教训是同一个：**发出去的东西必须逐字不变地留在历史里。**
      */
+    /**
+     * 上一次请求的「首字节」耗时（毫秒）。0 表示没测到。
+     *
+     * 为什么不是"首 token"：这个客户端是**一次性读完整个响应体**再解析的，
+     * 流式那套只用于免费通道的 SSE 累积，没有逐 token 的回调点。
+     * 所以这里量的是"请求写完 → 服务端开始回响应头"的时间 ——
+     * 对非流式请求来说，它就是模型开始出结果前的等待，和 TTFT 是一个量级，
+     * 界面上标"TTFT"但**别拿它当流式首 token**用。
+     */
+    @Volatile
+    var lastTtftMs: Long = 0L
+        private set
+
     fun chat(
         system: String,
         history: List<ChatTurn>,
@@ -502,7 +515,11 @@ class LlmClient(private val cfg: LlmConfig) {
             // 传完了，接下来是等服务端算 —— 切换阶段
             onUploaded?.invoke()
 
+            // 首字节：从"请求写完"到"服务端回了响应头"。这就是用户体感上的
+            // "它想了多久才开始出东西"，比整次请求的耗时更能说明问题
+            val waitStart = System.currentTimeMillis()
             val code = conn.responseCode
+            lastTtftMs = System.currentTimeMillis() - waitStart
             val text = if (code in 200..299) {
                 val raw = readAll(conn.inputStream)
                 // 免费通道是 SSE 流，累积成普通 JSON 再交给解析器

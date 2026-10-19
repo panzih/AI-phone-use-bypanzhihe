@@ -65,6 +65,7 @@ import com.aiphone.assistant.skill.SkillRegistry
 import com.aiphone.assistant.ui.AboutScreen
 import com.aiphone.assistant.ui.AutoReturnOnForegroundEffect
 import com.aiphone.assistant.ui.LABEL_COMMAND
+import com.aiphone.assistant.ui.RECORDING_ENTRY_ENABLED
 import com.aiphone.assistant.ui.LABEL_SCHEDULE
 import com.aiphone.assistant.ui.LogEntry
 import com.aiphone.assistant.ui.LogKind
@@ -978,8 +979,9 @@ private fun AppRoot(
         // （冷却只在同一次任务内用来防乒乓，跨任务没有意义）
         OverlayBus.clearAutoReturnSuppression()
 
-        // 本地快捷指令：在发送框直接说「操作记录 / 开始录制」等，进录制页，不发给模型
-        if (RecordingShortcut.matches(task)) {
+        // 本地快捷指令：在发送框直接说「操作记录 / 开始录制」等，进录制页，不发给模型。
+        // 录制入口已下架，这条短路也要一起关 —— 否则从输入框还能绕进那个页面
+        if (RECORDING_ENTRY_ENABLED && RecordingShortcut.matches(task)) {
             screen = Screen.RECORDING
             toast = context.getString(R.string.recording_shortcut_opened)
             return

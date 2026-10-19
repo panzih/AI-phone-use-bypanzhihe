@@ -30,7 +30,7 @@
     <string name="main_logo_caption">AI 操作手机.</string>
     <string name="main_logo_by">By 潘纸盒</string>
     <string name="main_logo_desc">纸盒</string>
-    <string name="input_hint">告诉 AI 下一步做什么 · 说「操作记录」可录制技能</string>
+    <string name="input_hint">告诉 AI 下一步做什么</string>
     <string name="input_send">发送</string>
     <string name="input_stop">停止</string>
     <string name="input_pause">暂停</string>
