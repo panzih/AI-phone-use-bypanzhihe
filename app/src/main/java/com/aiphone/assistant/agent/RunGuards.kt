@@ -63,6 +63,34 @@ internal object RunGuards {
         carriedHistoryCount > 0 && !alreadyRefused
 
     /**
+     * 收尾闸：模型说"完成"，但这一步**没有任何端侧证据**。
+     *
+     * 和 [shouldRefuseBlindFinish] 的分工：那条只管"新任务第一步 + 带旧历史"
+     * 这一种最贵的复述，条件很窄；这条管的是所有"空口收尾"——
+     * 包括跑到第 8 步突然说完成、而界面一步没动过的情形。
+     *
+     * "证据"只有两种，都由端侧产生：
+     *   1. 这一步**真的执行过**动作（`executedActions > 0`）；
+     *   2. 界面相对上一步**变了**（可观测的树、且指纹不同）。
+     *
+     * 模型自己的 `thought` / `summary` 不算证据 —— 那正是幻觉的来源。
+     *
+     * @param refusals 已经拦过几次。默认只拦一次：模型第二次仍然坚持就放行，
+     *        避免和"任务其实已经完成"的正常情况来回拉锯（多一轮的代价
+     *        比死循环小得多）
+     */
+    fun shouldRefuseUnverifiedFinish(
+        finished: Boolean,
+        executedActions: Int,
+        interfaceChanged: Boolean,
+        refusals: Int,
+        maxRefusals: Int = 1,
+    ): Boolean = finished &&
+        executedActions == 0 &&
+        !interfaceChanged &&
+        refusals < maxRefusals
+
+    /**
      * 要不要因为"卡住"止损；返回原因，null = 不拦。
      *
      * @param sameTree 连续"界面和上一步一样"的步数（只应在 [treeObservable] 为真时累加）

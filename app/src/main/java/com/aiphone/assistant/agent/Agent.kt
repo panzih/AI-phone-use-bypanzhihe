@@ -383,6 +383,10 @@ class Agent(
         // 拒绝"没看一眼就说完成"只做一次，避免模型死磕时来回拉锯
         var refusedBlindFinish = false
 
+        // 收尾闸拦过几次（跨步累计）。只拦一次：模型第二次仍坚持就放行，
+        // 免得和"任务确实已经完成"的正常情况来回拉锯
+        var finishRefusals = 0
+
         // 上一批动作的执行结果。它会拼进**下一条** user 消息里，
         // 而不是单独发一条 —— 这样整条对话是严格追加，缓存才命中得了。
         var lastResult: String? = null
@@ -918,6 +922,43 @@ class Agent(
                         // 动作任务就完成了"）。有动作时不能在这里结束，否则动作一个都
                         // 不会执行；放去这批动作执行完之后再收尾（见循环末尾）。
                         if (p.finished && p.actions.isEmpty()) {
+                            // ---- 收尾闸 ----
+                            // 一句话就宣布完成、这一步既没动作、界面也没变过 ——
+                            // 这是幻觉成本最低的入口（模型复述历史里的结论、
+                            // 或者把"我看不到"当成"已经做好了"）。
+                            // 只认两种端侧证据：这一步执行过动作，或界面相对上一步变了。
+                            val interfaceChanged = treeObservable &&
+                                criteria.sameTree == 0 && step > 1
+                            if (RunGuards.shouldRefuseUnverifiedFinish(
+                                    finished = true,
+                                    executedActions = 0,
+                                    interfaceChanged = interfaceChanged,
+                                    refusals = finishRefusals,
+                                )
+                            ) {
+                                finishRefusals++
+                                val refuseMsg = "拦下一次没有证据的「任务已完成」：" +
+                                    "这一步既没有执行任何动作，界面也没有相对上一步发生过变化。"
+                                logger?.warn(refuseMsg, "防幻觉")
+                                listener.onEvent(EventKind.THOUGHT, refuseMsg, "防幻觉")
+                                logger?.recordStep(
+                                    step = step,
+                                    thought = p.thought,
+                                    action = "（被端侧拦下：无动作、无界面变化就宣布完成）",
+                                    result = "未采纳，已要求模型给出依据",
+                                    rawModelOutput = result.text,
+                                    shot = stepShot,
+                                )
+                                interruptions = (interruptions + "\n" +
+                                    "⚠️ 你刚刚说「任务完成」，但这一步你**没有任何依据**：" +
+                                    "一个动作都没执行，界面也和上一步一模一样（或者根本读不到界面）。" +
+                                    "请先确认当前屏的真实状态：确实完成，就用一句话说明你依据的是" +
+                                    "哪个可见状态（比如屏幕上已经出现「发送成功」）；" +
+                                    "没完成就给下一步动作；做不到就用 failed 说明原因。").trim()
+                                // 这次输出照样进历史，保持严格追加
+                                history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
+                                continue@ask
+                            }
                             val summary = p.summary.ifBlank { "模型判断任务已完成" }
                             logger?.line("任务结束：$summary", "任务")
                             listener.onEvent(EventKind.RESULT, summary, "完成")
@@ -1089,24 +1130,41 @@ class Agent(
             if (sig == criteria.lastSig) criteria.repeatAction++ else criteria.repeatAction = 0
             criteria.lastSig = sig
 
+            // ---- 单批预算 ----
+            // 解析层允许 12 个，但一次真跑 12 个太长了：中间任何一步的界面都和
+            // 模型想象的不一样，后面全打在错的地方。裁剪**只影响这一轮执行**，
+            // 提示词里也写明了上限，让模型自己别写长脚本。
+            val batch = p.actions.take(MAX_BATCH_ACTIONS)
+            val droppedActions = p.actions.size - batch.size
+            if (droppedActions > 0) {
+                logger?.warn(
+                    "这一批给了 ${p.actions.size} 个动作，只执行前 ${batch.size} 个" +
+                        "（剩下的等下一轮重看界面后再给）",
+                    "执行",
+                )
+            }
+
             // ---- 显示这一批要干什么 ----
-            val desc = AgentPrompt.describeSequence(p.actions)
-            logger?.line("动作（${p.actions.size} 个）：$desc", "执行")
+            val desc = AgentPrompt.describeSequence(batch)
+            logger?.line("动作（${batch.size} 个）：$desc", "执行")
             listener.onEvent(EventKind.ACTION, desc, "第 $step 步 · 动作")
             if (p.nextHint.isNotBlank()) {
                 logger?.line("下一步预告：${p.nextHint}", "模型")
             }
             // 状态卡放不下 12 个动作，只显示第一个 + 总数
-            OverlayBus.update(step, maxSteps, overlayText(p.actions), p.nextHint)
+            OverlayBus.update(step, maxSteps, overlayText(batch), p.nextHint)
 
             // ---- 逐个执行（执行 + 等界面稳定 + 动作后验证）----
-            val results = ArrayList<String>(p.actions.size)
+            val results = ArrayList<String>(batch.size + 2)
             // 因切换通道而完全没执行（没进 results）的动作数；-1 表示没被切换中断
             var switchPendingCount = -1
+            // 这一步**真正执行过**几个动作。收尾闸只认它和"界面变了"两样证据，
+            // 模型自己说的"已完成"不算
+            var executedActions = 0
             // 本批截了几张图。一批最多一张：模型可能连写几个 capture，
             // 但同一批里画面几乎没变，多截只是多花钱
             var shotsThisBatch = 0
-            for ((i, action) in p.actions.withIndex()) {
+            for ((i, action) in batch.withIndex()) {
                 // 暂停点③：每个动作之前 —— 暂停不该"再把这一批跑完"
                 if (!awaitResume(step)) {
                     finish(false, "你停止了任务（执行第 $step 步第 ${i + 1} 个动作之前）")
@@ -1128,16 +1186,16 @@ class Agent(
                         if (switchMustYieldToOpenApp(action.kind, watcher.targetPkg)) {
                             // 放行：继续执行这个动作
                         } else {
-                            switchPendingCount = p.actions.size - i
+                            switchPendingCount = batch.size - i
                             break
                         }
                     }
                     WaitOutcome.AUTO_DESKTOP_SWITCH -> {
                         if (migration.autoMove()) {
-                            switchPendingCount = p.actions.size - i
+                            switchPendingCount = batch.size - i
                         } else {
                             results.add("自动切副屏未成功（已交回云端）")
-                            switchPendingCount = p.actions.size - i
+                            switchPendingCount = batch.size - i
                         }
                         break
                     }
@@ -1146,7 +1204,7 @@ class Agent(
 
                 val single = AgentPrompt.describe(action)
                 OverlayBus.update(step, maxSteps, overlayText(listOf(action)), p.nextHint)
-                val next = p.actions.getOrNull(i + 1)
+                val next = batch.getOrNull(i + 1)
 
                 // sleep 由这里自己做（协程 delay，可中途急停/切换），不走通道 ——
                 // 通道里的 Thread.sleep 会把整个线程按住。
@@ -1162,7 +1220,7 @@ class Agent(
                         }
                         WaitOutcome.SWITCH_REQUESTED -> {
                             results.add("$single → 因切换通道中止")
-                            switchPendingCount = p.actions.size - i - 1
+                            switchPendingCount = batch.size - i - 1
                             break
                         }
                         WaitOutcome.AUTO_DESKTOP_SWITCH -> {
@@ -1171,7 +1229,7 @@ class Agent(
                                 if (moved) "$single → 已自动切到副屏"
                                 else "$single → 自动切副屏未成功（已交回云端）"
                             )
-                            switchPendingCount = p.actions.size - i - 1
+                            switchPendingCount = batch.size - i - 1
                             break
                         }
                     }
@@ -1224,14 +1282,14 @@ class Agent(
                     when (interruption()) {
                         WaitOutcome.SWITCH_REQUESTED ->
                             // dismiss 等待期间用户切了通道：后续动作交给切换流程（0.8.2）
-                            switchPendingCount = p.actions.size - i - 1
+                            switchPendingCount = batch.size - i - 1
                         WaitOutcome.AUTO_DESKTOP_SWITCH -> {
                             val moved = migration.autoMove()
                             if (moved) results.add("已自动切到副屏")
-                            switchPendingCount = p.actions.size - i - 1
+                            switchPendingCount = batch.size - i - 1
                         }
                         else -> {
-                            val skipped = p.actions.size - i - 1
+                            val skipped = batch.size - i - 1
                             if (skipped > 0) {
                                 results.add("dismiss_dialog 后的 $skipped 个动作本轮未执行（已交回云端）")
                             }
@@ -1287,6 +1345,19 @@ class Agent(
                         logger?.error("  $single → $execResult", "执行")
                         listener.onEvent(EventKind.ERROR, execResult, "第 $step 步 · 失败")
                         results.add("$single → 失败：$execResult")
+                        // 默认**中止本批**：后面的动作几乎都是"在刚才那个动作打开的
+                        // 界面上"继续操作，前一步没成，后面必然打在错的屏幕上。
+                        // 模型想"失败了也往下试"必须显式写 "on_error":"continue"。
+                        if (!p.continueOnError) {
+                            val skipped = batch.size - i - 1
+                            if (skipped > 0) {
+                                results.add(
+                                    "这一批后面 $skipped 个动作没有执行：" +
+                                        "前一个动作失败后默认中止（要强行继续就写 \"on_error\":\"continue\"）"
+                                )
+                            }
+                            break
+                        }
                     } else if (isOpenApp) {
                         // 先等目标应用启动，再确认前台是否切走 —— 顺序不能反：
                         // 冷启动慢（软件渲染/重 app）时，刚发出 open_app 就检查，
@@ -1308,7 +1379,7 @@ class Agent(
                                 // 一次成功。有目标时维持原样：中止并交边界处理。
                                 if (!switchMustYieldToOpenApp(action.kind, watcher.targetPkg)) {
                                     results.add("$single → 因切换通道中止")
-                                    switchPendingCount = p.actions.size - i - 1
+                                    switchPendingCount = batch.size - i - 1
                                     break
                                 }
                             }
@@ -1318,7 +1389,7 @@ class Agent(
                                     if (moved) "$single → 已自动切到副屏"
                                     else "$single → 自动切副屏未成功（已交回云端）"
                                 )
-                                switchPendingCount = p.actions.size - i - 1
+                                switchPendingCount = batch.size - i - 1
                                 break
                             }
                             WaitOutcome.DONE -> {}
@@ -1329,10 +1400,12 @@ class Agent(
                         // open_app 与后续 sleep 常在同一批：步开头记的还是旧前台，
                         // 这里补记新目标，否则同批 sleep 中回桌面拿不到目标（0.8.3）
                         watcher.observeForeground(withContext(Dispatchers.IO) { controller.currentPackage() })
+                        executedActions++
                         logger?.line("  $single → 已执行", "执行")
                         results.add("$single → 已执行")
                     } else if (next?.kind == TouchKind.WAIT) {
                         // 下一个动作就是显式 sleep，由它去等，这里不再补等待
+                        executedActions++
                         logger?.line("  $single → 已执行", "执行")
                         results.add("$single → 已执行")
                     } else {
@@ -1352,7 +1425,7 @@ class Agent(
                             }
                             WaitOutcome.SWITCH_REQUESTED -> {
                                 results.add("$single → 因切换通道中止")
-                                switchPendingCount = p.actions.size - i - 1
+                                switchPendingCount = batch.size - i - 1
                                 break
                             }
                             WaitOutcome.AUTO_DESKTOP_SWITCH -> {
@@ -1361,13 +1434,15 @@ class Agent(
                                     if (moved) "$single → 已自动切到副屏"
                                     else "$single → 自动切副屏未成功（已交回云端）"
                                 )
-                                switchPendingCount = p.actions.size - i - 1
+                                switchPendingCount = batch.size - i - 1
                                 break
                             }
-                            WaitOutcome.DONE ->
+                            WaitOutcome.DONE -> {
+                                executedActions++
                                 results.add(
                                     verifyAction(action, single, beforeNodes, sr.fingerprint ?: "", hint)
                                 )
+                            }
                         }
                     }
                 }
@@ -1386,6 +1461,10 @@ class Agent(
             // 这就是 0.9.0 当初漏掉的一环（写成"回灌"实际只在日志里）。
             val resultText = buildString {
                 append(baseText)
+                if (droppedActions > 0) {
+                    append("（这一批原本 ${p.actions.size} 个动作，只执行了前 ${batch.size} 个；" +
+                        "剩下 $droppedActions 个没执行，重新看界面后再决定要不要给）")
+                }
                 if (switchPendingCount > 0) {
                     append("（因切换通道中止，剩余 $switchPendingCount 个动作未执行）")
                 }
@@ -1410,6 +1489,16 @@ class Agent(
             // ---- 这批动作就是任务收尾（模型给动作的同时说 finished）----
             // 动作已经逐个执行完，这里再正常结束，不再请求下一步。
             if (p.finished) {
+                // 有动作、但**一个都没真正执行**（全落空/全报错）时不能算完成。
+                // 以前这里无条件 success —— 用户看到"任务完成"，而屏幕上什么都没发生。
+                if (executedActions == 0) {
+                    val why = "这一批动作没有一个真正执行成功（${resultText.take(120)}），" +
+                        "任务并没有完成。"
+                    logger?.error(why, "防幻觉")
+                    listener.onEvent(EventKind.ERROR, why, "没做成")
+                    finish(false, why)
+                    return
+                }
                 // 挂起的切换请求由 finish() 无条件清理，无需在此分支处理
                 val summary = p.summary.ifBlank { "模型判断任务已完成" }
                 logger?.line("任务结束：$summary", "任务")
@@ -2089,6 +2178,14 @@ class Agent(
 
         /** 等待时检查急停的间隔 */
         const val STOP_POLL_MS = 100L
+
+        /**
+         * 一批最多执行几个动作。
+         *
+         * 解析层（[ActionParser.MAX_ACTIONS] = 12）留着更宽的上限只是为了兼容老模型，
+         * 真正执行时裁到 6：连点 12 个动作的脚本，从第 2、3 个开始就基本在猜。
+         */
+        const val MAX_BATCH_ACTIONS = 6
 
         /**
          * 暂停时多久看一次"用户点继续了没有"。

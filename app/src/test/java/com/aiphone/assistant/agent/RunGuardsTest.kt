@@ -172,4 +172,73 @@ class RunGuardsTest {
             )
         )
     }
+
+    // ---------------------------------------------------------------
+    // 4. 收尾闸（0.9.22 T31）：没有端侧证据的"完成"不算完成
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `没有动作也没有界面变化时拦下完成`() {
+        // 最典型的幻觉：跑到第 5 步，一个动作没给、界面一步没动，
+        // 却回一句"已为你完成"。端侧只认两样证据，这句话不算。
+        assertTrue(
+            RunGuards.shouldRefuseUnverifiedFinish(
+                finished = true,
+                executedActions = 0,
+                interfaceChanged = false,
+                refusals = 0,
+            )
+        )
+    }
+
+    @Test
+    fun `执行过动作就不拦`() {
+        assertFalse(
+            RunGuards.shouldRefuseUnverifiedFinish(
+                finished = true,
+                executedActions = 1,
+                interfaceChanged = false,
+                refusals = 0,
+            )
+        )
+    }
+
+    @Test
+    fun `界面变了就不拦`() {
+        // "点完等它跳转、下一屏确认已经好了" 这种正常收尾不能被误伤
+        assertFalse(
+            RunGuards.shouldRefuseUnverifiedFinish(
+                finished = true,
+                executedActions = 0,
+                interfaceChanged = true,
+                refusals = 0,
+            )
+        )
+    }
+
+    @Test
+    fun `只拦一次，模型第二次坚持就放行`() {
+        val refuse = { refusals: Int ->
+            RunGuards.shouldRefuseUnverifiedFinish(
+                finished = true,
+                executedActions = 0,
+                interfaceChanged = false,
+                refusals = refusals,
+            )
+        }
+        assertTrue(refuse(0))
+        assertFalse(refuse(1))
+    }
+
+    @Test
+    fun `没宣布完成时收尾闸不动`() {
+        assertFalse(
+            RunGuards.shouldRefuseUnverifiedFinish(
+                finished = false,
+                executedActions = 0,
+                interfaceChanged = false,
+                refusals = 0,
+            )
+        )
+    }
 }

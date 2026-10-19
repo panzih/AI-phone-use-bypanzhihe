@@ -96,6 +96,16 @@ object ActionParser {
          * 觉得不对就能按急停 —— 而不是事后才发现点错了。
          */
         val nextHint: String = "",
+
+        /**
+         * 批内某个动作失败时，要不要继续执行后面的动作。
+         *
+         * 默认 **false（中止本批）**：这是 0.9.22 改的语义。以前第 2 个动作
+         * 落空、第 3 个照样执行 —— 第 3 个往往是"在第 2 个打开的页面上点某个东西"，
+         * 于是点到完全不相干的界面上，看起来像模型瞎点。
+         * 模型确实想"失败了也往下试"时，写 `"on_error": "continue"` 显式覆盖。
+         */
+        val continueOnError: Boolean = false,
         /** 非致命的问题说明（某些动作被丢掉了之类），会回灌给模型 */
         val warning: String? = null,
         /**
@@ -190,6 +200,8 @@ object ActionParser {
         val thought = obj.optString("thought").takeIf { it.isNotBlank() }
         val summary = obj.optString("summary").takeIf { it.isNotBlank() }.orEmpty()
         // 下一步预告。模型可能写成 next_hint / next / hint，都认。
+        val continueOnError =
+            obj.optString("on_error", "").trim().equals("continue", ignoreCase = true)
         val nextHint = sequenceOf("next_hint", "next", "hint")
             .map { obj.optString(it, "") }
             .firstOrNull { it.isNotBlank() }
@@ -358,6 +370,7 @@ object ActionParser {
             warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
             skillId = skillId,
             skillArgs = skillArgs,
+            continueOnError = continueOnError,
         )
     }
 
