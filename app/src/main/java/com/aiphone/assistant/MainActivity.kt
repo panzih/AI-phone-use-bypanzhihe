@@ -277,6 +277,10 @@ private fun AppRoot(
     // 不用本地开关的原因很简单 —— 点了暂停到它真停下之间有几十毫秒，
     // 那段时间界面已经说"已暂停"、而 AI 还在动，是最让人心慌的错位。
     val isPaused by OverlayBus.paused.collectAsState()
+    // 悬浮窗上按了「补充」→ 把纸盒拉到前台并把输入框亮起来，等用户打字。
+    // 没有这个的话，按了「补充」用户还得自己切回纸盒找输入框 ——
+    // 「补充」这个按钮就白按了。
+    val supplementTick by OverlayBus.supplementSignal.collectAsState()
     // 正在打包日志。日志大的时候打包是分钟级的活，界面必须有个交代，
     // 否则用户连点几下都只看到"没反应"，只能认为按钮坏了
     var exporting by remember { mutableStateOf(false) }
@@ -719,6 +723,27 @@ private fun AppRoot(
         onDispose {
             if (hostLifecycle != null && observer != null) hostLifecycle.removeObserver(observer)
         }
+    }
+
+    /**
+     * 悬浮窗按了「补充」：把输入框亮起来。
+     *
+     * AI 那边已经停住了（[OverlayBus.requestPause]），这边只管让用户
+     * **能立刻打字**。用 [supplementTick] 当 key —— 每次按「补充」时间戳
+     * 都会变，所以同一个值重复按也能再触发一次。
+     */
+    LaunchedEffect(supplementTick) {
+        if (supplementTick == 0L) return@LaunchedEffect
+        // 纸盒不在前台的话先拉回来 —— 用户多半正盯着被 AI 操作的那个应用。
+        // REORDER_TO_FRONT 不会重建 Activity，只是把它挪到前面（状态都还在）。
+        val intent = android.content.Intent(context, MainActivity::class.java).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        }
+        runCatching { context.startActivity(intent) }
+        toast = "AI 已停下，补充一句就会接着走"
+        // 屏上已经接过手了，把一次性信号清回 0 —— 否则下次进主界面
+        // 会拿这个旧时间戳再亮一次输入框（用户没按「补充」却弹出键盘）
+        OverlayBus.clearSupplement()
     }
 
     LaunchedEffect(resumeTick) {
@@ -1471,6 +1496,7 @@ private fun AppRoot(
                 )
             },
             isPaused = isPaused,
+            supplementTick = supplementTick,
             onControlPhone = { screen = Screen.CONTROL },
             onRecording = { screen = Screen.RECORDING },
             onSchedules = { screen = Screen.SCHEDULES },

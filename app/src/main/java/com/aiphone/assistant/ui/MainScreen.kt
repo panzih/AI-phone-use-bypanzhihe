@@ -75,6 +75,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -96,6 +99,8 @@ fun MainScreen(
     onStop: () -> Unit,
     onPauseToggle: () -> Unit,
     isPaused: Boolean,
+    /** 悬浮窗按「补充」时主界面递增的时间戳；变化 = 把输入框亮起来等用户打字 */
+    supplementTick: Long = 0L,
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
@@ -157,6 +162,7 @@ fun MainScreen(
                     onPauseToggle = onPauseToggle,
                     isRunning = state.isRunning,
                     isPaused = isPaused,
+                    supplementTick = supplementTick,
                     runningHint = state.progress.ifBlank { stringResource(R.string.running_hint) },
                 )
             },
@@ -503,8 +509,20 @@ private fun InputBar(
     onPauseToggle: () -> Unit,
     isRunning: Boolean,
     isPaused: Boolean,
+    supplementTick: Long = 0L,
     runningHint: String,
 ) {
+    // 悬浮窗按「补充」→ 主界面把光标放进输入框并弹起键盘。
+    //
+    // 光把 Activity 拉到前台是不够的：用户看到的还是一个没光标的输入框，
+    // 得再点一下才能打字 —— 「补充」就白按了。
+    val inputFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(supplementTick) {
+        if (supplementTick == 0L) return@LaunchedEffect
+        runCatching { inputFocus.requestFocus() }
+        keyboard?.show()
+    }
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         Column(
             modifier = Modifier.fillMaxWidth()
@@ -516,7 +534,7 @@ private fun InputBar(
                 OutlinedTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).focusRequester(inputFocus),
                     placeholder = {
                         Text(
                             stringResource(

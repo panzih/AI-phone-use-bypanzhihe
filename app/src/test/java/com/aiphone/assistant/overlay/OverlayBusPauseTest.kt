@@ -21,6 +21,7 @@ class OverlayBusPauseTest {
         OverlayBus.clearPause()
         OverlayBus.clearUserNotes()
         OverlayBus.clearStop()
+        OverlayBus.clearSupplement()
     }
 
     @Test
@@ -64,5 +65,30 @@ class OverlayBusPauseTest {
         OverlayBus.clearPause()
         assertFalse(OverlayBus.pauseRequested)
         assertFalse(OverlayBus.paused.value)
+    }
+
+    @Test
+    fun `补充 = 暂停 + 一次可重复触发的主界面信号`() {
+        // 0.10.0 的映射：悬浮窗上的「补充」就是原来的「暂停」，外加一个
+        // 让主界面把输入框亮起来的信号。两者必须一起发生 —— 只发信号不暂停，
+        // AI 还在动，用户补的话会漏掉；只暂停不发信号，用户还得自己找输入框。
+        assertEquals(0L, OverlayBus.supplementSignal.value)
+        OverlayBus.requestSupplement()
+        assertTrue(OverlayBus.pauseRequested)
+        val first = OverlayBus.supplementSignal.value
+        assertTrue(first > 0L)
+        // 紧跟着再按一次也要能再触发（所以是严格递增的值，不是 Boolean）
+        OverlayBus.requestSupplement()
+        assertTrue(OverlayBus.supplementSignal.value > first)
+        OverlayBus.clearSupplement()
+        assertEquals(0L, OverlayBus.supplementSignal.value)
+    }
+
+    @Test
+    fun `接管 = 真停止，且顺手撤掉挂着的暂停`() {
+        OverlayBus.requestPause()
+        OverlayBus.requestTakeover()
+        assertTrue(OverlayBus.stopRequested)
+        assertFalse(OverlayBus.pauseRequested)
     }
 }

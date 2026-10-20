@@ -833,17 +833,28 @@ class Agent(
                         cacheHitTokens += result.cacheHitTokens
                         cacheMissTokens += result.cacheMissTokens
 
-                        // 状态条右侧三个数字：这一轮的命中率、首字节耗时、token 量。
-                        // 用**本轮**而不是累计值 —— 用户要判断的是"刚才这次请求贵不贵"
+                        // 状态条指标行：命中率 / 首字节耗时 / 累计 token / 上下文占用。
+                        //
+                        // 「命中」用**本轮**而不是累计值 —— 用户要判断的是
+                        // "刚才这次请求贵不贵"；「总token」用**累计** ——
+                        // 用户问的是"这一趟花了多少"，只看本轮看不出量级。
                         val stepCacheTotal = result.cacheHitTokens + result.cacheMissTokens
                         OverlayBus.updateMetrics(
                             hitPercent = if (stepCacheTotal > 0) {
-                                result.cacheHitTokens * 100 / stepCacheTotal
+                                result.cacheHitTokens * 100.0 / stepCacheTotal
                             } else {
                                 null
                             },
                             ttftMs = llm.lastTtftMs,
-                            tokens = result.promptTokens + result.completionTokens,
+                            // 上下文占用：服务端给的真实 prompt_tokens ÷ 窗口上限。
+                            // 用真实值而不是本地估算 —— 估算会把图片/系统提示词的
+                            // token 数算偏，占用百分比跟着失真。
+                            contextPercent = if (result.promptTokens > 0) {
+                                (result.promptTokens * 100 / CONTEXT_STOP_TOKENS).coerceIn(0, 100)
+                            } else {
+                                null
+                            },
+                            totalTokens = promptTokens + completionTokens,
                         )
 
                         // ---- 上下文长度兜底 ----

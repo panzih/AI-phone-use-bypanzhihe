@@ -351,18 +351,18 @@ class ChannelMigration(
      */
     suspend fun refreshMoveButton() {
         if (controller.isVirtualDisplay) {
-            OverlayBus.updateMoveButton(true, "切回主屏", backMode = true)
+            OverlayBus.updateBackgroundButton(true, "回前台", backMode = true)
             return
         }
         when (ShizukuBridge.state(controller.appContext)) {
             ShizukuBridge.State.READY ->
-                OverlayBus.updateMoveButton(true, "切到副屏")
+                OverlayBus.updateBackgroundButton(true, "后台")
             ShizukuBridge.State.NOT_INSTALLED ->
-                OverlayBus.updateMoveButton(false, "切到副屏（需 Shizuku）")
+                OverlayBus.updateBackgroundButton(false, "后台（安装）")
             ShizukuBridge.State.NOT_RUNNING ->
-                OverlayBus.updateMoveButton(false, "切到副屏（启动 Shizuku）")
+                OverlayBus.updateBackgroundButton(false, "后台（启动）")
             ShizukuBridge.State.NO_PERMISSION ->
-                OverlayBus.updateMoveButton(false, "切到副屏（需授权）")
+                OverlayBus.updateBackgroundButton(false, "后台（授权）")
         }
     }
 

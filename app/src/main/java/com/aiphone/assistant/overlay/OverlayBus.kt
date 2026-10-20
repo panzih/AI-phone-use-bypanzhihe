@@ -66,13 +66,23 @@ object OverlayBus {
     }
 
     /**
-     * 状态条右侧的三个数字：缓存命中率 / 首字节耗时 / 本轮 token。
+     * 底部悬浮条的指标行：缓存命中率 / 首字节耗时 / 累计 token / 上下文占用。
      *
      * 由 Agent 在每次拿到模型结果后刷一次。**不是每帧都刷** ——
      * 这些数字只在"一次请求回来"时才有新值，中途刷新只是自欺欺人。
+     *
+     * @param contextPercent 上下文占用百分比（当前 prompt_tokens 占模型窗口的比例）。
+     *                      null = 还没拿到过 usage（免费通道不一定给）。
+     * @param totalTokens 本次任务**累计** token（输入+输出），不是本轮 ——
+     *                   用户问的是"这一趟花了多少"，只看本轮看不出量级。
      */
-    fun updateMetrics(hitPercent: Int?, ttftMs: Long, tokens: Int) {
-        service?.updateMetrics(hitPercent, ttftMs, tokens)
+    fun updateMetrics(
+        hitPercent: Double?,
+        ttftMs: Long,
+        contextPercent: Int? = null,
+        totalTokens: Int? = null,
+    ) {
+        service?.updateMetrics(hitPercent, ttftMs, contextPercent, totalTokens)
     }
 
     fun requestStop() {
@@ -80,6 +90,77 @@ object OverlayBus {
         // 停止优先于暂停：挂着"暂停"时按停止，要让等待循环立刻退出
         pauseRequested = false
     }
+
+    // ------------------------------------------------------------------
+    // 底部悬浮条上的三个按钮：补充 / 接管 / 后台（0.10.0）
+    // ------------------------------------------------------------------
+
+    /*
+     * 用户 2026-10-20 定的映射（照抄，别自己改）：
+     *
+     *   补充 ＝ 原来的「暂停」（AI 停下，用户补一句话再继续）
+     *   接管 ＝ 原来的「急停」（真的不要了，这趟结束）
+     *   后台 ＝ 原来的「切到副屏」（AI 去副屏干，主屏还给用户）
+     *
+     * 所以这三个键**没有新状态**，全是已有语义的重新命名：
+     *   补充 → [requestPause] / [togglePause]
+     *   接管 → [requestStop]
+     *   后台 → [requestMoveToVirtualDisplay] / [requestReturnFromVd]
+     *
+     * 保留命名映射而不是直接改旧 API 的名字，是为了不牵动 Agent 主循环
+     * （那里 [pauseRequested] / [stopRequested] 出现几十处，改名风险大）。
+     * 悬浮窗这一层负责把「补充/接管/后台」翻译成旧语义。
+     */
+
+    /**
+     * 「补充」按钮按了。
+     *
+     * 语义 = 原来的「暂停」：AI 在下一个动作间隙停下，用户可以在主界面
+     * 的输入框里补一句话，补完继续。悬浮窗上没法打字，所以这一步要靠
+     * 主界面接手 —— 这里发一个**一次性信号**，主界面收到后把输入框亮起来
+     * 等用户打字（真正的暂停由 [requestPause] 承担）。
+     *
+     * 做成 StateFlow 而不是普通 Boolean：主界面要的是"**又**有人按了补充"
+     * 这个事件（同一个值 false→true→false 循环），普通 Boolean 观察不到
+     * 重复的 true。
+     */
+    private val _supplementSignal = kotlinx.coroutines.flow.MutableStateFlow(0L)
+
+    /** 主界面收集这个流：每次收到新值就把输入框亮起来 */
+    val supplementSignal: kotlinx.coroutines.flow.StateFlow<Long> = _supplementSignal
+
+    /** 悬浮窗按了「补充」：先暂停，再让界面把输入框亮起来等用户打字 */
+    fun requestSupplement() {
+        requestPause()
+        // 用时间戳当值，并保证**严格递增**：同一毫秒内连按两次（用户猛戳）
+        // 如果值相同，主界面那个 LaunchedEffect 不会重跑，第二次就白按了。
+        _supplementSignal.value = maxOf(System.currentTimeMillis(), _supplementSignal.value + 1)
+    }
+
+    fun clearSupplement() {
+        _supplementSignal.value = 0L
+    }
+
+    /**
+     * 「接管」按钮按了 —— = 原来的「急停」。
+     *
+     * 语义：真的不要了，这趟结束。按下去之后 AI 不再读界面、不再发请求，
+     * 任务正常收尾（历史完整保留，之后还能「复盘」）。
+     *
+     * 刻意**只转发 [requestStop]**、不另立一个标志：接管与急停本来就是同一件事
+     * （用户 2026-10-20 的映射），多一个没人读的布尔只会让人以为两者有区别。
+     */
+    fun requestTakeover() {
+        requestStop()
+    }
+
+    /**
+     * 「后台」按钮按了 —— = 原来的「切到副屏」。
+     *
+     * 副屏模式下同一个按钮变成「回前台」（[requestReturnFromVd]）。
+     * 状态复用 [moveToVdRequested] / [returnFromVdRequested]，不另开一套。
+     */
+
 
     /**
      * 用户按了「暂停」。
@@ -111,7 +192,7 @@ object OverlayBus {
     /** 只有 Agent 调：把"真的停下来了"这件事广播出去（悬浮窗按钮文案跟着变） */
     fun markPaused(value: Boolean) {
         _paused.value = value
-        service?.updatePauseButton(value)
+        service?.updateSupplementButton(value)
     }
 
     fun clearPause() {
@@ -119,7 +200,7 @@ object OverlayBus {
         _paused.value = false
         // 按钮文案也要跟着回「暂停」：任务结束时不刷的话，悬浮窗会停在
         // 「继续」上，下一次任务看着像还没开始
-        service?.updatePauseButton(false)
+        service?.updateSupplementButton(false)
     }
 
     /**
@@ -241,8 +322,8 @@ object OverlayBus {
      * @param text 按钮上完整文案（"切到副屏"、"切到副屏（需 Shizuku）"、"切回主屏"）
      * @param backMode true = 副屏模式（绿「切回主屏」）；false = 主屏模式（蓝「切到副屏」）
      */
-    fun updateMoveButton(enabled: Boolean, text: String, backMode: Boolean = false) {
-        service?.updateMoveButton(enabled, text, backMode)
+    fun updateBackgroundButton(enabled: Boolean, text: String, backMode: Boolean = false) {
+        service?.updateBackgroundButton(enabled, text, backMode)
     }
 
     /**

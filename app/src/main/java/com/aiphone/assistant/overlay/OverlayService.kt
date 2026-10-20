@@ -40,13 +40,14 @@ import com.aiphone.assistant.data.stepsLabel
  * 所以这里用 Service + WindowManager。**画面效果和需求描述完全一致**，
  * 区别只是它在系统眼里叫"窗口"而不是"Activity"。
  *
- * ## 为什么是两个窗口而不是一个全屏窗口
+ * ## 为什么只有一个窗口、还只占屏幕底边一条
  *
  * 一个全屏窗口会把整块屏幕都变成可触摸区域，AI 注入的点击会打在它身上。
- * 做成两个 WRAP_CONTENT 的小窗口之后：
+ * 所以悬浮条只占**屏幕底部一条**（状态 / 三个键 / 指标都在这一条里，
+ * 见 [buildBottomBar]）：
  *
- *   状态卡  不可触摸（FLAG_NOT_TOUCHABLE）—— 永不吃点击
- *   急停钮  可触摸，但只有它那一小块
+ *   水波层  不可触摸（FLAG_NOT_TOUCHABLE）—— 永不吃点击
+ *   悬浮条  可触摸，但只有屏幕底边那一块
  *
  * 其余区域完全是空的，用户还能同时正常用手机。
  *
@@ -64,12 +65,9 @@ class OverlayService : Service() {
 
     private var statusView: View? = null
 
-    /** 含「切到副屏」+「急停」两个按钮的整块面板，坐标重叠判定用它 */
-    private var buttonView: View? = null
-
-    /** 急停上方的悬浮按钮（主屏时「切到副屏」、副屏时「切回主屏」） */
-    private var moveButton: View? = null
-    private var moveLabel: TextView? = null
+    /** 「后台」按钮（主屏时切副屏、副屏时回前台） */
+    private var backgroundButton: View? = null
+    private var backgroundLabel: TextView? = null
 
     /**
      * 按钮当前方向：true = 副屏模式（点它回迁）、false = 主屏模式（点它切副屏）。
@@ -84,12 +82,13 @@ class OverlayService : Service() {
      */
     private var rippleView: RippleView? = null
 
-    /** 底部按钮上的文字。录制模式下要把它从「急停」改成「停止」 */
-    private var stopLabel: TextView? = null
+    /** 「接管」按钮与它的文字（录制模式下要把它从「接管」改成「停止」） */
+    private var takeoverButton: View? = null
+    private var takeoverLabel: TextView? = null
 
-    /** 「暂停 / 继续」按钮与它的文字（录制时整块隐藏） */
-    private var pauseButton: View? = null
-    private var pauseLabel: TextView? = null
+    /** 「补充」按钮与它的文字（录制时整块隐藏） */
+    private var supplementButton: View? = null
+    private var supplementLabel: TextView? = null
 
     /**
      * 状态卡的窗口参数。
@@ -105,6 +104,12 @@ class OverlayService : Service() {
     private lateinit var hitText: TextView
     private lateinit var ttftText: TextView
     private lateinit var nextText: TextView
+
+    /** 指标行：本次任务累计 token */
+    private lateinit var totalText: TextView
+
+    /** 指标行：上下文占用百分比 */
+    private lateinit var contextText: TextView
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -241,55 +246,59 @@ class OverlayService : Service() {
     private fun showOverlay() {
         if (statusView != null) return
 
-        val card = buildStatusCard()
-        val button = buildButtonPanel()
+        // 0.10.0：状态条 + 按钮面板**合成一条**，整体挪到**屏幕下方**。
+        //
+        // 原来分两个窗口：顶部一条状态卡 + 底部一摞按钮。现在按用户画的
+        // 草图（照豆包手机的样子）合成一块：状态行 / 三个按钮 / 指标行。
+        //
+        // 合成的好处不只是好看：原来那块"底部按钮面板"是可触摸窗口，
+        // AI 注入的点击落在它上面会被吃掉（点到急停会把自己停掉）。
+        // 现在只有一条窗口，要判重叠也只判这一条。
+        val bar = buildBottomBar()
         val ripple = RippleView(this)
 
-        // 状态卡用**固定尺寸**，不用 WRAP_CONTENT。
+        // 先按屏宽量一次内容高度，再拿这个高度去建窗口 ——
+        // 写死高度踩过坑：三行内容比常量高一点，指标行就被窗口底边切掉半截。
+        // 宽度必须是固定值（理由见下），高度这次让内容自己说话。
+        val barWidth = resources.displayMetrics.widthPixels - dp(24)
+        bar.measure(
+            View.MeasureSpec.makeMeasureSpec(barWidth, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val barHeight = bar.measuredHeight
+
+        // 用**固定尺寸**，不用 WRAP_CONTENT。
         //
         // 踩过的坑：WRAP_CONTENT 的窗口只在 addView / updateViewLayout 时
         // 算一次尺寸，而且这里量出来的宽度退化成了"只剩内边距"——
         // 卡片缩成一条竖着的灰条，文字全被压没了。
         // 固定尺寸一次到位，顺带还有个好处：面板不会随文字长短忽大忽小。
-        val cardParams = baseParams(
-            gravity = Gravity.TOP or Gravity.START,
-            x = dp(12),
-            y = dp(56),
-            flags = FLAGS_PASSIVE,
-        ).also {
-            // 横向条：铺满"屏幕宽 - 两边各 12dp"，高度固定 56dp
-            it.width = resources.displayMetrics.widthPixels - dp(24)
-            it.height = dp(CARD_HEIGHT_DP)
-            // 0.9.19：Android 12+ 的「不信任触摸」保护——屏幕上叠加的不透明
-            // 遮挡 > 0.80 时，系统直接丢弃注入的点击（a11y/adb 都算）。卡片
-            // 默认 alpha=1.0 会被钳到 0.80，再叠上 0.80 的全屏水波层 =
-            // 0.96 → 点在卡片区域内的 AI 点击全被吞（蓝叠实证：搜索框在卡片
-            // 正下方，点了没反应）。两层显式压低：0.7 + 0.3×0.7 → 组合 0.79。
-            it.alpha = 0.75f
-            this.cardParams = it
-        }
-        val buttonParams = baseParams(
+        val barParams = baseParams(
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
             x = 0,
-            y = dp(72),
+            // 抬高一点，别压在系统导航条（手势条 / 虚拟按键）上
+            y = dp(12) + navBarHeight(),
             flags = FLAGS_BUTTON,
         ).also {
-            // 0.9.19：同 cardParams —— 面板也在全屏水波层（0.3）之下，
-            // 默认 1.0 会让面板区域组合到 1.0；B 站底部 tab 栏就在面板附近。
-            it.alpha = 0.7f
+            // 横向条：铺满"屏幕宽 - 两边各 12dp"，高度固定
+            it.width = barWidth
+            it.height = barHeight
+            // 0.9.19：Android 12+ 的「不信任触摸」保护——屏幕上叠加的不透明
+            // 遮挡 > 0.80 时，系统直接丢弃注入的点击（a11y/adb 都算）。
+            // 合并成一条之后有效遮挡 = 底色不透明度 0.9 × 窗口 alpha 0.85 = 0.765，
+            // 仍在 0.80 以下（见水波层那段的合成算式）。
+            it.alpha = 0.85f
+            this.cardParams = it
         }
 
         // 逐个加，哪一个失败都不影响另一个 —— 但**必须把失败打出来**。
         // 静默失败会让"悬浮窗没出现"变成一个完全无从下手的现象。
-        runCatching { wm.addView(card, cardParams); statusView = card }
-            .onSuccess { android.util.Log.i(TAG, "状态卡已添加") }
-            .onFailure { android.util.Log.e(TAG, "状态卡添加失败：$it") }
-        runCatching { wm.addView(button, buttonParams); buttonView = button }
-            .onSuccess { android.util.Log.i(TAG, "急停按钮已添加") }
-            .onFailure { android.util.Log.e(TAG, "急停按钮添加失败：$it") }
+        runCatching { wm.addView(bar, barParams); statusView = bar }
+            .onSuccess { android.util.Log.i(TAG, "底部悬浮条已添加") }
+            .onFailure { android.util.Log.e(TAG, "底部悬浮条添加失败：$it") }
 
-        // 水波层铺满整屏。加在最后 = 盖在状态卡和按钮之上，
-        // 而它们是 FLAG_NOT_TOUCHABLE 的，不吃点击，互不影响
+        // 水波层铺满整屏。加在最后 = 盖在悬浮条之上。
+        // 水波层自己是 FLAG_NOT_TOUCHABLE 的，不吃点击，互不影响
         val rippleParams = baseParams(
             gravity = Gravity.TOP or Gravity.START,
             x = 0,
@@ -298,12 +307,12 @@ class OverlayService : Service() {
         ).also {
             it.width = WindowManager.LayoutParams.MATCH_PARENT
             it.height = WindowManager.LayoutParams.MATCH_PARENT
-            // 0.9.19：见 cardParams 处的注释——全屏层 0.3 + 卡片 0.7 → 组合
-            // 0.79，不触发「不信任触摸」丢弃。水波自身的视觉反馈靠内部画笔
-            // alpha（RippleView），窗口 alpha 只做整体系数。
-            // 0.15 而不是 0.3：卡片那层提到了 0.75，两层合成 1-(0.25×0.85)=0.79，
-            // 正好卡在「不信任触摸」的 0.80 下面（0.9.19 那次就是叠到 0.96 被吞点击）
-            it.alpha = 0.15f
+            // 0.9.19：见 barParams 处的注释。
+            // 合成算式：1-(1-0.765)×(1-0.05) = 0.7768 < 0.80 ✓
+            // 水波层必须压到 0.05 —— 0.15 的话合成是 0.805，**越线**，
+            // AI 点在这条附近会被系统整片丢弃（0.9.19 踩过：搜索框点不动）。
+            // 水波自身的视觉反馈靠内部画笔 alpha（RippleView），窗口 alpha 只做整体系数。
+            it.alpha = 0.05f
         }
         runCatching { wm.addView(ripple, rippleParams); rippleView = ripple }
             .onSuccess { android.util.Log.i(TAG, "水波层已添加") }
@@ -312,10 +321,8 @@ class OverlayService : Service() {
 
     private fun removeOverlay() {
         statusView?.let { runCatching { wm.removeView(it) } }
-        buttonView?.let { runCatching { wm.removeView(it) } }
         rippleView?.let { runCatching { wm.removeView(it) } }
         statusView = null
-        buttonView = null
         rippleView = null
     }
 
@@ -337,278 +344,235 @@ class OverlayService : Service() {
     }
 
     /**
-     * 左上角的状态卡。
+     * 底部悬浮条（0.10.0 重做版，按用户 2026-10-20 的草图画）。
      *
-     * 三行：第几步 / 正在做什么 / **下一步要做什么**。
-     * 第三行是给用户预判用的 —— 觉得不对就能在事情发生前按急停。
+     * 三行：
+     *
+     *   当前：点开搜索框                    执行中
+     *   下一步：输入关键词
+     *   [补充] [接管] [后台]              14/49 步
+     *   TTFT 1.3s   命中 98%   总量 26.0k   上下文 21%
+     *
+     * 几条硬约束（都是踩出来的）：
+     *
+     * 1. 窗口尺寸**固定**（见 [showOverlay]）：WRAP_CONTENT 的悬浮窗只在
+     *    addView / updateViewLayout 时量一次，文字变长不会自己撑开。
+     * 2. 高度**不写死** —— 先在 [showOverlay] 里按屏宽量一次内容高度再设窗口，
+     *    写死过一次，指标行被窗口底边切掉半截。
+     * 3. 指标行四格都用**左对齐 + 等分**：右对齐时文字一长就从左边被切掉，
+     *    看起来像"数字丢了"（0.10.0 第一版就是这么错的）。
      */
-    /**
-     * 顶部横向状态条（0.9.23 T35）。
-     *
-     * 以前是左上角一块竖向小卡（236×118dp），只有阶段 / 步数 / 正在做 / 下一步。
-     * 现在改成横条（形状照手机后摄模组），右边多三个数字：
-     * **缓存命中率 / TTFT / 本轮 token** —— 这三个决定"这趟贵不贵、慢不慢"，
-     * 以前只在 run.log 里，用户得导日志才看得到。
-     *
-     * 布局（一行装下，窄屏也不裁切）：
-     *   ● 阶段/步数 │ 正在做什么 / 下一步 │ 缓存 92% / TTFT 0.8s
-     *
-     * ⚠️ 窗口尺寸仍是**固定值**（见 showOverlay）：WRAP_CONTENT 的悬浮窗
-     * 只在 addView/updateViewLayout 时量一次，文字变长不会自己撑开。
-     */
-    private fun buildStatusCard(): View {
+    private fun buildBottomBar(): View {
         phaseDot = View(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(AgentPhase.IDLE.color)
             }
         }
-        phaseText = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        phaseText = label(9f, "#99FFFFFF").apply {
             text = AgentPhase.IDLE.label
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        stepText = TextView(this).apply {
-            setTextColor(Color.parseColor("#B0FFFFFF"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
-            text = "准备中 ..."
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        currentText = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        nextText = TextView(this).apply {
-            setTextColor(Color.parseColor("#FFD54F"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        hitText = TextView(this).apply {
-            setTextColor(Color.parseColor("#E6FFFFFF"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             gravity = Gravity.END
-            text = "缓存 —"
-            maxLines = 1
         }
-        ttftText = TextView(this).apply {
-            setTextColor(Color.parseColor("#E6FFFFFF"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        currentText = label(11.5f, "#FFFFFF").apply { text = "当前：准备中 …" }
+        nextText = label(10f, "#FFD54F").apply { text = "下一步：—" }
+        stepText = label(9.5f, "#B3FFFFFF").apply {
+            text = "—"
             gravity = Gravity.END
-            text = "TTFT —"
-            maxLines = 1
         }
+        ttftText = label(9.5f, "#B3FFFFFF").apply { text = "TTFT —" }
+        hitText = label(9.5f, "#B3FFFFFF").apply { text = "命中 —" }
+        totalText = label(9.5f, "#B3FFFFFF").apply { text = "总量 —" }
+        contextText = label(9.5f, "#B3FFFFFF").apply { text = "上下文 —" }
 
-        fun column(vararg views: View) = LinearLayout(this@OverlayService).apply {
-            orientation = LinearLayout.VERTICAL
-            for (v in views) addView(v, LinearLayout.LayoutParams(-2, -2))
-        }
-
-        return LinearLayout(this).apply {
+        // ① 当前在干什么（右边角落留一个小小的阶段字，颜色跟圆点一致）
+        val currentRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(28).toFloat()
-                // 底色给足不透明度：窗口 alpha 0.75 时，透出来的是背后的应用标题栏，
-                // 白字叠深字看着像"字压字"（实测过）。0.94 的底色 + 0.75 窗口
-                // ≈ 0.71 有效遮挡，仍在 0.79 的「不信任触摸」红线以内
-                setColor(Color.parseColor("#FF1B1B1B"))
-            }
-            setPadding(dp(12), dp(8), dp(14), dp(8))
-
-            addView(
-                phaseDot,
-                LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(8) },
-            )
-            // 左侧列给**固定宽度**：交给它自己量的话，phaseText 一长就会压到中间那列上
-            // （实测 1080×2400 上「等待系统响应」和「正在：等待 8000ms」叠在一起）
-            addView(column(phaseText, stepText), LinearLayout.LayoutParams(dp(92), -2))
-            addView(
-                column(currentText, nextText),
-                LinearLayout.LayoutParams(0, -2, 1f).apply {
-                    leftMargin = dp(10)
-                    rightMargin = dp(8)
-                },
-            )
-            addView(column(hitText, ttftText), LinearLayout.LayoutParams(dp(118), -2))
+            addView(phaseDot, LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(8) })
+            addView(currentText, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(phaseText, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
         }
-    }
 
-    /**
-     * 底部按钮面板：上面「切到副屏」，中间「暂停/继续」，下面「急停」。
-     *
-     * 「暂停」是新加的：以前只有一个「急停」，按了就是**单向结束**，
-     * 用户想让 AI 停一下、自己补一句话再让它接着干，是没有路的。
-     * 现在按暂停真的停（不读树、不发请求），补的话并进下一轮；
-     * 急停仍然保留，只是从"唯一出口"变成了"真的不要了"的那个出口。
-     */
-    private fun buildButtonPanel(): View {
-        val move = buildMoveButton()
-        val pause = buildPauseButton()
-        val stop = buildStopButton()
+        // ② 下一步（黄色，给用户预判用 —— 觉得不对就在事情发生前按接管）
+        val nextRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(nextText, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(16) })
+        }
+
+        // ③ 三个键 + 步数
+        val buttonRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(buildSupplementButton(), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(buildTakeoverButton(), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+            addView(buildBackgroundButton(), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+            addView(stepText, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10) })
+        }
+
+        // ④ 指标行：四格等分、各自左对齐
+        val metricsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ttftText, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(hitText, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(totalText, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(contextText, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            addView(move)
-            addView(
-                pause,
-                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) },
-            )
-            addView(
-                stop,
-                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) },
-            )
+            background = GradientDrawable().apply {
+                cornerRadius = dp(22).toFloat()
+                // 90% 不透明的 #1B1B1B。不能写死不透明：窗口 alpha 0.85 时
+                // 有效遮挡会冲到 0.85，越过 Android 12+「不信任触摸」的 0.80 红线，
+                // AI 注入的点击会被系统整片丢弃。0.9 × 0.85 = 0.765，留在红线内。
+                setColor(Color.parseColor("#E61B1B1B"))
+            }
+            setPadding(dp(14), dp(9), dp(14), dp(10))
+            addView(currentRow, LinearLayout.LayoutParams(-1, -2))
+            addView(nextRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
+            addView(buttonRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(metricsRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(7) })
         }
     }
 
     /**
-     * 「暂停 / 继续」。文案由 Agent 的真实状态刷（[updatePauseButton]）——
-     * 点击时只给一个"收到了"的即时回显，不当成最终状态。
+     * 三个按钮共用的外壳：圆角、实底、按下有反馈。
+     *
+     * 差别只有「底色 + 文案 + 点了干什么」，所以统一一个工厂方法 ——
+     * 各写一份的话，改一次圆角要改三处。
      */
-    private fun buildPauseButton(): View {
-        val label = TextView(this).apply {
-            text = "暂停"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+    private fun actionButton(label: TextView, bgColor: String, onClick: () -> Unit): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(24), dp(10), dp(24), dp(10))
-        }
-        pauseLabel = label
-        return LinearLayout(this).apply {
             background = GradientDrawable().apply {
-                cornerRadius = dp(8).toFloat()
-                setColor(Color.parseColor(PAUSE_COLOR))
+                cornerRadius = dp(9).toFloat()
+                setColor(Color.parseColor(bgColor))
             }
-            elevation = dp(6).toFloat()
-            addView(label)
+            setPadding(dp(6), dp(7), dp(6), dp(7))
+            addView(label, LinearLayout.LayoutParams(-1, -2))
             isClickable = true
-            pauseButton = this
             setOnClickListener {
-                OverlayBus.togglePause()
-                // 先按"用户意图"回显，Agent 真正停下/继续后会用真实状态再刷一次
-                label.text = if (OverlayBus.pauseRequested) "继续" else "暂停"
+                onClick()
+                // 按下去先给一个"收到了"的即时反馈：不然用户会以为没点上、反复戳
+                alpha = 0.6f
+                postDelayed({ alpha = 1f }, 180)
             }
         }
+
+    /** 按钮上的字 */
+    private fun buttonLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        setTextColor(Color.WHITE)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        gravity = Gravity.CENTER
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
     }
 
-    /** 暂停 / 继续按钮的真实状态（由 Agent 调，别人别调） */
-    fun updatePauseButton(paused: Boolean) {
+    /**
+     * 「补充」＝ 原来的「暂停」。
+     *
+     * 按下去 AI 在下一个动作间隙停下，**纸盒自动回到前台、光标落进输入框**，
+     * 用户补一句话再继续；那句话并进下一轮（不新开消息，缓存前缀不断）。
+     */
+    private fun buildSupplementButton(): View {
+        val label = buttonLabel("补充")
+        supplementLabel = label
+        val btn = actionButton(label, PAUSE_COLOR) {
+            OverlayBus.requestSupplement()
+            label.text = "已补充"
+        }
+        supplementButton = btn
+        return btn
+    }
+
+    /** 补充 / 继续按钮的真实状态（由 Agent 调，别人别调） */
+    fun updateSupplementButton(paused: Boolean) {
         main.post {
-            val btn = pauseButton ?: return@post
-            val label = pauseLabel ?: return@post
+            val btn = supplementButton ?: return@post
+            val label = supplementLabel ?: return@post
             if (OverlayBus.recordingMode) {
-                btn.visibility = View.GONE
+                // 用 INVISIBLE 不用 GONE：GONE 会让这一格退出布局，三个键的位置会跳
+                btn.visibility = View.INVISIBLE
                 return@post
             }
             btn.visibility = View.VISIBLE
-            label.text = if (paused) "继续" else "暂停"
+            label.text = if (paused) "继续" else "补充"
             (btn.background as? GradientDrawable)?.setColor(
                 Color.parseColor(if (paused) RESUME_COLOR else PAUSE_COLOR)
             )
         }
     }
 
-    /** 急停上方的「切到副屏」按钮。默认禁用，由 Agent 按 Shizuku 状态开启 */
-    private fun buildMoveButton(): View {
-        val label = TextView(this).apply {
-            text = "切到副屏"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            gravity = Gravity.CENTER
-            setPadding(dp(18), dp(8), dp(18), dp(8))
-        }
-        moveLabel = label
-        return LinearLayout(this).apply {
-            background = GradientDrawable().apply {
-                cornerRadius = dp(10).toFloat()
-                setColor(Color.parseColor("#616161")) // 初始禁用灰
-            }
-            elevation = dp(6).toFloat()
-            addView(label)
-            isClickable = true
-            isEnabled = false
-            moveButton = this
-            setOnClickListener {
-                if (moveBackMode) {
-                    OverlayBus.requestReturnFromVd()
-                    label.text = "准备切回 ..." // 即时反馈
-                } else {
-                    OverlayBus.requestMoveToVirtualDisplay()
-                    label.text = "准备切换 ..." // 即时反馈
-                }
-                isEnabled = false
+    /**
+     * 「接管」＝ 原来的「急停」。
+     *
+     * 真的不要了：这趟结束。历史完整保留，之后还能「复盘」。
+     * 录制模式下这个键是"结束录制"，文案跟着变（见 [updateRecording]）。
+     */
+    private fun buildTakeoverButton(): View {
+        val label = buttonLabel("接管")
+        takeoverLabel = label
+        val btn = actionButton(label, STOP_COLOR) {
+            if (OverlayBus.recordingMode) {
+                OverlayBus.requestRecordingStop()
+                label.text = "结束中 …"
+            } else {
+                OverlayBus.requestTakeover()
+                label.text = "接管中 …"
             }
         }
+        takeoverButton = btn
+        return btn
     }
-
-    /** 底部居中的红色急停按钮 */
-    private fun buildStopButton(): View {
-        val label = TextView(this).apply {
-            text = "急停"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            gravity = Gravity.CENTER
-            setPadding(dp(28), dp(12), dp(28), dp(12))
-        }
-        stopLabel = label
-
-        return LinearLayout(this).apply {
-            background = GradientDrawable().apply {
-                // 小圆角矩形（用户要求圆角小一点）
-                cornerRadius = dp(6).toFloat()
-                setColor(Color.parseColor("#D32F2F"))
-            }
-            // 轻微的投影，浅色界面下也看得清
-            elevation = dp(6).toFloat()
-            addView(label)
-            isClickable = true
-            setOnClickListener {
-                // 录制时这个按钮是"结束录制"，不是"急停 AI"——
-                // 不区分的话按下去只会置一个没人看的标志
-                if (OverlayBus.recordingMode) {
-                    OverlayBus.requestRecordingStop()
-                    label.text = "正在结束 ..."
-                } else {
-                    OverlayBus.requestStop()
-                    label.text = "停止中 ..."
-                }
-                // 按钮自己先变灰，给一个"已经收到了"的即时反馈 ——
-                // 否则用户会以为没点上，反复戳
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(6).toFloat()
-                    setColor(Color.parseColor("#757575"))
-                }
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // 给 OverlayBus 调
-    // ------------------------------------------------------------------
 
     /**
-     * 更新悬浮按钮：方向、文案、可点与否由 Agent 给定。
+     * 「后台」＝ 原来的「切到副屏」。
+     *
+     * 主屏模式下按它 = AI 切到副屏去干，主屏还给用户；
+     * 副屏模式下同一个键变成「回前台」。
+     * 能不能点由 Agent 给（没 Shizuku 就没法切），见 [updateBackgroundButton]。
+     */
+    private fun buildBackgroundButton(): View {
+        val label = buttonLabel("后台")
+        backgroundLabel = label
+        val btn = actionButton(label, MUTED_COLOR) {
+            if (moveBackMode) {
+                OverlayBus.requestReturnFromVd()
+                label.text = "回前台 …"
+            } else {
+                OverlayBus.requestMoveToVirtualDisplay()
+                label.text = "切换中 …"
+            }
+            backgroundButton?.isEnabled = false
+        }
+        btn.isEnabled = false
+        backgroundButton = btn
+        return btn
+    }
+
+    /**
+     * 更新「后台」键：方向、文案、可点与否由 Agent 给定。
+     *
      * 启用且主屏 = 蓝；启用且副屏 = 绿；禁用 = 灰。
      */
-    fun updateMoveButton(enabled: Boolean, text: String, backMode: Boolean) {
+    fun updateBackgroundButton(enabled: Boolean, text: String, backMode: Boolean) {
         main.post {
-            val btn = moveButton ?: return@post
-            val label = moveLabel ?: return@post
+            val btn = backgroundButton ?: return@post
+            val label = backgroundLabel ?: return@post
             moveBackMode = backMode
             btn.isEnabled = enabled
             label.text = text
             val color = when {
-                !enabled -> "#616161"
-                backMode -> "#43A047"
-                else -> "#1976D2"
+                !enabled -> MUTED_COLOR
+                backMode -> BACK_MODE_COLOR
+                else -> FOREGROUND_COLOR
             }
             (btn.background as? GradientDrawable)?.setColor(Color.parseColor(color))
+            btn.alpha = if (enabled) 1f else 0.75f
         }
     }
 
@@ -633,7 +597,6 @@ class OverlayService : Service() {
         main.post {
             val v = if (visible) View.VISIBLE else View.INVISIBLE
             statusView?.visibility = v
-            buttonView?.visibility = v
             rippleView?.visibility = v
             // 藏起来之前把没画完的水波清掉：否则再显示时，
             // 会看到半截圈从旧位置继续扩散，像是点在了别的地方
@@ -668,11 +631,11 @@ class OverlayService : Service() {
             phaseText.text = "录制中"
             (phaseDot.background as? GradientDrawable)?.setColor(RECORDING_COLOR)
             stepText.text = "已记录 $count 步"
-            currentText.text = "正在：手动操作手机"
+            currentText.text = "当前：手动操作手机"
             nextText.text = "下一步：点下面的按钮结束录制"
-            stopLabel?.text = "停止"
-            // 录制时「暂停」没有意义（暂停的是 AI 循环，不是录制）
-            pauseButton?.visibility = View.GONE
+            takeoverLabel?.text = "停止"
+            // 录制时「补充」没有意义（暂停的是 AI 循环，不是录制）
+            supplementButton?.visibility = View.INVISIBLE
         }
     }
 
@@ -681,15 +644,36 @@ class OverlayService : Service() {
      *
      * @param hitPercent 缓存命中率，null = 这一轮没有统计（比如免费通道没给 usage）
      */
-    fun updateMetrics(hitPercent: Int?, ttftMs: Long, tokens: Int) {
+    fun updateMetrics(
+        hitPercent: Double?,
+        ttftMs: Long,
+        contextPercent: Int? = null,
+        totalTokens: Int? = null,
+    ) {
         main.post {
-            hitText.text = if (hitPercent == null) "缓存 —" else "缓存 $hitPercent%"
-            val t = when {
+            ttftText.text = when {
                 ttftMs <= 0 -> "TTFT —"
                 ttftMs < 1000 -> "TTFT ${ttftMs}ms"
                 else -> "TTFT %.1fs".format(ttftMs / 1000.0)
             }
-            ttftText.text = if (tokens > 0) "$t · ${tokens}tok" else t
+            hitText.text = if (hitPercent == null) "命中 —" else "命中 %.1f%%".format(hitPercent)
+            // 「总量」是**本次任务累计**（输入+输出），不是本轮 ——
+            // 用户问的是"这一趟花了多少"，只看本轮看不出量级。
+            totalText.text = when {
+                totalTokens == null || totalTokens <= 0 -> "总量 —"
+                totalTokens < 1000 -> "总量 $totalTokens"
+                else -> "总量 %.1fk".format(totalTokens / 1000.0)
+            }
+            // 上下文占用：服务端真实 prompt_tokens ÷ 窗口上限（见 Agent）
+            contextText.text = if (contextPercent == null) {
+                "上下文 —"
+            } else {
+                "上下文 $contextPercent%"
+            }
+            android.util.Log.i(
+                TAG,
+                "指标: 命中=" + hitPercent + " TTFT=" + ttftMs + "ms 总量=" + totalTokens + " 上下文=" + contextPercent + "%",
+            )
         }
     }
 
@@ -710,7 +694,8 @@ class OverlayService : Service() {
      * 用户才能看到"正在操作手机"。
      */
     fun overlapsOverlayButtons(x: Int, y: Int): Boolean {
-        val v = buttonView ?: return false
+        // 0.10.0：状态条和按钮合成一条窗口了，所以判重叠就判这一条。
+        val v = statusView ?: return false
         if (v.visibility != View.VISIBLE) return false
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)
@@ -723,10 +708,10 @@ class OverlayService : Service() {
 
     fun updateStatus(step: Int, maxSteps: Int, current: String, nextHint: String) {
         main.post {
-            // 普通任务里「暂停」要在（录制结束回到任务时它可能还是 GONE）
-            pauseButton?.visibility = View.VISIBLE
+            // 普通任务里「补充」要在（录制结束回到任务时它可能还是 GONE）
+            supplementButton?.visibility = View.VISIBLE
             stepText.text = stepsLabel(step, maxSteps)
-            currentText.text = "正在：$current"
+            currentText.text = "当前：$current"
             nextText.text = if (nextHint.isBlank()) "下一步：—" else "下一步：$nextHint"
 
             // ⚠️ 这一行不能省。
@@ -745,19 +730,47 @@ class OverlayService : Service() {
 
     // ------------------------------------------------------------------
 
+    /** 建一个统一样式的单行文字（悬浮条里所有文字都走它，字号/颜色只在调用处写） */
+    private fun label(sizeSp: Float, color: String): TextView = TextView(this).apply {
+        setTextColor(Color.parseColor(color))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
+    }
+
     private fun dp(v: Int): Int = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics,
     ).toInt()
 
+    /**
+     * 底部导航条（手势条 / 虚拟按键）的高度，dp。
+     *
+     * 悬浮条要抬到它**上面**，否则会被系统导航条盖住 —— 而导航条那一块
+     * 恰恰是很多应用放主操作按钮的地方，AI 想点那里就会被挡住。
+     *
+     * 取不到就按 0 处理（老设备 / 某些 ROM 拿不到 insets），
+     * 那样悬浮条只是贴着屏幕底边，不会崩。
+     */
+    private fun navBarHeight(): Int {
+        val id = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        if (id <= 0) return 0
+        return runCatching { resources.getDimensionPixelSize(id) }.getOrDefault(0)
+    }
+
     companion object {
         private const val TAG = "OverlayService"
 
-        /** 状态条高度（dp）。宽度按屏幕算，固定尺寸是为了绕开 WRAP_CONTENT 的测量坑 */
-        private const val CARD_HEIGHT_DP = 56
-
-        /** 「暂停」按钮（琥珀）/「继续」按钮（绿） */
+        /** 「补充」按钮（琥珀）/ 暂停中的「继续」（绿） */
         private const val PAUSE_COLOR = "#F9A825"
         private const val RESUME_COLOR = "#2E7D32"
+
+        /** 「接管」（红）/ 禁用态（灰） */
+        private const val STOP_COLOR = "#D32F2F"
+        private const val MUTED_COLOR = "#4A4A4A"
+
+        /** 「后台」：主屏模式（蓝）/ 副屏模式（绿） */
+        private const val FOREGROUND_COLOR = "#1976D2"
+        private const val BACK_MODE_COLOR = "#43A047"
         private const val CHANNEL_ID = "aiphone_overlay"
         private const val NOTIFICATION_ID = 1001
 
