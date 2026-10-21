@@ -103,7 +103,8 @@ if SCRIPT == "browser":
     # 预期走完：打开浏览器 → 读一段源码 → 跑一段 JS → 按编号点按钮 → 收尾。
     # 每步的 user 消息里能看到**DOM 摘要**（编号列表），这就是"控件树"
     # 在浏览器模式下的形态 —— 用 MOCK_DUMP 落盘后 grep 就能看。
-    PAGE = "http://10.0.2.2:8765/testpage"
+    # 想换被测页面就设 MOCK_PAGE（例如 MOCK_PAGE=https://example.com 验证真站点）
+    PAGE = os.environ.get("MOCK_PAGE", "http://10.0.2.2:8765/testpage")
     SCRIPTED = [
         # 1 打开内置浏览器（模型自己决定用浏览器这条路）
         '{"thought":"这是网页任务，用内置浏览器打开测试页","actions":[{"action":"browser_open","url":"' + PAGE + '"}]}',
