@@ -32,6 +32,14 @@ enum class AgentPhase(val label: String, val color: Int) {
      */
     RETRYING("模型没响应，准备重发", 0xFFFF7043.toInt()),
     ACTING("正在操作手机", 0xFFEF5350.toInt()),
+
+    /**
+     * 正在拉起目标（开应用 / 开内置浏览器）。
+     *
+     * 和 [ACTING] 分开是因为这段时间**什么都还没点**：用户看到"正在操作手机"
+     * 却半天没动静会以为坏了；写"正在启动"就知道是在等应用/网页起来。
+     */
+    LAUNCHING("正在启动", 0xFF42A5F5.toInt()),
     WAITING_SYSTEM("等待系统响应", 0xFF66BB6A.toInt()),
 
     /**

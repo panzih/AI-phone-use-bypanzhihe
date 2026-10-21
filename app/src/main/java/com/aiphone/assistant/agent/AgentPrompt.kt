@@ -53,8 +53,11 @@ object AgentPrompt {
      * 5 —— 0.9.22：整篇重写（T30）。分区为 定位 / 批量 / 动作 / 输出 / 收尾 /
      *      看图 / next_hint / 纪律，删掉重复叮嘱，压到约六成；并把
      *      「说完成必须有依据」写成硬性要求（配合 T31 的端侧收尾闸）。
+     * 6 —— 0.10.1：新增内置浏览器三动作（browser_open / browser_html /
+     *      browser_eval）与「三条信息源由模型自己挑」的说明；并把 T42 的权责
+     *      写进提示词 —— 端侧只是建议，**最终决定权在云端模型**。
      */
-    const val VERSION = "5"
+    const val VERSION = "6"
 
     /**
      * 系统提示词。
@@ -128,6 +131,9 @@ object AgentPrompt {
 | sleep | 等待（默认 1500，>5000 要 long_wait） | duration_ms |
 | capture | 截一张，随下一步发给你 | 无 |
 | dismiss_dialog | 让端侧关掉当前弹窗 | 无 |
+| browser_open | 打开**内置浏览器**并加载网址 | url（可省 = 空白页） |
+| browser_html | 读当前网页的 HTML（背后的代码） | selector（可省，省 = 整页）；max_chars |
+| browser_eval | 在网页里执行一段 JS 并拿回结果 | js |
 
 找列表里更靠后的内容用 scroll，不要用 swipe —— scroll 直接滚那个容器，不会滚过头。
 
@@ -176,6 +182,38 @@ object AgentPrompt {
 2. `{"action":"capture"}`：已经能给动作、只想看一眼结果。图随下一步来，不多一次往返。
 
 两个别同时给（同时给按 need_image 处理）；一批里 capture 最多一张。
+
+# 内置浏览器（browser_open / browser_html / browser_eval）
+
+App 自带一个 WebView 浏览器，**你能直接读到网页背后的代码**，不用靠猜。
+
+什么时候该用它：任务主体是网页（搜索、登录、下单、发帖、看列表）时，
+**先用 browser_open 打开**，比操作别人家的浏览器 App 准得多 ——
+元素列表会变成网页的 DOM 摘要（按钮、输入框、链接都带编号），点它 = 真的点网页元素。
+
+三条信息源由你自己挑：
+
+| 想知道什么 | 用什么 | 代价 |
+|---|---|---|
+| 页面上有哪些可点的东西（默认就有） | 不用动作，每步都发 | 最小 |
+| 页面长什么样（布局、图片、"发送成功"这种视觉结果） | `need_image` 或 `capture` | 一张图 |
+| 页面的真实结构（哪个是搜索框、有没有那条数据） | `browser_html`（尽量给 selector） | 较大，别每步都用 |
+| 精确问页面一个问题（"购物车几件"、滚动到底加载更多） | `browser_eval` | 较小 |
+
+规矩：
+- **整页 HTML 只在判断不出来时读一次**，能写 selector 就写。每步都读会打断缓存、烧钱。
+- 三个动作执行完都**立刻把控制权交回你**（它们会改变页面或给你新信息），排在后面的动作本轮不执行。
+- 网址可以不带 https://，系统会补。
+- 浏览器模式下不要用 open_app 去开别的浏览器；要离开网页就 open_app 打开目标应用。
+
+# 端侧只给建议，最终你说了算
+端侧（本地规则）会在下面这几种情况插话，它的话**只是建议**：
+
+- 「像是挡路的弹窗，安全关闭按钮是 [N]」—— 要不要关由你决定。要关就点 [N]，或下发 dismiss_dialog。
+- 「界面已经连续 N 步没变化」/「你连续 N 次给同一批动作」—— 说明原地打转，
+  换一种做法（换元素、先截图、open_app 重开、或用浏览器读 DOM）；确实做不下去就 failed。
+- 你宣布「任务完成」但这一步没有动作、界面也没变时，端侧会打回一次让你说清依据。
+  **如果你确认确实完成了，直接再回答一次 finished，我会采纳** —— 最终判断权在你。
 
 # next_hint 必须认真写
 用户盯着这一行，在动手**之前**决定要不要按暂停。
@@ -448,6 +486,11 @@ $catalog
             "${action.kind.label} (${action.x},${action.y})→(${action.x2},${action.y2}) ${action.durationMs}ms"
 
         TouchKind.INPUT_TEXT -> "输入「${action.text.take(20)}」"
+        TouchKind.BROWSER_OPEN ->
+            "打开内置浏览器" + (if (action.url.isBlank()) "（空白页）" else " ${action.url.take(60)}")
+        TouchKind.BROWSER_HTML ->
+            "读网页源码" + (if (action.selector.isBlank()) "" else "（selector: ${action.selector.take(40)}）")
+        TouchKind.BROWSER_EVAL -> "执行 JS「${action.js.take(40)}」"
         TouchKind.OPEN_APP -> "打开应用 ${action.packageName}"
         TouchKind.WAIT -> "等待 ${action.durationMs}ms"
         else -> action.kind.label

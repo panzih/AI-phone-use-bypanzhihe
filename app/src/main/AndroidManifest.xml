@@ -128,6 +128,21 @@
             android:theme="@style/Theme.AiPhoneAssistant" />
 
         <!--
+          内置浏览器窗口。
+
+          AI 操作的 WebView 必须挂在 Activity 上才真正排版/执行 JS；
+          不导出，只由 BrowserDriver 内部拉起。旋转时不重建，避免页面状态
+          （已登录、已滚动到的位置）在任务中途被清掉。
+        -->
+        <activity
+            android:name=".browser.BrowserActivity"
+            android:exported="false"
+            android:label="@string/browser_title"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.AiPhoneAssistant" />
+
+        <!--
           日志导出用的 FileProvider。
 
           authority 必须和 LogExporter 里拼的一致（<包名>.fileprovider）。

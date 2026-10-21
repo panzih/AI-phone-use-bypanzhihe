@@ -246,6 +246,10 @@ class DisplayChannel(
                 // capture 由 Agent 自己处理（截图不走通道），走到这里说明有 bug
                 TouchKind.CAPTURE -> "内部错误：截屏不该发到设备通道"
 
+                // 浏览器三动作走 BrowserDriver（Agent 里处理），不该进设备通道
+                TouchKind.BROWSER_OPEN, TouchKind.BROWSER_HTML, TouchKind.BROWSER_EVAL ->
+                    "内部错误：浏览器动作不该发到设备通道"
+
                 TouchKind.TAP -> {
                     onPoint?.invoke(action.x, action.y)
                     ok(AdbShell.tap(context, displayId, action.x, action.y), "点击")

@@ -408,6 +408,11 @@ object ActionParser {
         val duration = item.optInt("duration_ms", item.optInt("duration", item.optInt("ms", 0)))
         val text = item.optString("text", item.optString("content", ""))
         val pkg = item.optString("package", item.optString("package_name", ""))
+        // 浏览器三个动作的参数。同义词多认几个：模型写 url / href / link 都是那个意思
+        val url = item.optString("url", item.optString("href", item.optString("link", ""))).trim()
+        val js = item.optString("js", item.optString("script", item.optString("code", ""))).trim()
+        val selector = item.optString("selector", item.optString("css", "")).trim()
+        val maxChars = item.optInt("max_chars", item.optInt("maxChars", 0))
 
         // 方向：模型可能写在 direction 里，也可能写在 action 名里（swipe_up）
         val direction = ScrollDirection.fromId(
@@ -435,6 +440,16 @@ object ActionParser {
 
             TouchKind.OPEN_APP ->
                 if (pkg.isBlank()) "「打开应用」缺少 package 包名" else null
+
+            // 打开浏览器：网址可以不给（空白页），但给了就必须像个网址 ——
+            // 模型常写 "bilibili.com" 这种没协议头的，这里直接补 https://
+            TouchKind.BROWSER_OPEN -> null
+
+            TouchKind.BROWSER_HTML ->
+                if (maxChars < 0) "「读网页源码」的 max_chars 不能是负数" else null
+
+            TouchKind.BROWSER_EVAL ->
+                if (js.isBlank()) "「执行JS」的 js 是空的" else null
 
             else -> null
         }
@@ -464,6 +479,17 @@ object ActionParser {
             }
         }
 
+        val normalizedUrl = if (kind == TouchKind.BROWSER_OPEN && url.isNotBlank()) {
+            when {
+                url.startsWith("http://") || url.startsWith("https://") -> url
+                // 只有域名/路径时补 https://（模型几乎总是省掉协议头）
+                url.contains("://") -> url
+                else -> "https://" + url.trimStart('/')
+            }
+        } else {
+            ""
+        }
+
         out.add(
             TouchAction(
                 kind = kind,
@@ -473,6 +499,10 @@ object ActionParser {
                 direction = direction,
                 text = text,
                 packageName = pkg,
+                url = normalizedUrl,
+                js = js,
+                selector = selector,
+                maxChars = maxChars,
             )
         )
         return null

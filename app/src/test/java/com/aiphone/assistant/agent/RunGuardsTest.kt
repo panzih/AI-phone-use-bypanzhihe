@@ -56,13 +56,17 @@ class RunGuardsTest {
 
     @Test
     fun `同屏步数到上限给的是界面没变化`() {
-        assertNotNull(RunGuards.stuckReason(sameTree = 5, repeatAction = 0, limit = 5))
+        // 0.10.1：措辞从"判决"改成"陈述"（云端拥有最终决定权），断言跟着改
+        assertEquals(
+            "界面已经连续 6 步没有任何变化",
+            RunGuards.stuckAdvice(sameTree = 5, repeatAction = 0, limit = 5),
+        )
     }
 
     @Test
     fun `重复动作到上限给的是模型重复`() {
-        val why = RunGuards.stuckReason(sameTree = 0, repeatAction = 5, limit = 5)
-        assertEquals("模型连续 6 次给出同一批动作", why)
+        val why = RunGuards.stuckAdvice(sameTree = 0, repeatAction = 5, limit = 5)
+        assertEquals("你连续 6 次给出了同一批动作", why)
     }
 
     @Test
@@ -261,5 +265,48 @@ class RunGuardsTest {
     @Test
     fun `第一轮没有上一轮，不报断`() {
         assertFalse(RunGuards.cacheBroke(prevPromptTokens = 0, hitTokens = 0))
+    }
+
+    // ---------------------------------------------------------------
+    // 6. 端侧只提醒、云端做决定（0.10.1 T42）
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `卡住的门槛到了只出提醒，措辞是陈述而不是判决`() {
+        // 用户 2026-10-21：云端模型拥有最终决定权。端侧判定"你可能卡住了"
+        // 必须是**提醒**（陈述事实），不能是"已经停下"这种替云端下结论的话。
+        val why = RunGuards.stuckAdvice(sameTree = 5, repeatAction = 0, limit = 5)
+        assertNotNull(why)
+        assertTrue(why!!.contains("连续"))
+        assertFalse(why.contains("停下"))
+        assertFalse(why.contains("已经停"))
+    }
+
+    @Test
+    fun `重复动作到门槛也给提醒而不是判决`() {
+        val why = RunGuards.stuckAdvice(sameTree = 0, repeatAction = 5, limit = 5)
+        assertNotNull(why)
+        assertTrue(why!!.contains("同一批动作"))
+    }
+
+    @Test
+    fun `没到门槛不给提醒`() {
+        assertNull(RunGuards.stuckAdvice(sameTree = 4, repeatAction = 4, limit = 5))
+    }
+
+    @Test
+    fun `收尾闸只拦一次：云端第二次坚持就采纳`() {
+        // 这就是"云端最终决定权"的落点：端侧最多置疑一次，
+        // 模型第二次仍然说完成就放行（多一轮的代价远小于和模型拉锯）
+        assertTrue(
+            RunGuards.shouldRefuseUnverifiedFinish(
+                finished = true, executedActions = 0, interfaceChanged = false, refusals = 0,
+            )
+        )
+        assertFalse(
+            RunGuards.shouldRefuseUnverifiedFinish(
+                finished = true, executedActions = 0, interfaceChanged = false, refusals = 1,
+            )
+        )
     }
 }

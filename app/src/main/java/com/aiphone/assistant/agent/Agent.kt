@@ -396,6 +396,13 @@ class Agent(
         // 免得和"任务确实已经完成"的正常情况来回拉锯
         var finishRefusals = 0
 
+        // 这次任务开过几次内置浏览器（模型可能来回开，给个上限防止刷屏）
+        var totalBrowserOpens = 0
+
+        // 端侧"可能卡住了"提醒过几次（跨步累计，有进展就清零）。
+        // 用户 2026-10-21：最终决定权在云端 —— 端侧只提醒，硬停是最后兜底。
+        var stuckAdviceCount = 0
+
         // 上一轮的输入 token 数（缓存自检用）：严格追加的前提下，这一整段
         // 下一轮都该命中；命中明显少于它 = 有人改了历史，而这不会报错、只会烧钱
         var lastPromptTokens = 0
@@ -477,7 +484,9 @@ class Agent(
 
             // 每步刷新一次自动切副屏使能（主屏 + Shizuku READY），interruption() 只读内存、零 binder
             watcher.arm(
-                !controller.isVirtualDisplay &&
+                // 浏览器模式下不自动迁副屏：把我们的 BrowserActivity 搬到副屏
+                // 既没有意义（模型读的是 DOM，不是屏幕），还会把用户甩到桌面上
+                !controller.isVirtualDisplay && !controller.isBrowser &&
                     ShizukuBridge.state(controller.appContext) == ShizukuBridge.State.READY,
             )
             // 用户回桌面 + 防抖：自动把目标 app 迁到副屏（0.8.3）
@@ -489,13 +498,23 @@ class Agent(
             // 这里只消费结果：处理过就进下一步（那边已经换了读取通道）。
             if (migration.detectTakeover()) continue
 
-            // ---- 端侧先清一遍挡路的无副作用弹窗 ----
-            // 放在读控件树**之前**：这样模型拿到的是清理干净的页面，
-            // 不会为一个广告弹窗白花一步，也不用为它多走一轮网络。
-            // 安全闸在 LocalRuleEngine 里，端侧只挪开挡路的东西、不推进任务。
-            dismissBlockingDialogLocally()?.let { note ->
-                lastResult = note
-                listener.onEvent(EventKind.THOUGHT, note, "端侧处理")
+            // 本步的端侧"可能卡住"提示（null = 没到该说的程度）
+            var stuckAdvice: String? = null
+
+            // ---- 端侧先看一眼有没有挡路的弹窗（**只建议，不动手**）----
+            //
+            // 用户 2026-10-21 定的权责：**云端模型拥有最终决定权**。
+            // 端侧可以「发现问题」（词表和安全闸本来就在本地），但**点不点由云端决定**：
+            // 要关就直接点那个编号，或者下发 dismiss_dialog 让端侧去执行。
+            // 以前这里是端侧自己点掉 —— 那等于端侧替云端做了决定，
+            // 一旦词表误判（把「取消订单」当成「取消」），云端连发生了什么都不知道。
+            //
+            // 成本没有变化：这段建议拼在这一步的 user 消息里，
+            // 不额外多一轮往返（只是多几十个 token）。
+            val localAdvice = localDismissAdvice()
+            if (localAdvice != null) {
+                logger?.line(localAdvice, "端侧建议")
+                listener.onEvent(EventKind.THOUGHT, localAdvice, "端侧建议")
             }
 
             // 读控件树。这次**不藏悬浮窗** —— 我们自己的节点已经在
@@ -546,7 +565,11 @@ class Agent(
             // 两次微信任务都死在这一条）。所以这里明确要求"看得见且有东西"
             // 才启用这个判据。
             val treeObservable = RunGuards.treeObservable(treeRead.rootAvailable, nodeCount)
-            val treeHash = if (!treeObservable) 0 else md5(tree!!.toByteArray())
+            // 浏览器模式：DOM 摘要基本上一直是那几个元素（点一下只改文字），
+            // 拿它算"界面没变化"既会误判成动作没生效、也会一路累加到"卡住"。
+            // 所以这个模式下**不算**同屏指纹 —— 网页的真实变化由模型用
+            // browser_eval / browser_html 自己确认。
+            val treeHash = if (!treeObservable || controller.isBrowser) 0 else md5(tree!!.toByteArray())
             criteria.sameTree =
                 RunGuards.nextSameTreeCount(criteria.sameTree, treeHash, criteria.lastTreeHash)
             if (treeHash != 0) criteria.lastTreeHash = treeHash
@@ -563,16 +586,29 @@ class Agent(
                 0
             }
 
-            // ---- 卡死止损 ----
-            // 注入提示只到 2 次；再往下就是明知道没用还在烧钱，直接停。
-            RunGuards.stuckReason(criteria.sameTree, criteria.repeatAction, STUCK_LIMIT)?.let { why ->
-                val msg = "卡住了：$why，已经停下。可能是这个界面点不动、" +
-                    "或者需要你自己操作一下（比如输入密码）。"
-                logger?.error(msg, "卡死")
-                listener.onEvent(EventKind.ERROR, msg, "卡住")
-                finish(false, msg)
-                return
+            // ---- 卡死：先交给云端判断，不替他停 ----
+            //
+            // 用户 2026-10-21：**云端模型拥有最终决定权**。端侧判定"你可能卡住了"
+            // 只是**建议**：把事实（连续几步没变化 / 连续给同一批动作）告诉云端，
+            // 让它自己决定是换做法、认输（failed）、还是继续。
+            // 端侧只保留一条硬兜底：建议 STUCK_ADVICE_LIMIT 次仍然毫无进展就强制停
+            // （否则就是明知道没用还在烧钱，还会让用户白等）。
+            RunGuards.stuckAdvice(criteria.sameTree, criteria.repeatAction, STUCK_LIMIT)?.let { why ->
+                if (stuckAdviceCount < STUCK_ADVICE_LIMIT) {
+                    stuckAdviceCount++
+                    stuckAdvice = why
+                    logger?.warn("端侧提醒模型可能卡住（第 $stuckAdviceCount 次）：$why", "卡死")
+                } else {
+                    val msg = "卡住了：$why，端侧已经提醒过 $stuckAdviceCount 次仍无进展，先停下。" +
+                        "可能是这个界面点不动、或者需要你自己操作一下（比如输入密码）。"
+                    logger?.error(msg, "卡死")
+                    listener.onEvent(EventKind.ERROR, msg, "卡住")
+                    finish(false, msg)
+                    return
+                }
             }
+            // 有进展就把这条计数清零：别让"曾经卡过"一路记到任务结束
+            if (criteria.sameTree == 0 && criteria.repeatAction == 0) stuckAdviceCount = 0
 
             // 连续读不到控件树 → 止损，而且要把原因说成"无障碍没工作"，
             // 而不是"界面点不动"（0.8.5 里就报错过）
@@ -616,7 +652,24 @@ class Agent(
                             "如果连着几步都这样，直接 failed 并让用户重新开启无障碍服务。"
                     )
                 }
-                if (criteria.sameTree >= 2) {
+                // 端侧的弹窗建议（不点，只告诉模型）
+                if (localAdvice != null) {
+                    add(localAdvice)
+                }
+                // 端侧认为"可能卡住了"：把事实说清，怎么做由云端决定
+                if (stuckAdvice != null) {
+                    add(
+                        "⚠️ 端侧提醒：$stuckAdvice。这**只是提醒**，不是判决 —— " +
+                            "换一个新的做法（换元素、换动作、先截图看看、或 open_app 重开），" +
+                            "或者认为确实做不下去就 failed 说明原因。再原地重复就真的卡住了。"
+                    )
+                }
+                // 浏览器模式下不要因为"元素列表没变"就说动作没生效：
+                // 网页点一下通常只改文字/弹层，可交互元素列表**本来就一样**。
+                // 实测（2026-10-21 测试页）：点了按钮、页面明确显示"已点击按钮"，
+                // 端侧却回灌"界面和上一步完全一样，说明上一批动作没生效"——
+                // 会让云端以为失败并重试。这条判据只对原生控件树成立。
+                if (criteria.sameTree >= 2 && !controller.isBrowser) {
                     add(
                         "界面元素和上一步完全一样，说明你上一批动作**没有生效**。" +
                             "不要再用同样的方式。换一个元素编号，或者换一种动作。"
@@ -972,7 +1025,8 @@ class Agent(
                                 "上面历史里那句「已完成」属于**旧任务**，不算数。" +
                                 "请先确认当前界面的真实状态（需要就先 need_image 要截图，" +
                                 "或 open_app 打开目标应用），再决定：给出下一步动作，" +
-                                "或者在确实做不到时用 failed 说明原因。").trim()
+                                "或者在确实做不到时用 failed 说明原因。" +
+                                "**最终决定权在你**：如果你确认确实已完成，直接再回答一次 finished，我会采纳。").trim()
                             // 这次输出照样记进历史，保持"严格追加"的对话结构
                             history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
                             continue@ask
@@ -1015,7 +1069,8 @@ class Agent(
                                     "一个动作都没执行，界面也和上一步一模一样（或者根本读不到界面）。" +
                                     "请先确认当前屏的真实状态：确实完成，就用一句话说明你依据的是" +
                                     "哪个可见状态（比如屏幕上已经出现「发送成功」）；" +
-                                    "没完成就给下一步动作；做不到就用 failed 说明原因。").trim()
+                                    "没完成就给下一步动作；做不到就用 failed 说明原因。" +
+                                    "**最终决定权在你**：确认完成了就直接再回答一次 finished，我会采纳。").trim()
                                 // 这次输出照样进历史，保持严格追加
                                 history.add(ChatTurn(ChatTurn.ASSISTANT, result.text))
                                 continue@ask
@@ -1334,6 +1389,78 @@ class Agent(
                             }
                         }
                     }
+                } else if (action.kind == TouchKind.BROWSER_OPEN) {
+                    // 打开内置浏览器：**这是"用哪条信息源"的决定，由云端模型下**。
+                    // 端侧只负责把窗口拉起来、把通道切过去，然后立刻交回云端 ——
+                    // 因为它下一步要看的是一张全新的 DOM 摘要，不能拿旧编号继续点。
+                    OverlayBus.setPhase(AgentPhase.LAUNCHING)
+                    logger?.line("  $single", "执行")
+                    if (totalBrowserOpens >= MAX_BROWSER_OPENS) {
+                        results.add("$single → 本次任务已经开过 $totalBrowserOpens 次浏览器，不再重复打开")
+                        break
+                    }
+                    val err = com.aiphone.assistant.browser.BrowserDriver.open(
+                        controller.appContext,
+                        action.url,
+                    )
+                    if (err != null) {
+                        logger?.error("  $single → 打开浏览器失败：$err", "执行")
+                        results.add("$single → 打开浏览器失败：$err")
+                        break
+                    }
+                    controller.enterBrowser()
+                    channelSwitchedTo = "内置浏览器"
+                    totalBrowserOpens++
+                    results.add(
+                        "$single → 已打开内置浏览器" +
+                            (if (action.url.isBlank()) "（空白页）" else "：${action.url}") +
+                            "。从下一步起元素列表就是**网页的 DOM 摘要**（编号点击 = 点网页元素），" +
+                            "要源码可以用 browser_html，要精确结果可以用 browser_eval。"
+                    )
+                    // 页面要先加载完：否则下一步读到的是空白页
+                    delay(BROWSER_LOAD_SETTLE_MS)
+                    break
+                } else if (action.kind == TouchKind.BROWSER_HTML) {
+                    // 读网页背后的代码。**只读一次、能截断就截断** ——
+                    // 整页 HTML 几十 KB，每步都发会打断缓存前缀（那是 50 倍差价）
+                    OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                    logger?.line("  $single", "执行")
+                    val limit = (if (action.maxChars > 0) action.maxChars else BROWSER_HTML_DEFAULT_CHARS)
+                        .coerceIn(500, BROWSER_HTML_MAX_CHARS)
+                    val html = com.aiphone.assistant.browser.BrowserDriver.html(
+                        action.selector.ifBlank { null },
+                        limit,
+                    )
+                    if (html == null) {
+                        val why = com.aiphone.assistant.browser.BrowserDriver.lastError() ?: "未知原因"
+                        logger?.error("  $single → 读源码失败：$why", "执行")
+                        results.add("$single → 读源码失败：$why")
+                    } else {
+                        results.add(
+                            "$single → 已取到网页源码（${html.length} 字符" +
+                                (if (action.selector.isBlank()) "，整页" else "，selector=${action.selector}") +
+                                "）：\n" + html
+                        )
+                    }
+                    break
+                } else if (action.kind == TouchKind.BROWSER_EVAL) {
+                    // 在网页里跑一段 JS 并把结果拿回来
+                    OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+                    logger?.line("  $single", "执行")
+                    val out = com.aiphone.assistant.browser.BrowserDriver.eval(action.js)
+                    if (out == null) {
+                        val why = com.aiphone.assistant.browser.BrowserDriver.lastError() ?: "未知原因"
+                        logger?.error("  $single → 执行JS失败：$why", "执行")
+                        results.add("$single → 执行JS失败：$why")
+                    } else {
+                        val trimmed = if (out.length > BROWSER_EVAL_MAX_CHARS) {
+                            out.take(BROWSER_EVAL_MAX_CHARS) + "…（已截断，共 ${out.length} 字符）"
+                        } else {
+                            out
+                        }
+                        results.add("$single → JS 返回：$trimmed")
+                    }
+                    break
                 } else if (action.kind == TouchKind.DISMISS_DIALOG) {
                     // 云端显式下发：端侧在当前页面找安全关闭按钮，找到就点、
                     // 找不到（或涉及授权/支付）就不操作；然后立刻把控制权交回
@@ -1371,7 +1498,7 @@ class Agent(
                     // 空列表 —— 空列表的指纹是固定值，会把"没看到东西"算成
                     // "界面没变化"，于是每次点击都被误判成没点中（0.8.5 日志里
                     // 高德、中信证券都有这种无意义的"重试后仍无变化"）。
-                    val beforeNodes = if (isVerifiable(action.kind)) {
+                    val beforeNodes = if (isVerifiable(action.kind) && !controller.isBrowser) {
                         withContext(Dispatchers.IO) { controller.parseNodesOrNull() }
                     } else {
                         null
@@ -1641,30 +1768,36 @@ class Agent(
     }
 
     /**
-     * 每步读界面**之前**，端侧主动清一遍无副作用的挡路弹窗。
+     * 每步读界面**之前**，端侧看一眼有没有挡路的无副作用弹窗。
      *
-     * 这是"多用本地分析"最划算的一处：命中时直接省掉一整次模型往返，
-     * 而且模型看到的是**已经清理干净的页面**，不会为一个广告弹窗浪费一步。
+     * **只报告，不点** —— 点不点由云端决定（真正动手的是 [dismissByLocalRules]，
+     * 它只在模型下发 `dismiss_dialog` 时才被调用）。
      *
-     * 上限 [LOCAL_DISMISS_LIMIT] 是一次任务内的总次数：正常任务遇不到几个弹窗，
-     * 真遇到"关掉又弹出来"的循环时，靠它止损，不至于把整趟任务耗在这上面
-     * （那种情况下模型多半该换个做法，而不是继续关）。
+     * 为什么不再自己点（0.10.1 改的）：用户 2026-10-21 定的权责是
+     * **云端模型拥有最终决定权**。词表再保守也是猜的 —— 把「取消订单」
+     * 当成「取消」这种事，端侧一旦自己动了手，云端连发生过什么都不知道。
+     * 改成建议之后成本几乎不变：这段建议拼在本步的 user 消息里，
+     * 不额外多一轮往返，只是多几十个 token。
      *
-     * @return 给模型看的一行说明；null = 没动任何东西
+     * 上限 [LOCAL_DISMISS_LIMIT] 仍是一次任务内的总次数：真碰上
+     * 「关掉又弹出来」的页面，提醒太多次也是噪声。
+     *
+     * @return 给模型看的建议；null = 没发现挡路弹窗
      */
-    private suspend fun dismissBlockingDialogLocally(): String? {
+    private suspend fun localDismissAdvice(): String? {
         if (!settings.localDialogDismiss) return null
         if (localDismissCount >= LOCAL_DISMISS_LIMIT) return null
         if (isStopped()) return null
 
-        val o = dismissByLocalRules("端侧")
-        if (!o.acted) return null
+        val nodes = withContext(Dispatchers.IO) { controller.parseNodes() }
+        if (nodes.isEmpty()) return null
+        val r = localRuleEngine.findSafeDismiss(nodes)
+        val target = r.target ?: return null
         localDismissCount++
-        logger?.line(
-            "端侧自动关掉挡路弹窗（本次任务第 $localDismissCount 次），模型无需为此花一步",
-            "弹窗",
-        )
-        return o.note
+        val label = target.text.ifBlank { target.contentDesc }.trim().take(20)
+        return "端侧建议：这一屏像是挡路的弹窗，安全关闭按钮是「$label」（编号 [${target.index}]）。" +
+            "要不要关**由你决定**：要关就直接点这个编号，或下发 dismiss_dialog 让端侧去执行；" +
+            "如果它其实是重要提示（授权、支付、数据确认），就别动它。"
     }
 
     /**
@@ -2318,12 +2451,41 @@ class Agent(
         const val OPEN_ARRIVED_SETTLE_MS = 300L
 
         /**
-         * 卡死的硬上限。
+         * 判定"可能卡住了"的门槛（连续几步界面没变化 / 连续几次同一批动作）。
          *
-         * 2 次是"提醒模型换做法"，到 5 次就说明换做法也没用 —— 再跑下去
-         * 纯粹是烧 token。步数上限现在是"不限"，所以这条兜底必须存在。
+         * 到这条线**只是提示云端**，不是止损 —— 最终决定权在云端（见
+         * [STUCK_ADVICE_LIMIT] 与 RunGuards.stuckAdvice）。
          */
         const val STUCK_LIMIT = 5
+
+        /**
+         * 端侧"可能卡住了"最多提醒几次，之后才强制停。
+         *
+         * 用户 2026-10-21 定的权责：云端拥有最终决定权，端侧只提醒。
+         * 但步数上限是"不限"，如果永远只提醒不停，一个原地打转的任务
+         * 会一直烧 token —— 所以留这条硬兜底：提醒 3 次仍毫无进展就停。
+         */
+        const val STUCK_ADVICE_LIMIT = 3
+
+        /** 打开内置浏览器后等页面加载的时间（下一步要读 DOM，不能读空白页） */
+        const val BROWSER_LOAD_SETTLE_MS = 1200L
+
+        /**
+         * `browser_html` 默认最多给模型看多少字符。
+         *
+         * 8000 字符大约是 2K token 量级：够看清结构，又不至于把上下文顶爆。
+         * 模型可以自己给 `max_chars` 调（最多 [BROWSER_HTML_MAX_CHARS]）。
+         */
+        const val BROWSER_HTML_DEFAULT_CHARS = 8_000
+
+        /** `browser_html` 的硬上限：再长就该用 selector 缩小范围了 */
+        const val BROWSER_HTML_MAX_CHARS = 24_000
+
+        /** `browser_eval` 结果回灌给模型的字符上限 */
+        const val BROWSER_EVAL_MAX_CHARS = 4_000
+
+        /** 一次任务最多开几次内置浏览器（模型来回开没有意义，纯烧步数） */
+        const val MAX_BROWSER_OPENS = 3
 
         /**
          * 连续几步"连根节点都读不到"就止损。

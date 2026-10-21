@@ -222,6 +222,60 @@ enum class TouchKind(
         needsPoint = false,
         needsDuration = false,
     ),
+
+    /**
+     * 打开 App 自带的内置浏览器（用户 2026-10-21 要求）。
+     *
+     * ## 为什么要有个"内置"的浏览器
+     *
+     * 操作别人家的浏览器只能看到控件树或截图 —— 一个网页几千个 div，
+     * 控件树里全是噪声，模型只能靠猜。改成我们自己host 一个 WebView 之后，
+     * 模型可以直接读 **DOM/HTML**：知道哪个是搜索框、哪个是"下一页"、
+     * 页面上到底有没有那句"发送成功"。
+     *
+     * 三条信息来源由模型自己挑（这也是用户的原话）：
+     *   - 控件树 → 在浏览器模式下就是**带编号的 DOM 摘要**（默认，每步都给）
+     *   - 截屏   → `need_image` / `capture`，看渲染结果（CSS 布局、图片）
+     *   - 源码   → [BROWSER_HTML] / [BROWSER_EVAL]，直接看背后的 HTML/JS
+     *
+     * 执行后通道切到浏览器，后续动作都打在网页上，直到任务结束。
+     */
+    BROWSER_OPEN(
+        id = "browser_open",
+        label = "打开内置浏览器",
+        description = "打开 App 自带的浏览器并加载网址；之后元素列表就是网页的 DOM 摘要",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /**
+     * 读网页背后的代码（HTML）。
+     *
+     * ⚠️ **不要每步都读**：整页 HTML 动辄几十 KB，每步都发会把缓存前缀
+     * 打断、把 token 烧光。只在"看图/看元素列表都判断不出来"时读一次，
+     * 而且优先给 selector 缩小范围。
+     */
+    BROWSER_HTML(
+        id = "browser_html",
+        label = "读网页源码",
+        description = "取当前网页的 HTML（可给 selector 只看某一块），用来确认页面的真实结构",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /**
+     * 在网页里执行一段 JS 并拿回结果。
+     *
+     * 用途：精确地问页面一个问题（"购物车里几件商品"）、触发 JS 才有的行为
+     * （滚动到底部加载、点 shadow DOM 里的按钮）、或者读 JS 变量。
+     */
+    BROWSER_EVAL(
+        id = "browser_eval",
+        label = "执行JS",
+        description = "在当前网页里执行一段 JavaScript，返回结果字符串",
+        needsPoint = false,
+        needsDuration = false,
+    ),
     ;
 
     companion object {
@@ -290,6 +344,14 @@ data class TouchAction(
     val text: String = "",
     /** 打开应用的包名 */
     val packageName: String = "",
+    /** 浏览器：要打开的网址（BROWSER_OPEN）。空 = 空白页 */
+    val url: String = "",
+    /** 浏览器：要执行的 JS（BROWSER_EVAL） */
+    val js: String = "",
+    /** 浏览器：CSS 选择器（BROWSER_HTML 只看某一块；空 = 整页） */
+    val selector: String = "",
+    /** 浏览器：返回内容的最大字符数（0 = 用默认值）。HTML 很长，必须能截断 */
+    val maxChars: Int = 0,
 )
 
 /**

@@ -63,7 +63,10 @@ import json
 import os
 import sys
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+# 必须用**多线程**版本：内置浏览器的 WebView 会自己发 GET 请求并保持
+# keep-alive 连接，单线程 HTTPServer 会被那条连接占住，模型的 POST 进来时
+# 服务端根本没在处理 —— 现场表现是"模型一直没返回"，而假模型日志里只有 1 次请求。
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # 默认 stdout 是块缓冲的，日志会卡在缓冲区里看不见 ——
 # 排查问题时最想看的恰好是最后那几行，所以改成行缓冲。
@@ -90,7 +93,32 @@ DUMP_PATH = os.environ.get("MOCK_DUMP", "")
 #   MOCK_SCRIPT=bounded  F1 有界性验证：永远要图 + 给一个能解析的动作
 SCRIPT = os.environ.get("MOCK_SCRIPT", "full")
 
-if SCRIPT == "bounded":
+if SCRIPT == "browser":
+    # 内置浏览器（T43）端到端验证剧本。
+    #
+    # 用法：MOCK_SCRIPT=browser MOCK_DELAY=1 python3 tools/mock_llm.py
+    # 页面由本服务自己的 GET /testpage 提供（10.0.2.2 从模拟器可达），
+    # 内容固定、可断言：一个标题、一个链接、一个输入框、一个按钮、一个输出区。
+    #
+    # 预期走完：打开浏览器 → 读一段源码 → 跑一段 JS → 按编号点按钮 → 收尾。
+    # 每步的 user 消息里能看到**DOM 摘要**（编号列表），这就是"控件树"
+    # 在浏览器模式下的形态 —— 用 MOCK_DUMP 落盘后 grep 就能看。
+    PAGE = "http://10.0.2.2:8765/testpage"
+    SCRIPTED = [
+        # 1 打开内置浏览器（模型自己决定用浏览器这条路）
+        '{"thought":"这是网页任务，用内置浏览器打开测试页","actions":[{"action":"browser_open","url":"' + PAGE + '"}]}',
+        # 2 读源码：只读 #kw 那一块，验证 selector 生效、且内容能回来
+        '{"thought":"先看看搜索框背后的代码","actions":[{"action":"browser_html","selector":"#kw","max_chars":2000}]}',
+        # 3 跑 JS：确认页面就绪并读出按钮文字
+        '{"thought":"确认页面结构和按钮","actions":[{"action":"browser_eval","js":"JSON.stringify({title:document.title,btns:[...document.querySelectorAll(\'button\')].map(b=>b.textContent)})"}]}',
+        # 4 按编号点按钮（编号来自 DOM 摘要，点完输出区应该变成"已点击按钮"）
+        '{"thought":"点那个按钮","actions":[{"action":"tap","index":3}]}',
+        # 5 读回结果，确认点击真的生效了
+        '{"thought":"看看点击有没有生效","actions":[{"action":"browser_eval","js":"document.getElementById(\'out\').textContent"}]}',
+        # 6 收尾
+        '{"thought":"测试页按钮点过了，输出区显示已点击","finished":true,"summary":"内置浏览器测试完成：打开页面、读源码、执行 JS、按编号点击都正常"}',
+    ]
+elif SCRIPT == "bounded":
     # F1 有界性验证剧本：永远要图 + 给一个能解析的动作。
     # 预期：最多 5 次 ask 循环就会 finish(false)，不会无限烧钱。
     SCRIPTED = [
@@ -141,6 +169,35 @@ state = {"n": 0, "last_messages": None, "last_texts": None}
 
 
 class Handler(BaseHTTPRequestHandler):
+    PAGE_HTML = """<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>纸盒测试页</title></head>
+<body>
+<h1 id="h">纸盒浏览器测试</h1>
+<p id="p">这一页专门给内置浏览器通道的端到端测试用。</p>
+<a id="link1" href="/testpage?p=1">第一页链接</a>
+<input id="kw" placeholder="搜索关键词">
+<button id="btn" onclick="document.getElementById('out').textContent='已点击按钮'">点我</button>
+<div id="out">还没点</div>
+<script>window.__probe = 'ready';</script>
+</body></html>"""
+
+    def do_GET(self):
+        # 给内置浏览器的端到端测试提供一个固定页面（模拟器访问 10.0.2.2:8765）
+        if self.path.startswith("/testpage"):
+            body = self.PAGE_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            print("  GET /testpage → 200")
+            return
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length)
@@ -277,4 +334,4 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print(f"假模型服务已启动：http://0.0.0.0:{PORT}/v1/chat/completions")
     print("模拟器里接口地址填 http://10.0.2.2:%d" % PORT)
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

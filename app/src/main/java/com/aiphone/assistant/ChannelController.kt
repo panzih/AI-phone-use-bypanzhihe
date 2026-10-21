@@ -40,10 +40,13 @@ class ChannelController(private val context: Context) {
      * [probe]/[screenSize]/[readUiTree]/[captureFrame]/[execute]，
      * 由这里决定命令发到哪儿。
      */
-    enum class Mode { ACCESSIBILITY, ADB_MAIN, VIRTUAL_DISPLAY }
+    enum class Mode { ACCESSIBILITY, ADB_MAIN, VIRTUAL_DISPLAY, BROWSER }
 
     private var accessibility: AccessibilityChannel? = null
     private var display: DisplayChannel? = null
+
+    /** 内置浏览器通道（0.10.1 T43）。由 Agent 在模型下发 browser_open 时建起来 */
+    private var browser: com.aiphone.assistant.channel.BrowserChannel? = null
 
     /** 主屏 shell 通道（ADB / Shizuku 操作方式） */
     private var adbMain: DisplayChannel? = null
@@ -68,6 +71,16 @@ class ChannelController(private val context: Context) {
     private var mode: Mode = Mode.ACCESSIBILITY
 
     val isVirtualDisplay: Boolean get() = mode == Mode.VIRTUAL_DISPLAY && display != null
+
+    /**
+     * 是不是在「内置浏览器」模式。
+     *
+     * 这个模式下所有设备操作都打在网页上：控件树 = DOM 摘要、点击 = 点 DOM 元素。
+     * 上层（Agent）用它决定两件事：
+     *   1. 不要自动迁副屏（把浏览器 Activity 搬到副屏没有任何意义）；
+     *   2. "前台是纸盒自己"的告警不成立（浏览器本来就是我们的 Activity）。
+     */
+    val isBrowser: Boolean get() = mode == Mode.BROWSER && browser != null
 
     /**
      * 当前通道**能不能读到控件树**。
@@ -100,6 +113,27 @@ class ChannelController(private val context: Context) {
         android.util.Log.i("ChannelController", "切到副屏模式：id=$displayId 分辨率=$size")
     }
 
+    /**
+     * 切到内置浏览器通道。
+     *
+     * 由 Agent 在模型下发 `browser_open` 之后调用 —— 也就是说
+     * **要不要用浏览器是云端模型决定的**（端侧不替它选信息源）。
+     */
+    fun enterBrowser() {
+        browser?.release()
+        browser = com.aiphone.assistant.channel.BrowserChannel(context)
+        mode = Mode.BROWSER
+        android.util.Log.i("ChannelController", "切到内置浏览器通道")
+    }
+
+    /** 退出浏览器模式（浏览器 Activity 关掉时调） */
+    fun exitBrowser() {
+        browser?.release()
+        browser = null
+        if (mode == Mode.BROWSER) mode = Mode.ACCESSIBILITY
+        android.util.Log.i("ChannelController", "退出内置浏览器通道")
+    }
+
     /** 切回主屏 */
     fun exitVirtualDisplay() {
         display?.release()
@@ -115,6 +149,8 @@ class ChannelController(private val context: Context) {
      * 看见主屏在被操作，也不要因为一处状态不同步就整个崩掉。
      */
     fun ensureChannel(): DeviceChannel = when {
+        mode == Mode.BROWSER ->
+            browser ?: com.aiphone.assistant.channel.BrowserChannel(context).also { browser = it }
         isVirtualDisplay -> display!!
         preferredAdb -> adbMain ?: buildAdbMain()
         else -> accessibility ?: AccessibilityChannel(context).also { accessibility = it }
@@ -224,7 +260,9 @@ class ChannelController(private val context: Context) {
      * 根本不是一回事，所以必须按模式分开判断。
      */
     val isReady: Boolean
-        get() = if (isVirtualDisplay) {
+        get() = if (isBrowser) {
+            com.aiphone.assistant.browser.BrowserDriver.isAlive()
+        } else if (isVirtualDisplay) {
             com.aiphone.assistant.shell.ShizukuBridge.hasPermission()
         } else {
             AutoService.isConnected
@@ -250,10 +288,19 @@ class ChannelController(private val context: Context) {
     suspend fun currentPackage(): String? = withContext(Dispatchers.IO) {
         // 副屏上的前台应用读不到（那要靠无障碍树），返回 null 让上层
         // 跳过"自己在前台就让位"那个判断 —— 副屏上本来也不会有我们自己
-        if (isVirtualDisplay) null else AutoService.get()?.currentPackage()
+        // 浏览器模式下前台就是纸盒自己的 BrowserActivity —— 那个包名对上层没有意义，
+        // 上层拿它只会得出"纸盒自己在前台，去用 open_app"的错误结论
+        if (isBrowser) null else if (isVirtualDisplay) null else AutoService.get()?.currentPackage()
     }
 
     fun release() {
+        // 浏览器是我们自己拉起来的 Activity，任务结束要关掉 —— 否则用户
+        // 会看到一个停在半路的网页窗口，而且下次任务还会误判成"浏览器还在"
+        if (mode == Mode.BROWSER) {
+            runCatching { com.aiphone.assistant.browser.BrowserDriver.close() }
+        }
+        browser?.release()
+        browser = null
         accessibility?.release()
         accessibility = null
         display?.release()

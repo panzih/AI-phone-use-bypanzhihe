@@ -103,16 +103,35 @@ internal object RunGuards {
         refusals < maxRefusals
 
     /**
-     * 要不要因为"卡住"止损；返回原因，null = 不拦。
+     * 端侧判定"可能卡住了"要**提醒**云端什么；null = 还没到该说的程度。
+     *
+     * ## 为什么从"止损"改成"提醒"（0.10.1）
+     *
+     * 用户 2026-10-21 定的权责：**云端模型拥有最终决定权**，端侧不如云端。
+     * 以前这里是 `stuckReason`：连续 5 步没变化就直接 finish(false) ——
+     * 那是端侧替云端判了死刑。实际上"界面没变化"可能只是自动等待没等到，
+     * 模型换个做法（换元素、先要图、open_app 重开）就活了。
+     *
+     * 现在端侧只陈述事实，怎么处置由云端决定；硬停由
+     * `Agent.STUCK_ADVICE_LIMIT` 兜底（提醒几次仍无进展才停）。
      *
      * @param sameTree 连续"界面和上一步一样"的步数（只应在 [treeObservable] 为真时累加）
      * @param repeatAction 连续给出同一批动作的次数
      */
-    fun stuckReason(sameTree: Int, repeatAction: Int, limit: Int): String? = when {
-        sameTree >= limit -> "界面连续 ${sameTree + 1} 步没有任何变化"
-        repeatAction >= limit -> "模型连续 ${repeatAction + 1} 次给出同一批动作"
+    fun stuckAdvice(sameTree: Int, repeatAction: Int, limit: Int): String? = when {
+        sameTree >= limit -> "界面已经连续 ${sameTree + 1} 步没有任何变化"
+        repeatAction >= limit -> "你连续 ${repeatAction + 1} 次给出了同一批动作"
         else -> null
     }
+
+    /**
+     * 老接口（等同 [stuckAdvice]，只是措辞是"判决"口吻）。
+     *
+     * 保留它是因为 **单测已按这个名字钉过**；调用方全部换成 [stuckAdvice]。
+     * 真要删得改测试，没必要 —— 两个名字指向同一件事更省事。
+     */
+    fun stuckReason(sameTree: Int, repeatAction: Int, limit: Int): String? =
+        stuckAdvice(sameTree, repeatAction, limit)
 
     /**
      * 连续读不到控件树要不要止损；返回给用户的原因，null = 继续。
