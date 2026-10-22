@@ -28,6 +28,8 @@ class SettingsStore(
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         useFreeModel = sp.getBoolean(KEY_FREE_MODEL, DEFAULT.useFreeModel),
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
+        customEffort = sp.getString(KEY_CUSTOM_EFFORT, DEFAULT.customEffort) ?: DEFAULT.customEffort,
+        overlayBlur = sp.getBoolean(KEY_OVERLAY_BLUR, DEFAULT.overlayBlur),
         mode = OperationMode.fromId(sp.getString(KEY_MODE, null))
             // 老配置可能存过不可用的 ADB：归一化回无障碍，别把用户卡在灰界面
             .let { if (it.available) it else OperationMode.ACCESSIBILITY },
@@ -46,6 +48,8 @@ class SettingsStore(
             .putString(KEY_MODEL, s.modelName)
             .putBoolean(KEY_FREE_MODEL, s.useFreeModel)
             .putString(KEY_THINKING, s.thinking.id)
+            .putString(KEY_CUSTOM_EFFORT, s.customEffort)
+            .putBoolean(KEY_OVERLAY_BLUR, s.overlayBlur)
             .putString(KEY_MODE, s.mode.id)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
             .putString(KEY_CONTEXT_POLICY, s.contextPolicy.id)
@@ -82,6 +86,12 @@ class SettingsStore(
         const val KEY_MODEL = "model_name"
         const val KEY_FREE_MODEL = "use_free_model"
         const val KEY_THINKING = "thinking_mode"
+
+        /** CUSTOM 档填的 reasoning_effort 原文（留空 = 不发） */
+        const val KEY_CUSTOM_EFFORT = "custom_thinking_effort"
+
+        /** 悬浮条背景模糊（默认关，见 AppSettings.overlayBlur 的说明） */
+        const val KEY_OVERLAY_BLUR = "overlay_blur"
         const val KEY_MODE = "operation_mode"
         // 曾经的全局「在副屏上操作」开关。现在是**逐条定时任务**的选项
         // （见 Schedule.useVirtualDisplay），这里不再读写 —— 老配置文件里

@@ -48,6 +48,14 @@ data class LlmConfig(
      * DEFAULT 档什么都不发，让服务端自己决定。
      */
     val thinking: ThinkingMode = ThinkingMode.DEFAULT,
+
+    /**
+     * CUSTOM 档要发的 reasoning_effort 原文（留空 = 什么都不发）。
+     *
+     * 单独一个字段而不是塞进 [thinking]：用户可能来回切档位，
+     * 切回 CUSTOM 时上一次填的值还在，不用重打一遍。
+     */
+    val customEffort: String = "",
     val timeoutMs: Int = 120_000,
     /**
      * 一次调用最多试几次（首试 + 重发）。
@@ -878,13 +886,18 @@ class LlmClient(private val cfg: LlmConfig) {
             // 接受。"disabled" 对免费上游也不承载语义 —— 它们默认就不推理。
             // 所以 OFF 档在免费通道干脆不带字段；自定义通道（DeepSeek /
             // Kimi 等）保持原样，那边的 disabled 是有意义的。
+            // 自定义档留空 = "用服务商默认"，那时连通开关都不发（发了 enabled
+            // 却不说强度，某些上游会把思考强行打开，反而不是用户要的"别管"）
+            val customBlank = cfg.thinking == ThinkingMode.CUSTOM && cfg.customEffort.isBlank()
             cfg.thinking.toggle?.let { toggle ->
                 val offOnFreeLane = cfg.useFreeModel && cfg.thinking == ThinkingMode.OFF
-                if (!offOnFreeLane) {
+                if (!offOnFreeLane && !customBlank) {
                     put("thinking", JSONObject().put("type", toggle))
                 }
             }
-            cfg.thinking.effort?.let { put("reasoning_effort", it) }
+            // effort 走 ThinkingMode.effortOf：CUSTOM 档的值来自用户输入，
+            // 留空就**一个字段都不发**（等价「默认」，绝不发空串 —— 那多半 400）
+            ThinkingMode.effortOf(cfg.thinking, cfg.customEffort)?.let { put("reasoning_effort", it) }
             // 免费通道（opencode.ai 免密池）的客户端契约。
             // 照抄 opencode2dsh v0.3.12（2026-10-16 实测 3/4 模型 HTTP 200）：
             //   1. 端点 /zen/v1/chat/completions（Bearer public 可用）
@@ -1106,7 +1119,12 @@ class LlmClient(private val cfg: LlmConfig) {
 
     /** 给连通性自检用的短描述 */
     fun describe(): String =
-        "模型=${cfg.model} 地址=${endpoint()} 图片=${cfg.detail} 思考=${cfg.thinking.label} " +
+        "模型=${cfg.model} 地址=${endpoint()} 图片=${cfg.detail} 思考=" +
+            (if (cfg.thinking == ThinkingMode.CUSTOM) {
+                "自定义(" + cfg.customEffort.trim().ifBlank { "不发" } + ")"
+            } else {
+                cfg.thinking.label
+            }) + " " +
             "重发=${cfg.maxAttempts}次"
 
     companion object {

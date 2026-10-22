@@ -291,6 +291,36 @@ class OverlayService : Service() {
             this.cardParams = it
         }
 
+        // ---- 背景模糊（0.10.2）----
+        //
+        // 想做成「磨砂玻璃」那种动态模糊。Android 自带的路子只有一条：
+        // **跨窗口模糊**（Android 12 / API 31 起）——
+        //   窗口声明 `setBlurBehindRadius(px)` + `FLAG_BLUR_BEHIND`，
+        //   系统把窗口**背后那块屏幕内容**实时模糊后衬在窗口下面。
+        //   官方 API：WindowManager.LayoutParams#setBlurBehindRadius（API 31+）。
+        //
+        // 三个必须知道的限制（都在这段代码里挡住了）：
+        //   1. 系统级开关：`WindowManager.isCrossWindowBlurEnabled` 为 false 时
+        //      设了也**完全没效果**（模拟器、不少国产 ROM 默认关）。
+        //   2. 主线程实时合成，低端机上持续模糊会掉帧 —— 所以半径给 20dp 左右，
+        //      不是越大越好。
+        //   3. 我们**拿不到**被模糊的那层图（它是系统合成的），所以没法自己做
+        //      "截图 + 高斯模糊"来兜底：那需要每帧截屏，代价远大于收益。
+        val blurPx = backgroundBlurRadiusPx()
+        if (blurPx > 0) {
+            barParams.flags = barParams.flags or
+                WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+            // 公开 API 名字是 setBlurBehindRadius（API 31+）；
+            // 文档里常被写成 setBackgroundBlurRadius，那是内部/系统签名那个
+            barParams.setBlurBehindRadius(blurPx)
+            // 有模糊撑底，底色可以更透，磨砂感才看得出来
+            (bar.background as? GradientDrawable)
+                ?.setColor(Color.parseColor(BAR_BG_BLURRED))
+        } else {
+            (bar.background as? GradientDrawable)
+                ?.setColor(Color.parseColor(BAR_BG_SOLID))
+        }
+
         // 逐个加，哪一个失败都不影响另一个 —— 但**必须把失败打出来**。
         // 静默失败会让"悬浮窗没出现"变成一个完全无从下手的现象。
         runCatching { wm.addView(bar, barParams); statusView = bar }
@@ -481,7 +511,7 @@ class OverlayService : Service() {
     private fun buildSupplementButton(): View {
         val label = buttonLabel("补充")
         supplementLabel = label
-        val btn = actionButton(label, PAUSE_COLOR) {
+        val btn = actionButton(label, BTN_PRIMARY) {
             OverlayBus.requestSupplement()
             label.text = "已补充"
         }
@@ -501,9 +531,9 @@ class OverlayService : Service() {
             }
             btn.visibility = View.VISIBLE
             label.text = if (paused) "继续" else "补充"
-            (btn.background as? GradientDrawable)?.setColor(
-                Color.parseColor(if (paused) RESUME_COLOR else PAUSE_COLOR)
-            )
+            // 暂停中/正常都是同一个主操作位，靠文案区分（继续 / 补充），不再换颜色
+            (btn.background as? GradientDrawable)?.setColor(Color.parseColor(BTN_PRIMARY))
+            btn.alpha = 1f
         }
     }
 
@@ -516,7 +546,7 @@ class OverlayService : Service() {
     private fun buildTakeoverButton(): View {
         val label = buttonLabel("接管")
         takeoverLabel = label
-        val btn = actionButton(label, STOP_COLOR) {
+        val btn = actionButton(label, BTN_NORMAL) {
             if (OverlayBus.recordingMode) {
                 OverlayBus.requestRecordingStop()
                 label.text = "结束中 …"
@@ -539,7 +569,7 @@ class OverlayService : Service() {
     private fun buildBackgroundButton(): View {
         val label = buttonLabel("后台")
         backgroundLabel = label
-        val btn = actionButton(label, MUTED_COLOR) {
+        val btn = actionButton(label, BTN_DISABLED) {
             if (moveBackMode) {
                 OverlayBus.requestReturnFromVd()
                 label.text = "回前台 …"
@@ -566,13 +596,10 @@ class OverlayService : Service() {
             moveBackMode = backMode
             btn.isEnabled = enabled
             label.text = text
-            val color = when {
-                !enabled -> MUTED_COLOR
-                backMode -> BACK_MODE_COLOR
-                else -> FOREGROUND_COLOR
-            }
+            // 主屏/副屏不再用蓝/绿区分（都是同一块底），只靠文案说清是切走还是回来
+            val color = if (enabled) BTN_NORMAL else BTN_DISABLED
             (btn.background as? GradientDrawable)?.setColor(Color.parseColor(color))
-            btn.alpha = if (enabled) 1f else 0.75f
+            btn.alpha = if (enabled) 1f else 0.5f
         }
     }
 
@@ -743,6 +770,33 @@ class OverlayService : Service() {
     ).toInt()
 
     /**
+     * 这条窗口能用多大的背景模糊半径；**0 = 这台机器不支持**。
+     *
+     * 判断顺序很重要：版本够 → 系统真开了跨窗口模糊 → 才给半径。
+     * 只判版本的话，在模拟器/关掉模糊的 ROM 上会白设一个永不生效的窗口标志。
+     */
+    private fun backgroundBlurRadiusPx(): Int {
+        if (!OverlayBus.overlayBlurEnabled) {
+            android.util.Log.i(TAG, "跨窗口模糊：设置里没开，用半透明底")
+            return 0
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            android.util.Log.i(TAG, "跨窗口模糊：系统版本 < Android 12，不支持")
+            return 0
+        }
+        val enabled = runCatching { wm.isCrossWindowBlurEnabled }.getOrDefault(false)
+        android.util.Log.i(
+            TAG,
+            if (enabled) {
+                "跨窗口模糊：系统支持，半径 ${BLUR_RADIUS_DP}dp"
+            } else {
+                "跨窗口模糊：系统未启用（模拟器或 ROM 关掉了），退回纯半透明底"
+            },
+        )
+        return if (enabled) dp(BLUR_RADIUS_DP) else 0
+    }
+
+    /**
      * 底部导航条（手势条 / 虚拟按键）的高度，dp。
      *
      * 悬浮条要抬到它**上面**，否则会被系统导航条盖住 —— 而导航条那一块
@@ -760,17 +814,36 @@ class OverlayService : Service() {
     companion object {
         private const val TAG = "OverlayService"
 
-        /** 「补充」按钮（琥珀）/ 暂停中的「继续」（绿） */
-        private const val PAUSE_COLOR = "#F9A825"
-        private const val RESUME_COLOR = "#2E7D32"
+        /*
+         * 三个键**一律不带色相**（用户 2026-10-22："把颜色去掉吧，那个颜色太丑了"）。
+         *
+         * 原来琥珀/红/蓝三块彩色按钮压在网页上非常吵，而且和"豆包那种安静的
+         * 深色条"完全不是一个调子。现在只用三层白透明度做层级：
+         *
+         *   主操作（补充 / 继续）  20% 白 —— 最亮，因为最常按
+         *   其余两键              12% 白
+         *   不可用（没 Shizuku）   6% 白 + 整体 alpha 压到 0.5
+         *
+         * 深色底 + 白字 + 圆角，没有第二种色相，跟背景是照片还是网页都不打架。
+         */
+        /** 悬浮条底色：不支持模糊时用较实的（90% 不透明），支持时更透（70%） */
+        private const val BAR_BG_SOLID = "#E61B1B1B"
+        // 模糊版底色仍要够深：模糊会把**背后的内容**透上来，网页是白底时
+        // 70% 的底会把白字衬成"浅灰底白字"，几乎看不清（实测截图）。
+        // 85% × 窗口 alpha 0.85 = 0.72 的有效遮挡，仍在「不信任触摸」0.80 以下。
+        private const val BAR_BG_BLURRED = "#D91B1B1B"
 
-        /** 「接管」（红）/ 禁用态（灰） */
-        private const val STOP_COLOR = "#D32F2F"
-        private const val MUTED_COLOR = "#4A4A4A"
+        /**
+         * 背景模糊半径（dp）。
+         *
+         * 20dp 是"看得出是磨砂、又不至于把背后内容糊成一坨"的折中；
+         * 再大一点在小屏上会把悬浮条自己的圆角边缘也糊掉。
+         */
+        private const val BLUR_RADIUS_DP = 20
 
-        /** 「后台」：主屏模式（蓝）/ 副屏模式（绿） */
-        private const val FOREGROUND_COLOR = "#1976D2"
-        private const val BACK_MODE_COLOR = "#43A047"
+        private const val BTN_PRIMARY = "#33FFFFFF"
+        private const val BTN_NORMAL = "#1FFFFFFF"
+        private const val BTN_DISABLED = "#0FFFFFFF"
         private const val CHANNEL_ID = "aiphone_overlay"
         private const val NOTIFICATION_ID = 1001
 

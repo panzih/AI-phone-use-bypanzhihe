@@ -122,6 +122,26 @@ enum class ThinkingMode(
         effort = "max",
         api = "thinking.type = enabled + reasoning_effort = max",
     ),
+    /**
+     * 自定义强度（用户 2026-10-22 要求）。
+     *
+     * 为什么需要它：服务商越来越多，各自的 effort 词表也在变
+     * （low/medium/high/max、minimal、digital…），写死一张表必然过时。
+     * 这一档把「填什么」交给用户自己 —— 填了原样发 `reasoning_effort`，
+     * **留空就什么都不发**（等同「默认」，由服务商决定）。
+     *
+     * 免费通道唯一例外：这个渠道本来就不一定认 effort，填错只会上游报错 ——
+     * 所以设置页会提示"免费通道可能被忽略"。
+     */
+    CUSTOM(
+        id = "custom",
+        label = "自定义",
+        note = "自己填 reasoning_effort（比如 high / medium / minimal）；留空 = 什么都不发，用服务商默认",
+        toggle = "enabled",
+        effort = null,
+        api = "thinking.type = enabled + reasoning_effort = 你填的值（留空则都不发）",
+    ),
+
     DEFAULT(
         id = "default",
         label = "默认",
@@ -143,13 +163,21 @@ enum class ThinkingMode(
         else -> api
     }
 
+    /** CUSTOM 档用用户填的值渲染「实际会发什么」（设置页原样显示） */
+    fun apiFor(freeLane: Boolean, customEffort: String): String = when {
+        this != CUSTOM -> apiFor(freeLane)
+        customEffort.isBlank() -> "（留空：不发任何思考参数，用服务商默认）"
+        else -> "thinking.type = enabled + reasoning_effort = " + customEffort.trim()
+    }
+
     /**
      * 是不是真的在做思维链。
      *
      * 只用来决定要不要传 temperature：在做思维链就传了也没用。
      * OFF 明确关了；DEFAULT 不发参数，服务端可能开也可能关，保守起见不传。
      */
-    val thinkingOn: Boolean get() = this == LOW || this == MEDIUM || this == HIGH || this == MAX
+    val thinkingOn: Boolean
+        get() = this == LOW || this == MEDIUM || this == HIGH || this == MAX || this == CUSTOM
 
     companion object {
         fun fromId(id: String?): ThinkingMode =
@@ -177,9 +205,20 @@ enum class ThinkingMode(
          * 调用方（滑块）不用动。
          */
         fun levelsFor(baseUrl: String, freeLane: Boolean): List<ThinkingMode> = when {
-            freeLane -> listOf(OFF, LOW, HIGH, DEFAULT)
-            baseUrl.contains("deepseek", ignoreCase = true) -> listOf(OFF, LOW, HIGH, MAX, DEFAULT)
-            else -> listOf(OFF, LOW, MEDIUM, HIGH, DEFAULT)
+            freeLane -> listOf(OFF, LOW, HIGH, DEFAULT, CUSTOM)
+            baseUrl.contains("deepseek", ignoreCase = true) -> listOf(OFF, LOW, HIGH, MAX, DEFAULT, CUSTOM)
+            else -> listOf(OFF, LOW, MEDIUM, HIGH, DEFAULT, CUSTOM)
+        }
+
+        /**
+         * 这一档实际要发给服务商的 effort；null = 不发。
+         *
+         * CUSTOM 档的值来自用户输入，所以不能写在枚举里 —— 统一走这个入口，
+         * 免得 LlmClient 和设置页各拼一套。
+         */
+        fun effortOf(mode: ThinkingMode, customEffort: String): String? = when (mode) {
+            ThinkingMode.CUSTOM -> customEffort.trim().ifBlank { null }
+            else -> mode.effort
         }
     }
 }
@@ -270,6 +309,29 @@ data class AppSettings(
 
     /** 思考模式。默认「默认」：让服务端自己挑 */
     val thinking: ThinkingMode = ThinkingMode.DEFAULT,
+
+    /**
+     * CUSTOM 档用的 reasoning_effort 原文（用户自己填）。
+     *
+     * 留空 = 什么都不发（等价于「默认」）。**原样发**，不做白名单校验：
+     * 服务商各有自己的词表（low/medium/high/max/minimal…），堵死任何一个
+     * 都会让"新服务商能用的档位"在这一版用不了。
+     */
+    val customEffort: String = "",
+
+    /**
+     * 悬浮条要不要做背景模糊（毛玻璃）。
+     *
+     * 默认**关**，原因写在这里免得以后有人"顺手打开"：
+     *   - 实现用的是 Android 12+ 的跨窗口模糊（`setBlurBehindRadius` +
+     *     `FLAG_BLUR_BEHIND`），**系统没开这个特性时完全没效果**；
+     *   - 模拟器（AVD）上实测：整块屏幕都被糊掉了，不只是条子背后那一条
+     *     （模拟器的模糊区域不裁剪）—— 真机应当只糊窗口背后，但没在真机确认前
+     *     不适合默认打开；
+     *   - 模糊是主线程实时合成，低端机会掉帧。
+     * 所以做成开关：想试的用户自己打开。
+     */
+    val overlayBlur: Boolean = false,
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,

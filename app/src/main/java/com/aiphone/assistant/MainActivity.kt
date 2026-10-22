@@ -639,6 +639,7 @@ private fun AppRoot(
                     model = settings.modelName,
                     useFreeModel = settings.useFreeModel,
                     thinking = settings.thinking,
+                    customEffort = settings.customEffort,
                 )
             )
             val macro = runCatching { MacroLearner(llm).learn(rec, nameHint) }.getOrNull()
@@ -824,6 +825,7 @@ private fun AppRoot(
                 model = settings.modelName,
                 useFreeModel = settings.useFreeModel,
                 thinking = settings.thinking,
+                    customEffort = settings.customEffort,
             )
         )
         // 接着上一段上下文时，把上一个任务的指纹链也接上 ——
@@ -1058,6 +1060,7 @@ private fun AppRoot(
                         model = settings.modelName,
                         useFreeModel = settings.useFreeModel,
                         thinking = settings.thinking,
+                    customEffort = settings.customEffort,
                     )
                 )
                 val r = withContext(Dispatchers.IO) { probe.probeAudio() }
@@ -1168,6 +1171,9 @@ private fun AppRoot(
 
             // 起悬浮窗。没权限时 OverlayService 会自己退出，
             // 任务照常跑，只是用户看不到进度和急停按钮。
+            // 悬浮条的背景模糊是**设置项**（默认关）：在起服务之前把它同步过去，
+            // 服务里建窗口时才读得到
+            OverlayBus.overlayBlurEnabled = settings.overlayBlur
             if (Settings.canDrawOverlays(context)) {
                 OverlayService.start(context)
             } else {

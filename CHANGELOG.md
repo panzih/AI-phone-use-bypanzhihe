@@ -1,5 +1,54 @@
 # 更新日志
 
+## 0.10.2
+
+> 四件事：思考强度能自己填、免费模型名单按最新目录刷新、悬浮条去掉颜色、
+> 背景模糊（Android 自带接口，做成了开关）。
+
+### 思考强度：可以自己填了
+
+原来只有 OFF / LOW / MED / HIGH / MAX / 默认 六个固定档 —— 服务商一换、
+词表一变（有的认 minimal、有的认 digital），就只能干瞪眼。现在滑块最右多了一档
+**「自定义」**：自己填 `reasoning_effort`，原样发出去；**留空就什么都不发**
+（等同「默认」，由服务商自己决定）。
+
+- 设置页会把"实际会发什么"原样写出来：`thinking.type = enabled + reasoning_effort = medium`。
+- 留空时**连 `thinking` 字段都不发**（只发 enabled 不说强度，某些上游会强行把思考打开，
+  反而不是你要的"别管"）。
+- 切到别的服务商时，档位不在列表里会落到「默认」而不是最右一格 ——
+  免得把上次为别人填的 `max` 发给一个不认它的上游。
+
+### 免费模型名单刷新（2026-10-22 实测目录）
+
+按网关 `/zen/v1/models` 的实时目录校对，现在的免费池是 10 个：
+`deepseek-v4.1-flash-free`、`glm-5.3-flash-free`、`minimax-m3.1-flash-free`、
+`mimo-v2.6-flash-free`、`nemotron-3.5-super-vl-free`、`nemotron-3.5-lightning-free`、
+`flint-40b-free`、`beam-free`、`jev-1.13-free`、`big-pickle`。
+内置兜底名单已同步（下架的 space-bunny / step-5-preview / longcat-2.5-preview 已移除）。
+正常路径仍然是打开选择器时**问接口要**，这份只是读不到时的兜底。
+
+### 悬浮条去掉颜色
+
+三个键原来是琥珀 / 红 / 蓝三块彩色，压在网页上很吵。现在**一种色相都没有**：
+只用 20% / 12% / 6% 三层白透明度区分「主操作 / 其它 / 不可用」，深底白字圆角。
+
+### 背景模糊（毛玻璃）
+
+用的是 Android **自带的跨窗口模糊**（没有第三方库）：
+
+- 接口：`WindowManager.LayoutParams#setBlurBehindRadius(px)`（API 31+）+ `FLAG_BLUR_BEHIND`；
+  能不能用先问 `WindowManager#isCrossWindowBlurEnabled()`。
+- 半径 20dp；底色同时从 90% 降到 85% 黑（85% × 窗口 0.85 = 0.72 的有效遮挡，
+  仍在「不信任触摸」0.80 红线以下）。
+- **做成开关、默认关**：AVD 上实测整屏都被糊掉（模拟器不裁剪模糊区域），
+  真机应当只糊条子背后那块 —— 没在真机确认前不适合默认打开。
+
+### 其它
+
+- 223 例单测全绿（+7：自定义档的 effort 语义 / 留空不发 / 免费通道 / 最右档不变式）。
+- 实测：设置里填 `medium` → 请求体 `thinking={type:enabled}` + `reasoning_effort=medium`、
+  且不发 temperature（实证见 `else/evidence/2026-10-22-思考强度与悬浮条外观.md`）。
+
 ## 0.10.1
 
 > 两件事：**决定权交回云端模型**，以及**内置浏览器**（AI 能读网页背后的代码）。

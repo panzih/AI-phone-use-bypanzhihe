@@ -195,4 +195,12 @@
     <string name="browser_reload">刷新</string>
     <string name="browser_close">关闭</string>
     <string name="browser_blank">空白页</string>
+    <!-- 悬浮条背景模糊（默认关） -->
+    <string name="settings_overlay_blur">悬浮条背景模糊</string>
+    <string name="settings_overlay_blur_desc">毛玻璃效果。用 Android 12+ 的跨窗口模糊，系统不支持时无效；模拟器上会把整屏糊掉（模拟器限制，真机才会只糊条子背后）。默认关。</string>
+
+    <!-- 思考强度「自定义」档：输入框占位与说明 -->
+    <string name="settings_thinking_custom_hint">例如 high / medium / minimal（留空 = 不发）</string>
+    <string name="settings_thinking_custom_note">原样发 reasoning_effort。留空就什么都不发，由服务商决定。</string>
+    <string name="settings_thinking_custom_free_note">原样发 reasoning_effort。免费通道不一定认这个参数，填错可能被上游拒绝；留空最安全。</string>
 </resources>

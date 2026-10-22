@@ -63,6 +63,13 @@ object OverlayBus {
     @Volatile
     var service: OverlayService? = null
 
+    /**
+     * 悬浮条要不要背景模糊。任务开始时由界面按设置同步一次
+     * （默认 false —— 原因见 AppSettings.overlayBlur）。
+     */
+    @Volatile
+    var overlayBlurEnabled: Boolean = false
+
     /** 悬浮窗上按过急停。Agent 每步都会检查它 */
     @Volatile
     var stopRequested: Boolean = false

@@ -231,6 +231,15 @@ fun SettingsScreen(
 
             item {
                 SwitchRow(
+                    title = stringResource(R.string.settings_overlay_blur),
+                    subtitle = stringResource(R.string.settings_overlay_blur_desc),
+                    checked = s.overlayBlur,
+                    onCheckedChange = { onSettingsChange(s.copy(overlayBlur = it)) },
+                )
+            }
+
+            item {
+                SwitchRow(
                     title = stringResource(R.string.settings_local_dismiss),
                     subtitle = stringResource(R.string.settings_local_dismiss_desc),
                     checked = s.localDialogDismiss,
@@ -549,7 +558,9 @@ private fun ModelSection(
             current = s.thinking,
             freeLane = s.useFreeModel,
             baseUrl = s.baseUrl,
+            customEffort = s.customEffort,
             onChange = { onChange(s.copy(thinking = it)) },
+            onCustomEffortChange = { onChange(s.copy(customEffort = it)) },
         )
 
         Spacer(Modifier.height(4.dp))
@@ -560,8 +571,8 @@ private fun ModelSection(
  * 免费模式的内置模型名单（**只当兜底**）。
  *
  * 正常路径是打开选择器时用接口实时读取（[ModelListFetcher.fetchFree]）——
- * 这份名单只在读不到时顶上，所以不需要"永远最新"，但仍然按 2026-10-15
- * 网关 /zen/v1/models 的实时目录校对过，并剔除了三类：
+ * 这份名单只在读不到时顶上，所以不需要"永远最新"，但仍然按 **2026-10-22**
+ * 网关 /zen/v1/models 的实时目录校对过（当时 10 个免费模型，全部收录），并剔除了三类：
  *  - 已下架：deepseek-v4-flash-free（已升级为 v4.1）、union-alpha、ling-3.0-flash-fin-free
  *  - 中国大陆地域锁（网关直接 403 RegionError）：muse-spark-*、cat-jam-free，
  *    且 muse-spark 走的是另一套 /responses 端点，国内手机也用不了
@@ -570,12 +581,14 @@ private fun ModelSection(
  */
 private val freeModels = listOf(
     FreeModel("deepseek-v4.1-flash-free", "DeepSeek V4.1 Flash"),
+    FreeModel("glm-5.3-flash-free", "GLM 5.3 Flash"),
+    FreeModel("minimax-m3.1-flash-free", "MiniMax M3.1 Flash"),
     FreeModel("mimo-v2.6-flash-free", "MiMo V2.6 Flash"),
-    FreeModel("space-bunny-free", "Space Bunny"),
+    FreeModel("nemotron-3.5-super-vl-free", "Nemotron 3.5 Super VL"),
     FreeModel("nemotron-3.5-lightning-free", "Nemotron 3.5 Lightning"),
+    FreeModel("flint-40b-free", "Flint 40B"),
+    FreeModel("beam-free", "Beam"),
     FreeModel("jev-1.13-free", "Jev 1.13"),
-    FreeModel("step-5-preview-free", "Step 5 Preview"),
-    FreeModel("longcat-2.5-preview-free", "LongCat 2.5 Preview"),
     FreeModel("big-pickle", "Big Pickle"),
 )
 
@@ -616,13 +629,18 @@ private fun ThinkingModeSlider(
     current: ThinkingMode,
     freeLane: Boolean,
     baseUrl: String,
+    customEffort: String,
     onChange: (ThinkingMode) -> Unit,
+    onCustomEffortChange: (String) -> Unit,
 ) {
     // 档位**随模型/服务商变**：DeepSeek 没有 medium，免费网关没有 max。
     // 当前选的那档不在列表里（比如刚从 DeepSeek 换到别的）就落到最右的「默认」，
     // 绝不发一个这个服务商不认的 effort 过去（那是 400，不是"档位失效"）。
     val options = ThinkingMode.levelsFor(baseUrl, freeLane)
-    val index = options.indexOf(current).takeIf { it >= 0 } ?: options.lastIndex
+    // 当前档不在这台服务商的列表里时落到**「默认」**而不是最右一格：
+    // 最右现在是「自定义」，落过去等于把上次为别的服务商填的 effort 原样发出去
+    val index = options.indexOf(current).takeIf { it >= 0 }
+        ?: options.indexOf(ThinkingMode.DEFAULT).coerceAtLeast(0)
     var draft by remember(index) { mutableFloatStateOf(index.toFloat()) }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
@@ -660,12 +678,33 @@ private fun ThinkingModeSlider(
         Text(
             text = stringResource(
                 R.string.settings_model_thinking_api,
-                options[draft.toInt().coerceIn(0, options.lastIndex)].apiFor(freeLane),
+                options[draft.toInt().coerceIn(0, options.lastIndex)].apiFor(freeLane, customEffort),
             ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(top = 2.dp),
         )
+
+        // 选了「自定义」才出现的输入框：用户想发什么 effort 就发什么。
+        // 留空 = 什么都不发（这一条在提示里写死，因为它是唯一"空"的含义）。
+        if (options[draft.toInt().coerceIn(0, options.lastIndex)] == ThinkingMode.CUSTOM) {
+            OutlinedTextField(
+                value = customEffort,
+                onValueChange = onCustomEffortChange,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                placeholder = { Text(stringResource(R.string.settings_thinking_custom_hint)) },
+                supportingText = {
+                    Text(
+                        if (freeLane) {
+                            stringResource(R.string.settings_thinking_custom_free_note)
+                        } else {
+                            stringResource(R.string.settings_thinking_custom_note)
+                        }
+                    )
+                },
+            )
+        }
     }
 }
 

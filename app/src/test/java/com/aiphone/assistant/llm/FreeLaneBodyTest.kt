@@ -37,6 +37,7 @@ class FreeLaneBodyTest {
         useFree: Boolean,
         thinking: ThinkingMode,
         image: ByteArray? = null,
+        customEffort: String = "",
     ): JSONObject = LlmClient(
         LlmConfig(
             baseUrl = "https://api.example.com/v1",
@@ -44,6 +45,7 @@ class FreeLaneBodyTest {
             model = "test-model",
             useFreeModel = useFree,
             thinking = thinking,
+            customEffort = customEffort,
         )
     ).buildBody("你是一个助手", listOf(ChatTurn(ChatTurn.USER, "打开设置", imageBytes = image)))
 
@@ -130,5 +132,28 @@ class FreeLaneBodyTest {
         val b = body(useFree = false, thinking = ThinkingMode.OFF)
         assertFalse("自定义通道不能带 tool_choice", b.has("tool_choice"))
         assertFalse("自定义通道保持非流式", b.getBoolean("stream"))
+    }
+
+    // ---- 自定义思考强度（0.10.2）----
+
+    @Test
+    fun `自定义档把用户填的 effort 原样发出去`() {
+        val b = body(useFree = false, thinking = ThinkingMode.CUSTOM, customEffort = " medium ")
+        assertEquals("enabled", b.getJSONObject("thinking").getString("type"))
+        assertEquals("medium", b.getString("reasoning_effort"))
+    }
+
+    @Test
+    fun `自定义档留空时一个思考字段都不发`() {
+        // 留空的语义就是"用服务商默认"，绝不能发空串（那是最容易被 400 的形态）
+        val b = body(useFree = false, thinking = ThinkingMode.CUSTOM, customEffort = "   ")
+        assertFalse("留空不该发 reasoning_effort：$b", b.has("reasoning_effort"))
+        assertFalse("留空不该发 thinking：$b", b.has("thinking"))
+    }
+
+    @Test
+    fun `自定义档在免费通道也照发_填了才发`() {
+        val b = body(useFree = true, thinking = ThinkingMode.CUSTOM, customEffort = "low")
+        assertEquals("low", b.getString("reasoning_effort"))
     }
 }

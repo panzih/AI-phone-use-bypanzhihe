@@ -2,6 +2,7 @@ package com.aiphone.assistant.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -74,14 +75,64 @@ class ThinkingModeTest {
     }
 
     @Test
-    fun `默认档永远在最右`() {
+    fun `最右是自定义档_留空就等于默认`() {
+        // 0.10.2 之前最右是「默认」；现在最右是「自定义」（用户要能自己填 effort）。
+        // 但"不动它 = 不发任何思考参数"这条不变：自定义留空就是默认的语义。
         listOf(
             ThinkingMode.levelsFor("https://api.deepseek.com", false),
             ThinkingMode.levelsFor("https://opencode.ai/zen", true),
             ThinkingMode.levelsFor("https://whatever.example", false),
         ).forEach { levels ->
-            assertEquals(ThinkingMode.DEFAULT, levels.last())
-            assertEquals("最右一档是默认，用户不调就是它", levels.last().id, "default")
+            assertEquals(ThinkingMode.CUSTOM, levels.last())
+            assertEquals(ThinkingMode.DEFAULT, levels[levels.lastIndex - 1])
+            assertNull(
+                "最右一档留空时必须什么都不发（等同默认）",
+                ThinkingMode.effortOf(levels.last(), ""),
+            )
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 自定义档（用户 2026-10-22：要能自己填思考强度，留空就用默认）
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `自定义档原样发用户填的值`() {
+        assertEquals("medium", ThinkingMode.effortOf(ThinkingMode.CUSTOM, "medium"))
+        // 前后空格是用户手滑，去掉；不改成小写 —— 服务商大小写敏感的先例没查清
+        assertEquals("High", ThinkingMode.effortOf(ThinkingMode.CUSTOM, "  High  "))
+    }
+
+    @Test
+    fun `自定义档留空就什么都不发`() {
+        assertNull(ThinkingMode.effortOf(ThinkingMode.CUSTOM, ""))
+        assertNull(ThinkingMode.effortOf(ThinkingMode.CUSTOM, "   "))
+        // 其它档不受这个参数影响
+        assertEquals("high", ThinkingMode.effortOf(ThinkingMode.HIGH, "medium"))
+        assertNull(ThinkingMode.effortOf(ThinkingMode.DEFAULT, "medium"))
+    }
+
+    @Test
+    fun `自定义档的接口说明显示真实值`() {
+        assertTrue(
+            ThinkingMode.CUSTOM.apiFor(freeLane = false, customEffort = "minimal")
+                .contains("minimal"),
+        )
+        assertTrue(
+            ThinkingMode.CUSTOM.apiFor(freeLane = false, customEffort = "  ")
+                .contains("不发"),
+        )
+    }
+
+    @Test
+    fun `自定义档排在每一档列表的最后`() {
+        listOf(
+            ThinkingMode.levelsFor("https://api.deepseek.com", freeLane = false),
+            ThinkingMode.levelsFor("https://opencode.ai/zen/v1", freeLane = true),
+            ThinkingMode.levelsFor("https://api.moonshot.cn", freeLane = false),
+        ).forEach { list ->
+            assertEquals(ThinkingMode.CUSTOM, list.last())
+            assertEquals(ThinkingMode.DEFAULT, list[list.lastIndex - 1])
         }
     }
 }
