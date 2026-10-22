@@ -165,9 +165,18 @@ class ShellService : IShellService.Stub() {
     @SuppressLint("WrongConstant")
     override fun createDisplay(): Int = synchronized(this) {
         try {
-            // 幂等：已经建了就直接返回现有 id
+            // 幂等：已经建了就直接返回现有 id —— 但**必须是活的**。
+            // 上一轮任务没收回的副屏（回迁失败/接管路径）会留在这里，
+            // 直接复用等于让新任务继承一块装着别人的屏（2026-10-22 审查发现）。
             virtualDisplay?.let { vd ->
-                if (vd.display.displayId >= 0) return@synchronized vd.display.displayId
+                val alive = runCatching { vd.display.state != Display.STATE_OFF }.getOrDefault(false)
+                if (alive && vd.display.displayId >= 0) return@synchronized vd.display.displayId
+                Log.w(TAG, "发现残留副屏（displayId=${vd.display?.displayId}），先销毁再重建")
+                runCatching { vd.release() }
+                virtualDisplay = null
+                runCatching { imageReader?.close() }
+                imageReader = null
+                lastFrameBytes = null
             }
 
             // 0.5.1：建自己的屏之前，先清掉上一轮 server 死亡遗留的孤儿 :shell（只一次）
@@ -196,6 +205,13 @@ class ShellService : IShellService.Stub() {
         } catch (t: Throwable) {
             // 反射调用包了一层 InvocationTargetException，要顺着 cause 挖到底才是真错误
             val root = generateSequence(t) { it.cause }.lastOrNull { it !is java.lang.reflect.InvocationTargetException } ?: t
+            // 建屏失败必须把 ImageReader 收掉：它带着 3 张 RGBA buffer（≈30MB），
+            // 留在字段里下次 createDisplay 直接覆盖 —— 旧的那块再也拿不回来。
+            // 用户连点几次「切到副屏」就是几十 MB 的泄漏。
+            runCatching { imageReader?.close() }
+            imageReader = null
+            runCatching { virtualDisplay?.release() }
+            virtualDisplay = null
             Log.w(TAG, "createDisplay 失败：${root.javaClass.simpleName} ${root.message}", root)
             -1
         }
@@ -207,12 +223,22 @@ class ShellService : IShellService.Stub() {
                 ?: return@synchronized lastFrameBytes ?: ByteArray(0)
             val img: Image? = reader.acquireLatestImage()
             if (img != null) {
-                val jpeg = imageToJpeg(img)
-                img.close()
-                if (jpeg.isNotEmpty()) {
+                // close 必须放 finally：imageToJpeg 里 OOM 一次不关，
+                // 3 张 buffer 用尽后 acquireLatestImage 永远返回 null，
+                // 接口就退化成"永久返回缓存帧"——从外面看完全正常，实际再也不更新
+                val jpeg = try {
+                    imageToJpeg(img)
+                } finally {
+                    runCatching { img.close() }
+                }
+                if (jpeg.isNotEmpty() && jpeg.size <= MAX_FRAME_BYTES) {
                     lastFrameBytes = jpeg
                     return@synchronized jpeg
                 }
+                // ⚠️ 超限的图**绝不能**进缓存：以前 PNG 兜底会存一份 2MB+ 的图，
+                // 之后每次 grabFrame 都把它跨 binder 回传 → TransactionTooLarge →
+                // 调用方拿到空数组，而缓存里还是那份毒数据，副屏从此"永远没画面"。
+                Log.w(TAG, "本帧过大（${jpeg.size} 字节 > ${MAX_FRAME_BYTES}），不缓存")
             }
             // 没有新帧（静态画面）就回退上一帧
             lastFrameBytes ?: ByteArray(0)
@@ -340,23 +366,85 @@ class ShellService : IShellService.Stub() {
         val paddedW = plane.rowStride / plane.pixelStride
         val w = img.width
         val h = img.height
-        val bmp = Bitmap.createBitmap(paddedW, h, Bitmap.Config.ARGB_8888)
-        bmp.copyPixelsFromBuffer(buf)
-        val fixed = if (paddedW != w) Bitmap.createBitmap(bmp, 0, 0, w, h) else bmp
-        val out = ByteArrayOutputStream(w * h / 8)
-        val encoded = runCatching { fixed.compress(Bitmap.CompressFormat.JPEG, 82, out) }
-            .getOrDefault(false)
-        if (!encoded || out.size() == 0) {
+        var bmp: Bitmap? = null
+        var fixed: Bitmap? = null
+        var small: Bitmap? = null
+        try {
+            bmp = Bitmap.createBitmap(paddedW, h, Bitmap.Config.ARGB_8888)
+            bmp.copyPixelsFromBuffer(buf)
+            fixed = if (paddedW != w) Bitmap.createBitmap(bmp, 0, 0, w, h) else bmp
+            val out = ByteArrayOutputStream(w * h / 8)
+            val encoded = runCatching { fixed.compress(Bitmap.CompressFormat.JPEG, 82, out) }
+                .getOrDefault(false)
+            if (encoded && out.size() in 1..MAX_FRAME_BYTES) return out.toByteArray()
+
+            // 兜底：**逐步降质 + 缩边**，直到塞进 MAX_FRAME_BYTES。
+            //
+            // 为什么必须保证"最终一定 ≤ MAX"：副屏是静态画面时 ImageReader
+            // 根本不产新帧，抓帧只能靠 shell 侧的上一帧缓存。一旦某帧因为太大
+            // 没能进缓存，之后每次 grabFrame 都是空 —— 对外就是"副屏截图永远失败"，
+            // 而且看起来像网络/权限问题，极难查（2026-10-22 实测撞到）。
             out.reset()
-            fixed.compress(Bitmap.CompressFormat.PNG, 100, out)
+            var side = MAX_FRAME_SIDE
+            var quality = 70
+            var scaled: Bitmap? = null
+            while (true) {
+                scaled?.let { runCatching { it.recycle() } }
+                scaled = null
+                val ratio = side.toFloat() / maxOf(w, h)
+                val src = if (ratio < 1f) {
+                    Bitmap.createScaledBitmap(
+                        fixed,
+                        (w * ratio).toInt().coerceAtLeast(1),
+                        (h * ratio).toInt().coerceAtLeast(1),
+                        true,
+                    ).also { scaled = it }
+                } else {
+                    fixed
+                }
+                out.reset()
+                src.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                if (out.size() in 1..MAX_FRAME_BYTES) break
+                if (quality > 40) {
+                    quality -= 15
+                } else if (side > 480) {
+                    side /= 2
+                    quality = 70
+                } else {
+                    break // 实在压不下去，交给上层按"过大"处理
+                }
+            }
+            if (out.size() == 0) {
+                // JPEG 彻底不可用（极少数 ROM 的 app_process 缺编码器）：最后才 PNG
+                out.reset()
+                (scaled ?: fixed).compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            return out.toByteArray()
+        } finally {
+            // 每帧两张整屏 Bitmap（1080p ≈ 10MB/张）以前是直接漏掉的：
+            // 抓帧是 1 帧/秒的常态调用，几秒钟就能把 shell 进程撑爆
+            if (small != null) runCatching { small.recycle() }
+            if (fixed != null && fixed !== bmp) runCatching { fixed.recycle() }
+            if (bmp != null) runCatching { bmp.recycle() }
         }
-        return out.toByteArray()
     }
 
     private companion object {
         const val TAG = "ShellService"
         const val DISPLAY_NAME = "PaperBoxVD"
         const val MAX_IMAGES = 3
+
+        /**
+         * 单帧字节上限。
+         *
+         * binder 一次事务 1MB，帧要跨 binder 回传，超了就是
+         * TransactionTooLargeException —— 现场表现是"副屏截图永远失败"。
+         * 留 512KB 余量给 JSON/IPC 开销。
+         */
+        const val MAX_FRAME_BYTES = 512 * 1024
+
+        /** 兜底缩放的最长边（720p 量级，模型看图足够） */
+        const val MAX_FRAME_SIDE = 1280
 
         // 与一手实测程序 RootVD 完全一致、在 root/shell/user 三种条件下都通过。
         // 各移位位含义：6=SUPPORTS_TOUCH，8=DESTROY_CONTENT_ON_REMOVAL，

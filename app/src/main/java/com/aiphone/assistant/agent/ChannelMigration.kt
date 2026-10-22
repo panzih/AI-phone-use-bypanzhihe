@@ -229,17 +229,25 @@ class ChannelMigration(
         }
         val (taskId, pkg) = top
 
-        // 2) 先切回主屏无障碍（move-stack 走 shell、与通道无关；先切降级才自洽）
+        // 2) 先搬栈，**成功了再切通道**。
+        //
+        // ⚠️ 以前是"先 exitVirtualDisplay、再 move-stack"：一旦 move 失败，
+        // 通道已经切回主屏了，而 return 又返回 false（函数注释说 false = 还在副屏）
+        // —— 调用方按"还在副屏"继续，实际已经在主屏，表现成"回前台之后 AI 对着主屏乱点"。
+        // move-stack 走的是 shell、与当前通道无关，所以完全可以先搬。
         OverlayBus.setPhase(AgentPhase.ACTING)
-        controller.exitVirtualDisplay()
 
         // 3) 整栈迁回主屏；失败降级为「主屏重开应用」
         val keptStack = moveStack(taskId, 0)
+        if (keptStack) controller.exitVirtualDisplay()
         if (!keptStack) {
             logger?.line("整栈回迁失败，将在主屏重开应用（临时内容可能丢失）", "副屏")
             onEvent(Agent.EventKind.THOUGHT, "回迁失败，应用将被重开（临时内容可能丢失） …", "副屏")
             if (!reopenOnDisplay(pkg, 0)) {
-                // 通道已回主屏、应用又被 force-stop：销毁副屏兜底，再报错
+                // 走到这里说明：搬栈失败 + 主屏重开也失败，应用已经被关掉了。
+                // 这时**必须**把通道切回主屏（否则后续动作全打在空副屏上），
+                // 销毁副屏兜底，再如实报错 —— 不能返回"还在副屏"。
+                controller.exitVirtualDisplay()
                 val dr = ShizukuBridge.destroyDisplay(controller.appContext)
                 vdCreatedByAgent = false
                 val tail = if (dr >= 0) "（副屏已收回）" else "（副屏没收回，可到副屏调试页手动销毁）"
@@ -248,6 +256,8 @@ class ChannelMigration(
                 onEvent(Agent.EventKind.ERROR, msg, "副屏")
                 return false
             }
+            // 重开成功也算回到主屏
+            controller.exitVirtualDisplay()
         }
 
         // 4) 校验：任务确实回到主屏
@@ -320,6 +330,10 @@ class ChannelMigration(
         // 这里不用 returnRequestedByUser()：那套是给"应用还在副屏"写的，
         // 要搬栈；而此刻应用**已经在主屏**了，只需要换读取通道。
         controller.exitVirtualDisplay()
+        // 副屏上已经没有任务了，留着它就是一块空屏（「看副屏画面」会对着它抓帧）。
+        // 以前只在任务收尾时才销毁，中间这段时间一直是残屏。
+        runCatching { ShizukuBridge.destroyDisplay(controller.appContext) }
+        vdCreatedByAgent = false
         switchChannel("主屏")
         watcher.suppressAutoMoveFor(TAKEOVER_COOLDOWN_MS)
         val msg = "检测到你把「$tPkg」挪回主屏了，AI 已切回主屏模式继续" +

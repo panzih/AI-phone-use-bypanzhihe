@@ -304,7 +304,14 @@ class Agent(
             fail(problem, "通道不可用")
             return
         }
-        logger?.line("通道就绪：${settings.mode.label}", "通道")
+        logger?.line(
+            if (controller.isVirtualDisplay) {
+                "通道就绪：副屏（display=${controller.virtualDisplayId}，只有截图 + 坐标，没有控件树）"
+            } else {
+                "通道就绪：${settings.mode.label}"
+            },
+            "通道",
+        )
 
         // ---- 1.5 无障碍**真的**读到东西了吗 ----
         // `probe()` 只检查"服务对象在不在"。MIUI / HyperOS 上服务被系统停用
@@ -538,7 +545,7 @@ class Agent(
                 }
             }
             val nodeCount = treeRead.nodes.size
-            val treeLine = buildTreeLogLine(treeRead)
+            val treeLine = buildTreeLogLine(treeRead, vdMode = controller.isVirtualDisplay)
             logger?.line(treeLine, "UI")
             // ---- 完整控件树落盘 ----
             // 复盘时最需要的是"模型当时到底看到了什么"，光有个数字不够。
@@ -619,6 +626,10 @@ class Agent(
                 return
             }
 
+            // 副屏且这一屏没有控件树：模型手里可能**既没元素列表也没图**
+            // （副屏刚建好时还没有任何画面）。这时必须明确让它先 open_app。
+            val blindOnVd = controller.isVirtualDisplay && tree == null
+
             // 做成 var：ask 循环里"防幻觉完成"被拦下时，要把提醒**当场**
             // 回灌给模型（同一步重新问一次），而不是等到下一步
             var interruptions = buildList {
@@ -647,9 +658,22 @@ class Agent(
                 // 以为"界面是自绘的"而一直等，或者瞎点坐标
                 if (!treeRead.rootAvailable) {
                     add(
-                        "⚠️ 这一屏**读不到控件树**（无障碍服务没有真正生效，或当前窗口不给无障碍）。" +
-                            "你只能靠附图判断，坐标点击不可靠。" +
-                            "如果连着几步都这样，直接 failed 并让用户重新开启无障碍服务。"
+                        if (controller.isVirtualDisplay) {
+                            // 副屏没有控件树是**设计如此**，不是什么坏了
+                            "当前在**副屏**上操作，系统不给第三方读副屏的控件树 —— " +
+                                "这里没有元素列表是正常的。看附图判断，动作一律用 x / y 坐标给。"
+                        } else {
+                            "⚠️ 这一屏**读不到控件树**（无障碍服务没有真正生效，或当前窗口不给无障碍）。" +
+                                "你只能靠附图判断，坐标点击不可靠。" +
+                                "如果连着几步都这样，直接 failed 并让用户重新开启无障碍服务。"
+                        }
+                    )
+                }
+                if (blindOnVd) {
+                    add(
+                        "副屏现在**还没有画面**（连截图都抓不到）：多半是还没有应用切到副屏上。" +
+                            "先用 open_app 打开目标任务的应用（包名不确定就先调 list_apps），" +
+                            "等它出现在副屏上再截图确认。**不要**照抄历史里主屏那张界面的坐标。"
                     )
                 }
                 // 端侧的弹窗建议（不点，只告诉模型）
@@ -718,7 +742,16 @@ class Agent(
                     "读不到控件树，本轮自动带上截图（${autoImage.size} 字节）",
                     "截图",
                 )
+            } else if (controller.isVirtualDisplay) {
+                logger?.warn(
+                    "副屏现在没有画面（连截图都抓不到）：多半是还没有应用切到副屏上",
+                    "副屏",
+                )
             }
+            // 副屏 + 这一屏没有控件树 = 模型手里可能**一点信息都没有**
+            // （若连截图也抓不到）。这种情况必须告诉它"先开应用"，
+            // 否则它会拿历史里的主屏布局瞎点 —— 2026-10-22 AVD 实测：
+            // 副屏第一步就是这么把任务直接判死的。
 
             var pendingImage: ByteArray? = autoImage
             var imageNote: String? = null
@@ -771,8 +804,13 @@ class Agent(
                     null
                 } else {
                     when {
-                        !treeRead.rootAvailable -> AgentPrompt.NO_TREE_UNREADABLE
+                        // ⚠️ 副屏必须排在"读不到根节点"**前面**：
+                        // 副屏本来就拿不到控件树（rootAvailable 恒 false），
+                        // 排在后面的话模型会收到"无障碍服务没真正生效"——
+                        // 那是瞎报，还会把它引导成"直接 failed"。
+                        // 2026-10-22 在 AVD 上实测到：副屏任务第一步就被这么误导。
                         controller.isVirtualDisplay -> AgentPrompt.NO_TREE_VIRTUAL_DISPLAY
+                        !treeRead.rootAvailable -> AgentPrompt.NO_TREE_UNREADABLE
                         foreground != null && foreground == selfPackage -> AgentPrompt.NO_TREE_SELF
                         else -> AgentPrompt.NO_TREE_NO_ELEMENTS
                     }
@@ -2507,11 +2545,18 @@ class Agent(
          * 长得一模一样，整整一批失败都没法复盘。现在把**根节点读到没有 /
          * 真的有几个元素 / 有没有被截断**分开写。
          */
-        fun buildTreeLogLine(r: com.aiphone.assistant.channel.UiTreeRead): String = buildString {
+        fun buildTreeLogLine(
+            r: com.aiphone.assistant.channel.UiTreeRead,
+            vdMode: Boolean = false,
+        ): String = buildString {
             append("控件树：")
             append(r.nodes.size)
             append(" 个元素")
             when {
+                // 副屏模式排在前面：那条通道**本来就没有控件树**，
+                // 沿用"无障碍没生效"的措辞会让人（和模型）去查错方向
+                vdMode ->
+                    append("（副屏模式：这条通道没有控件树，靠截图 + 坐标）")
                 !r.rootAvailable ->
                     append("（❌ 读不到根节点：无障碍服务没真正生效，或当前窗口不给无障碍）")
                 r.nodes.isEmpty() ->

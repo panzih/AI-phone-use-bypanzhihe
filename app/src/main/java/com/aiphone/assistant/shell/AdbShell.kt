@@ -114,6 +114,16 @@ object AdbShell {
         displayId: Int,
         packageName: String,
         component: String? = null,
+        /**
+         * 先在 shell 里 force-stop 这个包，保证是**新任务**。
+         *
+         * 副屏必须用 true：应用已经在主屏跑着时，`am start --display N`
+         * 往往只是把既有任务抬到前台（还留在主屏），副屏上什么都没有 ——
+         * 于是副屏一直黑着，AI 只能靠截图看，等于闭着眼睛点。
+         * 2026-10-22 在 AVD 上实测到：上一轮开过的设置没关，第二次切副屏时
+         * 副屏全程空白，模型连续抓不到画面后直接 failed。
+         */
+        fresh: Boolean = false,
     ): String {
         // 只知道包名时：先问系统要启动入口（resolve-activity），**点名启动**。
         // 直接 `-a MAIN -c LAUNCHER -p pkg` 在部分 ROM 上解析不到 —— 真实案例
@@ -122,6 +132,10 @@ object AdbShell {
         // 解析不到再退回隐式形式（老设备/老行为兜底）。
         val resolved = component
             ?: resolveLaunchComponent(context, packageName)?.let { "$packageName/$it" }
+        if (fresh) {
+            // 尽力而为：杀不掉（比如系统应用受保护）就照常往下试
+            runCatching { ShizukuBridge.run(context, "am force-stop $packageName") }
+        }
         val cmd = if (resolved != null) {
             "am start --display $displayId -n $resolved"
         } else {

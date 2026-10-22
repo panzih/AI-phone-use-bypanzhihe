@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 69      // 0.10.2：自定义思考强度 + 悬浮条去色/背景模糊 + 免费模型名单刷新
-        versionName = "0.10.2"
+        versionCode = 70      // 0.10.3：副屏（虚拟显示）实测修复
+        versionName = "0.10.3"
     }
 
     /**

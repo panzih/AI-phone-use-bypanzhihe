@@ -39,6 +39,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -98,6 +101,17 @@ class MirrorActivity : ComponentActivity() {
     }
 }
 
+/** 连续几次抓不到就认定副屏已经没了（不再无限重试） */
+private const val GIVE_UP_AFTER_FAILS = 20
+
+/**
+ * 「抓不到」的两种含义必须分开（2026-10-22 在 AVD 上踩到）：
+ *   1. 副屏刚建好、上面**还没有任何画面**（应用还没切过来）—— ImageReader 里
+ *      本来就没有帧，这时候说"副屏已经不在了"是瞎报，用户会以为功能坏了；
+ *   2. 真的没了（binder 断/副屏被销毁）—— 连续几十秒都没有帧。
+ * 所以前几次说"还没有画面"，久一点才下"副屏已经不在了"的结论。
+ */
+
 @Composable
 private fun MirrorScreen(displayId: Int, onExit: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -106,32 +120,60 @@ private fun MirrorScreen(displayId: Int, onExit: () -> Unit) {
     var status by remember { mutableStateOf("正在取副屏画面 ...") }
     var okCount by remember { mutableIntStateOf(0) }
     var failCount by remember { mutableIntStateOf(0) }
+    // 「重试」不是把计数器清零就完事 —— 那是自欺欺人（循环本来就在跑）。
+    // 这里用一个 tick 当 LaunchedEffect 的 key，点一下真的重启整条抓帧循环。
+    var retryTick by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
 
-    LaunchedEffect(displayId) {
+    LaunchedEffect(displayId, retryTick) {
         if (displayId < 0) {
             status = "没有拿到副屏 id，退回去先创建副屏。"
             return@LaunchedEffect
         }
-        while (isActive) {
-            val bytes = ShizukuBridge.grabFrame(context)
-            if (bytes.isEmpty()) {
-                failCount++
-                status = "抓不到副屏画面（第 $failCount 次失败）。" +
-                    "副屏可能已经没了，或者 shell 服务断开了。"
-            } else {
-                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                if (bmp != null) {
-                    // decode 之后可以立刻回收字节，画面留在 Bitmap 里
-                    frame = bmp.asImageBitmap()
-                    okCount++
-                    status = "副屏 $displayId · 已刷新 $okCount 帧 · " +
-                        "${bmp.width}x${bmp.height} · ${bytes.size / 1024} KB"
-                } else {
+        // 只在 STARTED 期间抓帧：用户按 HOME / 锁屏 / 被别的应用盖住时停下来。
+        // 以前这个 while 会一直跑到 composition 销毁 —— 页面在后台每秒一次
+        // binder + 解码，纯烧电；副屏都没了还在抓。
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            failCount = 0
+            while (isActive) {
+                val bytes = ShizukuBridge.grabFrame(context)
+                if (bytes.isEmpty()) {
                     failCount++
-                    status = "拿到了 ${bytes.size} 字节，但解不出图片（第 $failCount 次）。"
+                    // 抓不到就**必须**把 shell 侧的原因带出来（binder 断开？
+                    // 服务里没有 ImageReader？）—— 只说"抓不到"根本没法查
+                    android.util.Log.w(
+                        "MirrorActivity",
+                        "抓帧失败（第 ${failCount} 次）：${ShizukuBridge.lastError ?: "无原因"}",
+                    )
+                    status = if (failCount >= GIVE_UP_AFTER_FAILS) {
+                        "副屏已经没有画面了（连续 ${failCount} 次抓不到，约 " +
+                            "${failCount * MirrorActivity.REFRESH_MS / 1000} 秒）。" +
+                            "如果任务还在跑，可能是副屏上的应用没起来；点「重试」再试一次。"
+                    } else {
+                        "副屏上还没有画面（第 ${failCount} 次）。" +
+                            "应用刚切过去时正常会有 1~3 秒空白，再等等。"
+                    }
+                    if (failCount >= GIVE_UP_AFTER_FAILS) break
+                } else {
+                    // 1080×2400 的 JPEG 解码放主线程是实打实的掉帧来源 ——
+                    // 每秒一次，低端机上直接卡成幻灯片
+                    val bmp = withContext(Dispatchers.Default) {
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
+                    if (bmp != null) {
+                        frame?.let { /* 旧帧交给 GC：ImageBitmap 包着 Bitmap，无法手动 recycle */ }
+                        frame = bmp.asImageBitmap()
+                        okCount++
+                        failCount = 0
+                        status = "副屏 $displayId · 已刷新 $okCount 帧 · " +
+                            "${bmp.width}x${bmp.height} · ${bytes.size / 1024} KB"
+                    } else {
+                        failCount++
+                        status = "拿到了 ${bytes.size} 字节，但解不出图片（第 ${failCount} 次）。"
+                    }
                 }
+                delay(MirrorActivity.REFRESH_MS)
             }
-            delay(MirrorActivity.REFRESH_MS)
         }
     }
 
@@ -189,7 +231,7 @@ private fun MirrorScreen(displayId: Int, onExit: () -> Unit) {
                 Text(stringResource(R.string.vd_mirror_exit))
             }
             Button(
-                onClick = { failCount = 0 },
+                onClick = { retryTick++ },
                 modifier = Modifier.weight(1f),
             ) {
                 Text(stringResource(R.string.vd_mirror_retry))

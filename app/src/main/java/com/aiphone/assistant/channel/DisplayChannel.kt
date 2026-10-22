@@ -117,6 +117,38 @@ class DisplayChannel(
         }
     }
 
+    /**
+     * 在副屏上打开应用，并且**确认它真的落在副屏上**。
+     *
+     * 为什么要确认：应用已经在主屏跑着时，`am start --display N` 常常只是把
+     * 既有任务抬起来（仍在主屏），副屏就一直是黑的 —— 而模型只能看副屏截图，
+     * 于是"看不到任何东西"，最后要么瞎点、要么直接 failed。
+     * 实测（2026-10-22 AVD）：同一个任务第一次副屏正常，第二次副屏全空。
+     *
+     * 所以：fresh 启动（先 force-stop）→ 校验 → 没落上再重开一次 → 仍没落上就
+     * **如实报错**，别让模型对着空屏猜。
+     */
+    private suspend fun openAppOnDisplay(pkg: String): String? {
+        val probe = com.aiphone.assistant.agent.ActivityProbe(context)
+        var lastOut = ""
+        repeat(2) { attempt ->
+            lastOut = AdbShell.startAppOnDisplay(
+                context = context,
+                displayId = displayId,
+                packageName = pkg,
+                fresh = true,
+            )
+            // 启动是异步的：给系统一点时间把任务建起来再看
+            delay(if (attempt == 0) 900 else 1500)
+            val landed = probe.currentTaskOnDisplay(displayId)
+            if (landed?.second == pkg) return null
+            Log.w(TAG, "第 ${attempt + 1} 次启动后 ${pkg} 没落在副屏 $displayId 上：${lastOut.take(120)}")
+        }
+        return "应用没能起在副屏上（display=${displayId}）：$pkg。" +
+            "底层返回：${lastOut.take(120).replace("\n", " ")}。" +
+            "可以在任务结束后重试，或改用主屏模式。"
+    }
+
     override suspend fun screenSize(): Pair<Int, Int>? = size
 
     override suspend fun screenshot(): ByteArray? = withContext(Dispatchers.IO) {
@@ -339,7 +371,7 @@ class DisplayChannel(
                     if (pkg.isBlank()) {
                         "打开应用缺少包名"
                     } else {
-                        ok(AdbShell.startAppOnDisplay(context, displayId, pkg), "打开应用")
+                        openAppOnDisplay(pkg)
                     }
                 }
 
