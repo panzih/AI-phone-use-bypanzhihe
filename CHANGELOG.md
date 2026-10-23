@@ -1,5 +1,30 @@
 # 更新日志
 
+## 0.10.4
+
+> 一行代码都不改功能，只把「Shizuku 启动不了」这件事讲清楚 + 一键复制命令。
+
+### 为什么 BlueStacks（和 AVD）上 Shizuku 会"用不了"
+
+三个原因叠在一起：
+
+1. **Shizuku 的服务是 shell 身份的一个进程，模拟器一重启就没了**，得重新拉一次。
+2. **Shizuku 13 起不再有 `start.sh`** —— 网上和旧教程里那句
+   `adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh`
+   必然报 "No such file or directory"；现在的入口是应用自带的
+   `<lib/abi>/libshizuku.so`。
+3. **模拟器没有"无线调试"**，所以 Shizuku 应用里那个「通过无线调试启动」点了也不会成 ——
+   只能在电脑上用 adb 跑它的 starter。
+
+### 这一版怎么帮到你
+
+- 权限页点「副屏」那一行（Shizuku 没在运行时），会**把这条机器上真实有效的命令复制到剪贴板**
+  并显示出来，形如：
+  `adb shell /data/app/~~xxxx/moe.shizuku.privileged.api-yyyy/lib/arm64/libshizuku.so`
+  —— 路径是从已安装的 Shizuku 的 APK 路径推出来的，换机器/换版本都不用改。
+- 「操作方式」选了 ADB/Shizuku 但服务没起来时，报错里也带同一条命令，
+  并说明"真机用无线调试、模拟器只能在电脑上跑这个"。
+
 ## 0.10.3
 
 > 这一版全是**副屏（虚拟显示）**的修复 —— 在 AVD 上用**免费模型**真机跑了十几轮

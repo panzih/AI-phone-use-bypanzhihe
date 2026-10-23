@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -100,6 +101,48 @@ object ShizukuBridge {
 
     fun ping(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
+    /**
+     * 在电脑上把 Shizuku 服务拉起来的那条命令（模拟器/没有无线调试时唯一的路）。
+     *
+     * 为什么需要它：**Shizuku 13 起不再有 start.sh**，网上和旧版应用里那句
+     * `adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh`
+     * 必然报 "No such file or directory" —— 在 BlueStacks 上尤其像"Shizuku 用不了"。
+     * 现在的入口是应用自带的 starter 二进制：`<lib/abi>/libshizuku.so`。
+     *
+     * 路径从已安装的 Shizuku 的 APK 路径推出来（`.../base.apk` → `.../lib/<abi>`），
+     * 所以换机器/换版本都不用改代码。
+     *
+     * @return 形如 `adb shell /data/app/~~xx/moe.shizuku.../lib/arm64/libshizuku.so`；
+     *         推不出来（没装/路径异常）返回 null
+     */
+    fun starterCommand(context: Context): String? = runCatching {
+        val pkg = SHIZUKU_PACKAGES.firstOrNull { p ->
+            runCatching { context.packageManager.getPackageInfo(p, 0) }.isSuccess
+        } ?: return null
+        val sourceDir = context.packageManager.getApplicationInfo(pkg, 0).sourceDir
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        val lib = sourceDir.removeSuffix("/base.apk") + "/lib/" + abi + "/libshizuku.so"
+        "adb shell $lib"
+    }.getOrNull()
+
+    /**
+     * 「Shizuku 没在运行」时给用户看的话。
+     *
+     * 分两条路写清楚：真机用无线调试；模拟器/连着电脑只能在电脑上跑 starter。
+     * 以前只有一句"打开 Shizuku 启动它"，在 BlueStacks 上等于没说 ——
+     * 那边根本没有无线调试。
+     */
+    fun startHint(context: Context): String {
+        val cmd = starterCommand(context)
+        return if (cmd != null) {
+            "Shizuku 没在运行。真机：打开 Shizuku 用「通过无线调试启动」；" +
+                "模拟器（BlueStacks / AVD）没有无线调试，只能在电脑上执行：" + cmd +
+                "（13 版起没有 start.sh 了，别再照抄旧教程；模拟器每次重启都要重跑一次）"
+        } else {
+            "Shizuku 没在运行。打开 Shizuku 应用启动它（无 root 时要用无线调试启动）。"
+        }
+    }
+
     fun hasPermission(): Boolean = runCatching {
         ping() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
     }.getOrDefault(false)
@@ -122,7 +165,7 @@ object ShizukuBridge {
         if (st != State.READY) {
             return when (st) {
                 State.NOT_INSTALLED -> "还没装 Shizuku。装好并启动它之后再用这个功能。"
-                State.NOT_RUNNING -> "Shizuku 没在运行。打开 Shizuku 启动它（无 root 时要用无线调试启动）。"
+                State.NOT_RUNNING -> startHint(context)
                 State.NO_PERMISSION -> "还没授权给纸盒。点「申请授权」并在弹框里允许。"
                 State.READY -> null
             }

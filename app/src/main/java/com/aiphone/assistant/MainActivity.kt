@@ -1022,7 +1022,7 @@ private fun AppRoot(
                 addLog(
                     LogKind.ERROR,
                     "操作方式是「ADB / Shizuku」，但 Shizuku 现在不可用（$why）。" +
-                        "到「权限」页把 Shizuku 启动并授权；" +
+                        ShizukuBridge.startHint(context) + "。启动后到「权限」页授权一次；" +
                         "或者把「操作方式」切回无障碍。",
                     "Shizuku 不可用",
                 )
@@ -1566,8 +1566,20 @@ private fun AppRoot(
                     ShizukuBridge.State.NO_PERMISSION -> ShizukuBridge.requestPermission()
                     ShizukuBridge.State.NOT_INSTALLED ->
                         toast = "请先安装 Shizuku 应用"
-                    ShizukuBridge.State.NOT_RUNNING ->
-                        toast = "请先打开 Shizuku、启动服务"
+                    ShizukuBridge.State.NOT_RUNNING -> {
+                        // 模拟器（BlueStacks/AVD）没有无线调试，只能靠电脑 adb 拉服务。
+                        // 把**这条机器上真实有效的路径**复制给用户，比一句"请先启动服务"有用得多。
+                        val cmd = ShizukuBridge.starterCommand(context)
+                        if (cmd != null) {
+                            runCatching {
+                                context.getSystemService(android.content.ClipboardManager::class.java)
+                                    ?.setPrimaryClip(android.content.ClipData.newPlainText("启动 Shizuku", cmd))
+                            }
+                            toast = "已复制启动命令（在电脑上执行）：$cmd"
+                        } else {
+                            toast = "请先打开 Shizuku、启动服务"
+                        }
+                    }
                     ShizukuBridge.State.READY ->
                         if (isRunning) {
                             OverlayBus.requestMoveToVirtualDisplay()
