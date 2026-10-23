@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 71      // 0.10.4：Shizuku 启动指引（13 版没有 start.sh）+ 一键复制启动命令
-        versionName = "0.10.4"
+        versionCode = 72      // 0.10.5：点击前复核（可选档位，点击前把落点局部图发回模型再确认）
+        versionName = "0.10.5"
     }
 
     /**

@@ -224,6 +224,49 @@ enum class ThinkingMode(
 }
 
 /**
+ * 点击前复核的档位（用户 2026-10-23 要求）。
+ *
+ * 模型给坐标时，那个点是**它估出来的**：控件树编号点击会落到元素中心，
+ * 坐标点击却可能落在相邻控件、空白处或图标缝隙里。复核就是把"即将点下去
+ * 的那一小块画面"裁出来、画上十字准星，再让模型自己看一眼 —— 在真正
+ * 注入之前把"点偏了"拦下来。
+ *
+ * 三档而不是开关：复核要额外调一次模型。不开是零成本；只复核坐标点击
+ * 能覆盖绝大多数"点偏"又不为精确的编号点击重复花钱；全复核最稳，
+ * 但每点一次都多一次往返。默认关，用户自己权衡。
+ */
+enum class TapReviewMode(
+    val id: String,
+    val label: String,
+    val note: String,
+) {
+    OFF(
+        id = "off",
+        label = "关闭",
+        note = "不额外请求，模型点哪儿就是哪儿。最省最快",
+    ),
+
+    COORDINATES(
+        id = "coords",
+        label = "只复核坐标点击",
+        note = "模型报 x/y（没有元素编号）时，点之前把落点附近截图发回给它再确认一次；" +
+            "按编号点的位置本来就是控件中心，不重复花这笔钱。推荐",
+    ),
+
+    ALL(
+        id = "all",
+        label = "复核所有点击",
+        note = "每次点击/长按/双击前都多问一次模型。最稳，但每点一次多一次请求，" +
+            "免费模型上会明显变慢",
+    );
+
+    companion object {
+        fun fromId(id: String?): TapReviewMode =
+            entries.firstOrNull { it.id == id } ?: OFF
+    }
+}
+
+/**
  * 上下文什么时候重开。
  *
  * ## 三档，从最左拉到最右
@@ -332,6 +375,14 @@ data class AppSettings(
      * 所以做成开关：想试的用户自己打开。
      */
     val overlayBlur: Boolean = false,
+
+    /**
+     * 点击前复核。见 [TapReviewMode]。
+     *
+     * 默认关：复核是一次**额外的模型请求**（还带一张局部截图），会拖慢每一步。
+     * 用户明确要求时才开。
+     */
+    val tapReview: TapReviewMode = TapReviewMode.OFF,
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,

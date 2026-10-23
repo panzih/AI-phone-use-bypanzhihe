@@ -102,6 +102,7 @@ class SettingsStoreTest {
             saveLogs = false,
             saveScreenshots = false,
             localDialogDismiss = false,
+            tapReview = TapReviewMode.ALL,
         )
         store.save(s)
         assertEquals(s, store.load())

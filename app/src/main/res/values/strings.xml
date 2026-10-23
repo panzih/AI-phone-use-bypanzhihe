@@ -92,6 +92,7 @@
     <string name="settings_vd_entry_desc">虚拟显示器，需要 Shizuku。AI 用截图 + 坐标在后台操作，主屏留给你；读不到控件，精度不如主屏。</string>
     <string name="log_delete">删除日志</string>
     <string name="settings_export_logs_button">导出日志</string>
+    <string name="settings_tap_review">点击前复核</string>
     <string name="settings_local_dismiss">端侧提示挡路弹窗</string>
     <string name="settings_local_dismiss_desc">广告、更新提示这类挡路弹窗，端侧会在元素列表里指出「安全关闭按钮是哪个」，关不关由云端模型决定（它可以直接点，也可以让端侧执行）。授权页和支付页端侧一律不碰。</string>
     <string name="settings_vd_mirror">看副屏画面</string>

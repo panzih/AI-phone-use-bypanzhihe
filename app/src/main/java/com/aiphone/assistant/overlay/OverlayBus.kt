@@ -24,6 +24,9 @@ enum class AgentPhase(val label: String, val color: Int) {
     SCREENSHOT("截图中", 0xFF29B6F6.toInt()),
     UPLOADING("上传中", 0xFFFFA726.toInt()),
     WAITING_MODEL("等待大模型返回结果", 0xFFAB47BC.toInt()),
+
+    /** 点击前复核：正在把落点局部图发给模型做二次确认 */
+    REVIEWING("点击前复核", 0xFF64B5F6.toInt()),
     /**
      * 上一次请求没成，正在等一会儿重发。
      *

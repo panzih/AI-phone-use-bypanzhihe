@@ -5,6 +5,7 @@ import com.aiphone.assistant.a11y.UiNode
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.llm.ChatTurn
 import com.aiphone.assistant.llm.LlmClient
+import com.aiphone.assistant.llm.LlmConfig
 import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.RunLogger
 import com.aiphone.assistant.overlay.AgentPhase
@@ -190,6 +191,40 @@ class Agent(
      * "请复盘"，前面全部命中；换一套提示词的话，几万 token 全按未命中计价。
      */
     private var systemPrompt: String = ""
+
+    /**
+     * 点击前复核专用的模型客户端。
+     *
+     * **必须和主客户端分开**：主客户端内部记着"上一次请求的消息指纹"，
+     * 用来算前缀复用率。复核是一次独立的短请求（只有一条 user 消息），
+     * 如果共用同一个实例，下一次主请求会把复核请求当成"上一次" ——
+     * 前缀复用率永远显示 0，缓存断了的告警也会乱响。
+     *
+     * 它只发一张局部图和一小段提示词，不碰主对话历史；超时/重试也收紧
+     * （复核失败就按原点执行，不能因为它把整个任务拖住）。
+     */
+    private val reviewLlm: LlmClient by lazy {
+        LlmClient(
+            LlmConfig(
+                baseUrl = settings.baseUrl,
+                apiKey = settings.apiKey,
+                model = settings.modelName,
+                useFreeModel = settings.useFreeModel,
+                thinking = settings.thinking,
+                customEffort = settings.customEffort,
+                timeoutMs = 60_000,
+                maxAttempts = 1,
+            )
+        )
+    }
+
+    /**
+     * 当前模型不接受图片时，本次任务后续不再复核。
+     *
+     * 免费池里有些模型只收文本；每个点击都撞一次 400 既慢又刷日志。
+     * 第一次识别到"不接受图片"就关掉，任务照常跑。
+     */
+    private var tapReviewVisionUnsupported = false
 
     /** 这次任务是否已经把纸盒让到后台（lazy，全程只让一次） */
     private var foregroundYielded = false
@@ -1315,6 +1350,9 @@ class Agent(
             // 这一步**真正执行过**几个动作。收尾闸只认它和"界面变了"两样证据，
             // 模型自己说的"已完成"不算
             var executedActions = 0
+            // 本批有没有动作被"点击前复核"叫停。被叫停的批次即使模型说
+            // finished，也不能当作完成 —— 那一下根本没点。
+            var reviewVetoedThisBatch = false
             // 本批截了几张图。一批最多一张：模型可能连写几个 capture，
             // 但同一批里画面几乎没变，多截只是多花钱
             var shotsThisBatch = 0
@@ -1529,18 +1567,6 @@ class Agent(
                     // 否则这一下会点到纸盒自己。
                     if (!isOpenApp) yieldForegroundIfNeeded()
 
-                    // 动作前控件树：用来算“动作前指纹”，tap 时还用来判断点的
-                    // 是不是发送/支付等有副作用的按钮（决定要不要自动重试）。
-                    //
-                    // 用 parseNodesOrNull：读不到控件树时返回 null，而不是一个
-                    // 空列表 —— 空列表的指纹是固定值，会把"没看到东西"算成
-                    // "界面没变化"，于是每次点击都被误判成没点中（0.8.5 日志里
-                    // 高德、中信证券都有这种无意义的"重试后仍无变化"）。
-                    val beforeNodes = if (isVerifiable(action.kind) && !controller.isBrowser) {
-                        withContext(Dispatchers.IO) { controller.parseNodesOrNull() }
-                    } else {
-                        null
-                    }
                     // 模型看到的那个控件（按编号操作时用来在当前帧里按身份找回它）。
                     // 编号是逐帧的，模型往返期间界面可能重排，直接点第 N 个
                     // 很可能点到别的控件上。
@@ -1550,10 +1576,89 @@ class Agent(
                         null
                     }
 
+                    // ---- 点击前复核（可选）----
+                    // 只改"这一下落在哪"，不改"谁来拍板"：动作仍是模型给的，
+                    // 复核员只在注入之前把"点偏/点空"这种错误拦下来。
+                    // 复核要额外一次模型请求（还带局部图），所以默认关、按档位开。
+                    var runAction = action
+                    var reviewNote: String? = null
+                    if (!tapReviewVisionUnsupported &&
+                        TapReview.shouldReview(
+                            settings.tapReview,
+                            action.kind,
+                            action.targetIndex,
+                            controller.isBrowser,
+                        )
+                    ) {
+                        val decision = reviewPointAction(action, hint, step, task, w, h)
+                        if (isStopped()) {
+                            finish(false, "你停止了任务（点击前复核时）")
+                            return
+                        }
+                        when {
+                            // 截图失败/复核请求失败：按原点执行，别让增益功能拖垮任务
+                            decision == null -> {}
+
+                            decision.abort -> {
+                                val why = decision.why.ifBlank { "复核员认为落点不对" }
+                                reviewNote = "复核叫停：$why"
+                                logger?.warn("点击前复核叫停 $single：$why", "复核")
+                                listener.onEvent(EventKind.THOUGHT, "点击前复核叫停：$why", "复核")
+                                results.add("$single → 复核叫停（$why），没有执行")
+                                reviewVetoedThisBatch = true
+                                break
+                            }
+
+                            decision.correctedX != null && decision.correctedY != null -> {
+                                val nx = decision.correctedX
+                                val ny = decision.correctedY
+                                reviewNote = "复核改点：(${action.x},${action.y}) → ($nx,$ny)" +
+                                    if (decision.why.isBlank()) "" else "（${decision.why}）"
+                                logger?.line(
+                                    "点击前复核改点：$single → ($nx,$ny)，${decision.why}",
+                                    "复核",
+                                )
+                                listener.onEvent(
+                                    EventKind.THOUGHT,
+                                    "点击前复核改点：($nx,$ny) ${decision.why}",
+                                    "复核",
+                                )
+                                // 改点后必须清掉 targetIndex：通道层只要看到编号
+                                // 就会按元素中心点，坐标会被无视。
+                                runAction = action.copy(targetIndex = 0, x = nx, y = ny)
+                                results.add("$single → $reviewNote")
+                            }
+
+                            !decision.parsed -> {
+                                logger?.warn("点击前复核：${decision.why}，按原点执行", "复核")
+                            }
+
+                            else -> {
+                                logger?.line("点击前复核通过：$single", "复核")
+                            }
+                        }
+                    }
+
+                    // 动作前控件树：用来算“动作前指纹”，tap 时还用来判断点的
+                    // 是不是发送/支付等有副作用的按钮（决定要不要自动重试）。
+                    //
+                    // 放在复核**之后**读：复核可能等上几秒，动作前的界面
+                    // 必须以真正要注入的那一刻为准。
+                    //
+                    // 用 parseNodesOrNull：读不到控件树时返回 null，而不是一个
+                    // 空列表 —— 空列表的指纹是固定值，会把"没看到东西"算成
+                    // "界面没变化"，于是每次点击都被误判成没点中（0.8.5 日志里
+                    // 高德、中信证券都有这种无意义的"重试后仍无变化"）。
+                    val beforeNodes = if (isVerifiable(runAction.kind) && !controller.isBrowser) {
+                        withContext(Dispatchers.IO) { controller.parseNodesOrNull() }
+                    } else {
+                        null
+                    }
+
                     // 注入前**只在真会撞上急停按钮时**才藏。
                     // 状态卡本身是 FLAG_NOT_TOUCHABLE，永远不会吃点击，
                     // 所以只需要担心按钮那一小块。
-                    val mustHide = touchesOverlayButtons(action)
+                    val mustHide = touchesOverlayButtons(runAction)
                     if (mustHide) {
                         OverlayBus.hide()
                         delay(OVERLAY_SETTLE_MS)
@@ -1561,7 +1666,11 @@ class Agent(
                     // 上报真实落点，屏幕上闪一圈水波 ——
                     // 用户能看见 AI 点在哪，是"点错了"还是"点了没反应"一眼可辨
                     val execResult = withContext(Dispatchers.IO) {
-                        controller.execute(action, { px, py -> OverlayBus.pulse(px, py) }, hint)
+                        controller.execute(
+                            runAction,
+                            { px, py -> OverlayBus.pulse(px, py) },
+                            if (runAction.targetIndex > 0) hint else null,
+                        )
                     }
                     if (mustHide) {
                         OverlayBus.show()
@@ -1641,7 +1750,7 @@ class Agent(
                         // "界面开始变了没有"，从而提前放行（见 awaitStable）
                         OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
                         val sr = awaitStable(
-                            action.kind,
+                            runAction.kind,
                             beforeFp = beforeNodes?.let { PageFingerprint.fingerprint(it) },
                         )
                         when (sr.outcome) {
@@ -1666,7 +1775,13 @@ class Agent(
                             WaitOutcome.DONE -> {
                                 executedActions++
                                 results.add(
-                                    verifyAction(action, single, beforeNodes, sr.fingerprint ?: "", hint)
+                                    verifyAction(
+                                        runAction,
+                                        if (reviewNote != null) "$single（$reviewNote）" else single,
+                                        beforeNodes,
+                                        sr.fingerprint ?: "",
+                                        if (runAction.targetIndex > 0) hint else null,
+                                    )
                                 )
                             }
                         }
@@ -1715,22 +1830,32 @@ class Agent(
             // ---- 这批动作就是任务收尾（模型给动作的同时说 finished）----
             // 动作已经逐个执行完，这里再正常结束，不再请求下一步。
             if (p.finished) {
-                // 有动作、但**一个都没真正执行**（全落空/全报错）时不能算完成。
-                // 以前这里无条件 success —— 用户看到"任务完成"，而屏幕上什么都没发生。
-                if (executedActions == 0) {
-                    val why = "这一批动作没有一个真正执行成功（${resultText.take(120)}），" +
-                        "任务并没有完成。"
-                    logger?.error(why, "防幻觉")
-                    listener.onEvent(EventKind.ERROR, why, "没做成")
-                    finish(false, why)
+                if (reviewVetoedThisBatch) {
+                    // 复核叫停了其中一下，这一批就不能算"做完" —— 即使模型
+                    // 在同一个输出里写了 finished。把决定交回模型重新看一屏。
+                    val why = "这一批里有动作被点击前复核叫停，任务不能算完成"
+                    logger?.warn(why, "复核")
+                    lastResult = (lastResult?.let { "$it " } ?: "") +
+                        "（$why。请重新看当前界面，确认下一步该怎么做；" +
+                        "如果确实已经完成，再回答一次 finished 并说明依据。）"
+                } else {
+                    // 有动作、但**一个都没真正执行**（全落空/全报错）时不能算完成。
+                    // 以前这里无条件 success —— 用户看到"任务完成"，而屏幕上什么都没发生。
+                    if (executedActions == 0) {
+                        val why = "这一批动作没有一个真正执行成功（${resultText.take(120)}），" +
+                            "任务并没有完成。"
+                        logger?.error(why, "防幻觉")
+                        listener.onEvent(EventKind.ERROR, why, "没做成")
+                        finish(false, why)
+                        return
+                    }
+                    // 挂起的切换请求由 finish() 无条件清理，无需在此分支处理
+                    val summary = p.summary.ifBlank { "模型判断任务已完成" }
+                    logger?.line("任务结束：$summary", "任务")
+                    listener.onEvent(EventKind.RESULT, summary, "完成")
+                    finish(true, summary)
                     return
                 }
-                // 挂起的切换请求由 finish() 无条件清理，无需在此分支处理
-                val summary = p.summary.ifBlank { "模型判断任务已完成" }
-                logger?.line("任务结束：$summary", "任务")
-                listener.onEvent(EventKind.RESULT, summary, "完成")
-                finish(true, summary)
-                return
             }
         }
 
@@ -2306,6 +2431,142 @@ class Agent(
                 history = allHistory + ChatTurn(ChatTurn.USER, ask),
                 shouldAbort = { isStopped() },
             )
+        }
+    }
+
+    /**
+     * 点击前复核：截当前屏 → 裁落点附近 → 画十字 → 问模型"这一下点对了吗"。
+     *
+     * 返回 null = 复核没做成（截图失败/模型不接受图片/请求失败），调用方
+     * **按原点执行**。复核是增益功能，不是安全闸，不能因为它失败把任务卡死；
+     * 真正的安全边界（动作白名单、坐标夹紧、有副作用不自动重试）仍在主循环。
+     *
+     * 这里刻意用独立的 [reviewLlm] 和**独立的一问一答**：不碰主对话历史，
+     * 也不影响主客户端的缓存前缀统计。
+     */
+    private suspend fun reviewPointAction(
+        action: TouchAction,
+        target: UiNode?,
+        step: Int,
+        task: String,
+        screenWidth: Int,
+        screenHeight: Int,
+    ): TapReview.Decision? {
+        // 按编号点击时，真正的落点是控件中心；模型给的 x/y 可能是 0
+        val px = target?.centerX ?: action.x
+        val py = target?.centerY ?: action.y
+        if (px <= 0 || py <= 0) {
+            logger?.warn(
+                "点击前复核：找不到落点（编号 ${action.targetIndex}，坐标 ${action.x},${action.y}），跳过",
+                "复核",
+            )
+            return null
+        }
+
+        OverlayBus.setPhase(AgentPhase.REVIEWING)
+        // 复核必须拍到目标应用，不能拍到纸盒自己；lazy 让开是幂等的
+        yieldForegroundIfNeeded()
+        OverlayBus.hide()
+        delay(OVERLAY_SETTLE_MS)
+        val shot = try {
+            withContext(Dispatchers.IO) { controller.captureFrame() }
+        } finally {
+            OverlayBus.show()
+        }
+        if (shot == null || shot.isEmpty()) {
+            val why = controller.lastScreenshotError() ?: "未知原因"
+            logger?.warn("点击前复核：截图失败（${why}），按原点执行", "复核")
+            return null
+        }
+
+        val crop = TapReview.cropFor(px, py, screenWidth, screenHeight)
+        val marked = withContext(Dispatchers.IO) {
+            TapReviewRenderer.cropAndMark(shot, crop, px, py)
+        }
+        if (marked == null || marked.isEmpty()) {
+            logger?.warn("点击前复核：局部图生成失败，按原点执行", "复核")
+            return null
+        }
+
+        val targetDesc = if (target != null) {
+            "[${target.index}] ${target.className} \"${target.text.ifBlank { target.contentDesc }.take(30)}\" " +
+                "@(${target.centerX},${target.centerY})"
+        } else {
+            "模型给的是坐标，没有按元素编号定位"
+        }
+        val request = TapReview.prompt(
+            task = task,
+            step = step,
+            actionDesc = AgentPrompt.describe(action),
+            targetDesc = targetDesc,
+            pointX = px,
+            pointY = py,
+            crop = crop,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+        )
+        logger?.line(
+            "点击前复核：${AgentPrompt.describe(action)}，落点 (${px},${py})，" +
+                "裁剪 ${crop.size}px @(${crop.left},${crop.top})，${marked.size} 字节",
+            "复核",
+        )
+
+        val started = System.currentTimeMillis()
+        val result = withContext(Dispatchers.IO) {
+            // 复核也是一次网络请求，急停同样要能掀掉它
+            val watchdog = launch {
+                while (isActive) {
+                    delay(STOP_POLL_MS)
+                    if (isStopped()) {
+                        reviewLlm.abort()
+                        return@launch
+                    }
+                }
+            }
+            try {
+                reviewLlm.chat(
+                    system = TapReview.SYSTEM,
+                    history = listOf(ChatTurn(ChatTurn.USER, request, marked)),
+                    shouldAbort = { isStopped() },
+                )
+            } finally {
+                watchdog.cancel()
+            }
+        }
+        val elapsed = System.currentTimeMillis() - started
+        return when (result) {
+            is LlmResult.Fail -> {
+                val msg = result.message
+                if (msg.contains("不接受图片") || msg.contains("image", ignoreCase = true)) {
+                    tapReviewVisionUnsupported = true
+                    logger?.warn(
+                        "点击前复核：当前模型不接受图片，本次任务后续不再复核（${msg}）",
+                        "复核",
+                    )
+                } else {
+                    logger?.warn("点击前复核请求失败（${msg}），按原点执行", "复核")
+                }
+                null
+            }
+
+            is LlmResult.Ok -> {
+                // 复核的 token 也要算进这一趟的总量（它是真花出去的）
+                promptTokens += result.promptTokens
+                completionTokens += result.completionTokens
+                val decision = TapReview.parse(result.text, crop, screenWidth, screenHeight)
+                val verdict = when {
+                    !decision.parsed -> "输出无法解析，按原点执行"
+                    decision.abort -> "不通过（叫停）"
+                    decision.correctedX != null -> "不通过（改点 ${decision.correctedX},${decision.correctedY}）"
+                    else -> "通过"
+                }
+                logger?.line(
+                    "点击前复核返回 ${elapsed}ms：${verdict}" +
+                        if (decision.why.isBlank()) "" else " —— ${decision.why}",
+                    "复核",
+                )
+                decision
+            }
         }
     }
 

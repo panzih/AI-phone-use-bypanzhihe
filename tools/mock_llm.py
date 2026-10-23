@@ -119,6 +119,19 @@ if SCRIPT == "browser":
         # 6 收尾
         '{"thought":"测试页按钮点过了，输出区显示已点击","finished":true,"summary":"内置浏览器测试完成：打开页面、读源码、执行 JS、按编号点击都正常"}',
     ]
+elif SCRIPT == "review":
+    # 「点击前复核」端到端剧本：
+    #   主请求 1：给一个**坐标点击**（没有 index，所以 coords 档会触发复核）
+    #   复核请求：故意说"偏左"，给出图内更正坐标 -> App 应改点并继续
+    #   主请求 2：收尾
+    # 复核请求不消耗主剧本索引（见 do_POST 里的 is_review）。
+    SCRIPTED = [
+        '{"thought":"先点一下目标","actions":[{"action":"tap","x":300,"y":400}]}',
+        '{"thought":"复核改点后确认页面已变","finished":true,"summary":"点击前复核测试完成"}',
+    ]
+    REVIEW_SCRIPT = [
+        '{"ok":false,"x":120,"y":130,"why":"偏左，往右一点"}',
+    ]
 elif SCRIPT == "bounded":
     # F1 有界性验证剧本：永远要图 + 给一个能解析的动作。
     # 预期：最多 5 次 ask 循环就会 finish(false)，不会无限烧钱。
@@ -166,7 +179,11 @@ else:
         '{"thought":"任务完成了","finished":true}',
     ]
 
-state = {"n": 0, "last_messages": None, "last_texts": None}
+state = {"n": 0, "total": 0, "review_n": 0, "last_messages": None, "last_texts": None}
+
+# 非 review 剧本也要有这个变量，避免 do_POST 里分支不存在
+if "REVIEW_SCRIPT" not in globals():
+    REVIEW_SCRIPT = ['{"ok":true}']
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -207,8 +224,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             body = {}
 
-        n = state["n"]
-        state["n"] += 1
+        serial = state["total"]
+        state["total"] += 1
 
         # 把这一次的**完整请求体**原样落盘。
         #
@@ -221,7 +238,7 @@ class Handler(BaseHTTPRequestHandler):
         if DUMP_PATH:
             try:
                 with open(DUMP_PATH, "a", encoding="utf-8") as f:
-                    f.write(f"===== 第 {n + 1} 次请求 =====\n")
+                    f.write(f"===== 第 {serial + 1} 次请求 =====\n")
                     f.write(raw.decode("utf-8", "replace"))
                     f.write("\n\n")
             except Exception as e:
@@ -259,22 +276,34 @@ class Handler(BaseHTTPRequestHandler):
                 parts = [p.get("text", "[图]") for p in c if isinstance(p, dict)]
                 texts.append(m.get("role") + ":" + "".join(parts)[:40])
 
-        prefix = 0
-        if state["last_texts"] is not None:
-            for a, b in zip(state["last_texts"], texts):
-                if a == b:
-                    prefix += 1
-                else:
-                    break
-        # 上一次的整条序列如果原样成为这次的前缀，就是 100% 命中
-        prev_len = len(state["last_texts"]) if state["last_texts"] else 0
-        state["last_texts"] = texts
+        # 复核请求是独立的一问一答，不参与主对话前缀比较；
+        # 也不能改 last_texts，否则下一次主请求会被误判成"前缀断了"。
+        system_text = "".join(
+            m.get("content", "") for m in messages
+            if isinstance(m, dict) and m.get("role") == "system" and isinstance(m.get("content"), str)
+        )
+        is_review = "点击前复核员" in system_text
 
-        print(f"\n=== 第 {n + 1} 次请求 ===")
+        prefix = 0
+        prev_len = len(state["last_texts"]) if state["last_texts"] else 0
+        if not is_review:
+            if state["last_texts"] is not None:
+                for a, b in zip(state["last_texts"], texts):
+                    if a == b:
+                        prefix += 1
+                    else:
+                        break
+            # 上一次的整条序列如果原样成为这次的前缀，就是 100% 命中
+            state["last_texts"] = texts
+
+        print(f"\n=== 第 {serial + 1} 次请求{'（点击前复核）' if is_review else ''} ===")
         print(f"  消息数    : {len(messages)}  上次 {prev_len} 条")
-        print(f"  前缀复用  : {prefix} / {prev_len} 条" +
-              ("   ✅ 前缀完整保留" if prev_len and prefix == prev_len else
-               "   ⚠️ 前缀被打断" if prev_len else ""))
+        if is_review:
+            print("  复核请求  : 独立上下文（不参与主对话前缀）")
+        else:
+            print(f"  前缀复用  : {prefix} / {prev_len} 条" +
+                  ("   ✅ 前缀完整保留" if prev_len and prefix == prev_len else
+                   "   ⚠️ 前缀被打断" if prev_len else ""))
         print(f"  模型      : {model}")
         # 注意：带图的消息数会随步数**增长**，这是正常的 ——
         # 图片跟着它所属的那条消息一直留在历史里，是缓存能命中的前提。
@@ -293,10 +322,19 @@ class Handler(BaseHTTPRequestHandler):
                     print(f"  控件树片段: {head}")
                 break
 
-        # 按剧本回，超过剧本长度就一直是 finished
-        idx = min(n, len(SCRIPTED) - 1)
-        content = SCRIPTED[idx]
-        print(f"  返回      : {content[:100]}")
+        # 按剧本回，超过剧本长度就一直是 finished。
+        # 复核请求单独走 REVIEW_SCRIPT，不消耗主剧本索引 —— 否则每复核一次
+        # 都会把主剧本往前推一格，端到端测试全部错位。
+        if is_review:
+            ridx = min(state["review_n"], len(REVIEW_SCRIPT) - 1)
+            state["review_n"] += 1
+            content = REVIEW_SCRIPT[ridx]
+            print(f"  复核返回  : {content[:100]}")
+        else:
+            idx = min(state["n"], len(SCRIPTED) - 1)
+            state["n"] += 1
+            content = SCRIPTED[idx]
+            print(f"  返回      : {content[:100]}")
 
         payload = {
             "id": "mock-1",

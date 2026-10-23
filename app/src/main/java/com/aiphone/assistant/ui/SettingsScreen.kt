@@ -72,6 +72,7 @@ import com.aiphone.assistant.R
 import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
+import com.aiphone.assistant.data.TapReviewMode
 import com.aiphone.assistant.data.ThinkingMode
 import com.aiphone.assistant.llm.EndpointSafety
 import com.aiphone.assistant.llm.ModelListFetcher
@@ -244,6 +245,13 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_local_dismiss_desc),
                     checked = s.localDialogDismiss,
                     onCheckedChange = { onSettingsChange(s.copy(localDialogDismiss = it)) },
+                )
+            }
+
+            item {
+                TapReviewSlider(
+                    mode = s.tapReview,
+                    onChange = { onSettingsChange(s.copy(tapReview = it)) },
                 )
             }
 
@@ -776,6 +784,54 @@ private const val STEPS_MIN = 10
  * 全工程统一用 `maxSteps <= 0` 表示不限（见 AppSettings.maxSteps）。
  */
 private const val STEPS_UNLIMITED = 100
+
+/**
+ * 点击前复核的三档滑块。
+ *
+ * 和上下文策略一样用滑块而不是开关：三档是一个「越来越严、也越来越慢」
+ * 的连续选择，光看"开/关"看不出"只复核坐标点击"这个折中档。
+ */
+@Composable
+private fun TapReviewSlider(
+    mode: TapReviewMode,
+    onChange: (TapReviewMode) -> Unit,
+) {
+    val options = TapReviewMode.entries
+    val current = options.indexOf(mode).coerceAtLeast(0)
+    var draft by remember(current) { mutableFloatStateOf(current.toFloat()) }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.settings_tap_review),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+
+        Slider(
+            value = draft,
+            onValueChange = { draft = it },
+            onValueChangeFinished = {
+                onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
+            },
+            valueRange = 0f..options.lastIndex.toFloat(),
+            steps = (options.size - 2).coerceAtLeast(0),
+        )
+
+        Text(
+            text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
 
 /**
  * 最大步数滑块。
