@@ -436,6 +436,23 @@ data class AppSettings(
      * 端侧连建议都不给（见 LocalRuleEngine）。
      */
     val localDialogDismiss: Boolean = true,
+
+    /**
+     * 启动时自动检查更新。
+     *
+     * 默认开。更新站是自己搭的，一次检查就一个 GET、几 KB，
+     * 但不更新就收不到修好的 bug，所以默认让它查。
+     * 关掉之后「关于」页仍有手动检查。
+     */
+    val autoCheckUpdate: Boolean = true,
+
+    /**
+     * 用户点过「跳过这个版本」的 versionCode。
+     *
+     * 只跳过**这一版**：下一版仍会提示。这是「跳过」不是「关掉更新」，
+     * 后者由 [autoCheckUpdate] 负责。
+     */
+    val skippedUpdateCode: Int = 0,
 ) {
     /** 界面上显示用的打码 Key，中间用星号 */
     val maskedApiKey: String

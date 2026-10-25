@@ -40,6 +40,8 @@ class SettingsStore(
         saveLogs = sp.getBoolean(KEY_SAVE_LOGS, DEFAULT.saveLogs),
         saveScreenshots = sp.getBoolean(KEY_SAVE_SHOTS, DEFAULT.saveScreenshots),
         localDialogDismiss = sp.getBoolean(KEY_LOCAL_DISMISS, DEFAULT.localDialogDismiss),
+        autoCheckUpdate = sp.getBoolean(KEY_AUTO_UPDATE, DEFAULT.autoCheckUpdate),
+        skippedUpdateCode = sp.getInt(KEY_SKIP_VERSION, DEFAULT.skippedUpdateCode),
     )
 
     fun save(s: AppSettings) {
@@ -59,6 +61,8 @@ class SettingsStore(
             .putBoolean(KEY_SAVE_LOGS, s.saveLogs)
             .putBoolean(KEY_SAVE_SHOTS, s.saveScreenshots)
             .putBoolean(KEY_LOCAL_DISMISS, s.localDialogDismiss)
+            .putBoolean(KEY_AUTO_UPDATE, s.autoCheckUpdate)
+            .putInt(KEY_SKIP_VERSION, s.skippedUpdateCode)
             .apply()
     }
 
@@ -107,5 +111,11 @@ class SettingsStore(
         const val KEY_SAVE_LOGS = "save_logs"
         const val KEY_SAVE_SHOTS = "save_screenshots"
         const val KEY_LOCAL_DISMISS = "local_dialog_dismiss"
+
+        /** 启动时检查更新（默认开，见 AppSettings.autoCheckUpdate） */
+        const val KEY_AUTO_UPDATE = "auto_check_update"
+
+        /** 「跳过这个版本」记下的 versionCode（0 = 没跳过任何版本） */
+        const val KEY_SKIP_VERSION = "skipped_update_code"
     }
 }

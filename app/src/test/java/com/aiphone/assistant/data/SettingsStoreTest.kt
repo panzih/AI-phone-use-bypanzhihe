@@ -107,4 +107,21 @@ class SettingsStoreTest {
         store.save(s)
         assertEquals(s, store.load())
     }
+
+    @Test
+    fun `更新设置_默认自动检查_且没跳过任何版本`() {
+        val s = AppSettings()
+        assertTrue("默认应该自动检查更新", s.autoCheckUpdate)
+        assertEquals("默认不该跳过任何版本", 0, s.skippedUpdateCode)
+    }
+
+    @Test
+    fun `跳过某个版本_重启后还记得`() {
+        store.save(AppSettings(skippedUpdateCode = 74))
+        assertEquals(74, store.load().skippedUpdateCode)
+
+        // 改别的字段不能把「已跳过」抹掉 —— 否则用户每次改设置都会被重新提示同一版
+        store.save(store.load().copy(maxSteps = 10))
+        assertEquals(74, store.load().skippedUpdateCode)
+    }
 }

@@ -26,6 +26,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -45,6 +47,11 @@ import com.aiphone.assistant.data.AppInfo
 @Composable
 fun AboutScreen(
     appVersion: String,
+    autoCheck: Boolean,
+    checking: Boolean,
+    checkHint: String,
+    onAutoCheckChange: (Boolean) -> Unit,
+    onCheckUpdate: () -> Unit,
     onBack: () -> Unit,
 ) {
     Scaffold(
@@ -77,6 +84,15 @@ fun AboutScreen(
             contentPadding = PaddingValues(bottom = 32.dp),
         ) {
             item { AppHeader(appVersion) }
+            item {
+                UpdateSection(
+                    autoCheck = autoCheck,
+                    checking = checking,
+                    checkHint = checkHint,
+                    onAutoCheckChange = onAutoCheckChange,
+                    onCheckUpdate = onCheckUpdate,
+                )
+            }
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp)) }
             item { LicenseSection() }
         }
@@ -180,6 +196,62 @@ private fun LicenseSection() {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 更新区：手动检查 + 启动时自动检查开关。
+ *
+ * 放在「关于」页而不是设置页：这里已经有版本号，用户想更新时先看的就是这一页。
+ */
+@Composable
+private fun UpdateSection(
+    autoCheck: Boolean,
+    checking: Boolean,
+    checkHint: String,
+    onAutoCheckChange: (Boolean) -> Unit,
+    onCheckUpdate: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "更新",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(onClick = onCheckUpdate, enabled = !checking) {
+                Text(if (checking) "检查中…" else "检查更新", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        if (checkHint.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = checkHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("启动时自动检查", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = "打开时查一次，有新版本会提示。关掉也能在这里手动查。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = autoCheck, onCheckedChange = onAutoCheckChange)
         }
     }
 }

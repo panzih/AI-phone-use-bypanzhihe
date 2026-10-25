@@ -14,6 +14,14 @@
         name="exports"
         path="exports/" />
 
+    <!--
+      下载好的更新包。直接 file:// 传给系统安装器在 Android 7 以上会抛
+      FileUriExposedException，所以走 FileProvider 换成 content://。
+    -->
+    <cache-path
+        name="updates"
+        path="updates/" />
+
     <files-path
         name="logs"
         path="纸盒/logs/" />

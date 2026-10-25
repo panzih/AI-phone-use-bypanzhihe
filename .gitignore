@@ -108,3 +108,11 @@ local.properties
 
 # ---------- 私人手稿/临时笔记：不公开 ----------
 docs/*.rtf
+
+# ---------- 更新站（update-site/）----------
+# 整个目录只在本地维护，不公开：clouddb.js 里带着云数据库的 publishableKey，
+# 推到公开仓库等于把「改版本记录 / 把下载地址指向别的包」的权限一起公开。
+update-site/
+
+# WorkBuddy 的应用标记（里面是本机绝对路径，入库没意义）
+.wbapp_*.genie

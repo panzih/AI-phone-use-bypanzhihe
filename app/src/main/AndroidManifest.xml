@@ -10,6 +10,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+      安装更新包。
+
+      Android 8 起装 APK 要走 PackageInstaller，应用必须先声明这个权限；
+      另外用户还得在系统设置里允许本应用「安装未知应用」
+      （`canRequestPackageInstalls()` 读的就是那个开关）。
+      两条缺一条，安装都会失败 —— 而且失败信息只有一句笼统的「应用未安装」。
+
+      这个权限是特殊权限，不弹运行时授权框，只能用
+      `ACTION_MANAGE_UNKNOWN_APP_SOURCES` 把用户带到系统设置页自己开。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       悬浮窗权限：AI 操作期间的顶部状态卡和底部急停按钮。
 
       这是**特殊权限**，不是运行时权限 —— 必须跳系统设置页让用户手动开，
