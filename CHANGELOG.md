@@ -1,5 +1,41 @@
 # 更新日志
 
+## 0.10.6
+
+> 修复**免费模式点发送就崩溃**：入口检查仍只认 API Key，把不需要 Key 的免费模式
+> 新用户拦在门外；拦截又发生在悬浮窗服务启动之后，服务被秒停触发系统异常，表现成闪退。
+
+### 根因（两个问题叠在一起）
+
+1. **判据不一致**：`MainActivity.runTask()` 无条件执行 `if (settings.apiKey.isBlank())`，
+   而免费模式（`useFreeModel = true`）本来就用网关的 `Bearer public`、不需要 Key
+   —— 设置页在免费模式下也**不显示 Key 输入框**。于是免费模式新用户 100% 被拦。
+   `LlmClient.chat()` 那边是对的（`!cfg.useFreeModel && apiKey.isBlank()`），
+   两边各写一套判据才漏的。
+2. **崩溃是拦截位置造成的**：拦截在 `runTask()` 里，而调用方此时已经
+   `startForegroundService` 起了悬浮窗。`runTask()` 立即 return → 协程 finally
+   马上 `OverlayService.stop()` → 服务还没走到 `startForeground` 就被停，
+   系统抛 `ForegroundServiceDidNotStartInTimeException`，整个 App 被打崩。
+   用户看到的不是「请填 Key」，而是「点发送就崩」。
+
+### 修法
+
+- 新增 `LlmConfig.missingApiKey(useFreeModel, apiKey)` 作为**唯一判据**，
+  入口（`MainActivity.submit` / `runTask` / 录制学习）与 `LlmClient.chat`
+  全部共用，免费/自定义 × 有无 Key 四种组合由 `ModelConfigTest` 钉死。
+- 把入口检查前移到 `submit()` 的**状态改动之前、起悬浮窗前**：缺 Key 时
+  只给一条可读提示并保留用户输入，不再进协程，也就不会触发服务秒停的崩溃路径。
+- 免费模式下 `runTask` 不再拦 Key；自定义模式空 Key 仍拦。
+
+### 验证
+
+- `./gradlew testDebugUnitTest`：**237 例全绿**（+4：`ModelConfigTest` 四种组合）。
+- **BlueStacks（Android 13）实测复现 + 修复确认**：
+  - 0.10.5 + 免费模式 + 空 Key，点发送 → 日志先打「还没填 API Key」，
+    紧接着 `ForegroundServiceDidNotStartInTimeException`（OverlayService）→ 进程被杀；
+  - 0.10.6 同样操作 → 正常进入第 1 步，请求到达网关（当日免费池 429
+    `Free usage limit reached`，与本次崩溃无关），pid 存活、无 FATAL。
+
 ## 0.10.5
 
 > 设置里新增**点击前复核**：模型要点下去之前，把落点附近的局部截图（画好十字准星）

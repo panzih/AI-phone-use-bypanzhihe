@@ -626,7 +626,7 @@ private fun AppRoot(
     fun learnRecording(nameHint: String) {
         val rec = Recorder.snapshot()
         if (rec.isEmpty) return
-        if (settings.apiKey.isBlank()) {
+        if (LlmConfig.missingApiKey(settings.useFreeModel, settings.apiKey)) {
             toast = context.getString(R.string.recording_need_api_key)
             return
         }
@@ -810,8 +810,8 @@ private fun AppRoot(
         )
         addLog(LogKind.ACTION, task, LABEL_COMMAND)
 
-        if (settings.apiKey.isBlank()) {
-            val msg = "还没填 API Key。到「设置 → 模型」里填一个再试。"
+        if (LlmConfig.missingApiKey(settings.useFreeModel, settings.apiKey)) {
+            val msg = "还没填 API Key。到「设置 → 模型」里填一个，或切到「免费」模式再试。"
             logger?.error(msg, "模型")
             addLog(LogKind.ERROR, msg, "模型未配置")
             logger?.close()
@@ -994,6 +994,20 @@ private fun AppRoot(
         }
         if (deletingLogs) {
             toast = context.getString(R.string.log_delete_in_progress)
+            return
+        }
+
+        // 模型配置检查必须和网络层共用同一份判据，而且必须在**起悬浮窗之前**
+        // （2026-10-25 线上问题）：
+        //   - 免费模式本来就不需要 Key，只认 `apiKey.isBlank()` 会把新用户拦死；
+        //   - 拦截放在 runTask 里时，悬浮窗服务已经 startForegroundService 了，
+        //     runTask 立刻 return → finally 马上 stopService → 服务还没
+        //     startForeground 就被停，系统抛 ForegroundServiceDidNotStartInTimeException，
+        //     用户看到的是「点发送就崩溃」，而不是一句可读的提示。
+        if (LlmConfig.missingApiKey(settings.useFreeModel, settings.apiKey)) {
+            val msg = "还没填 API Key。到「设置 → 模型」里填一个，或在同页切到「免费」模式再试。"
+            addLog(LogKind.ERROR, msg, "模型未配置")
+            toast = msg
             return
         }
 

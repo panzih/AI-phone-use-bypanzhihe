@@ -70,7 +70,22 @@ data class LlmConfig(
      * 重发一百次结果一样，只会白烧额度。
      */
     val maxAttempts: Int = 3,
-)
+) {
+    companion object {
+        /**
+         * 这套模型配置能不能发请求。
+         *
+         * 免费通道走网关的 `Bearer public`，**不需要用户填 Key**；自定义通道必须有。
+         * 入口（MainActivity.submit）和 [LlmClient.chat] 必须共用这一份判据 ——
+         * 2026-10-25 的线上问题就是入口只认 Key，把免费模式的新用户直接拦在门外：
+         * 点发送 → runTask 提前 return → 协程 finally 立刻 stopService，
+         * 悬浮窗服务还没 startForeground 就被停掉，系统抛
+         * ForegroundServiceDidNotStartInTimeException 把整个 App 打崩。
+         */
+        fun missingApiKey(useFreeModel: Boolean, apiKey: String): Boolean =
+            !useFreeModel && apiKey.isBlank()
+    }
+}
 
 /**
  * 一条对话消息。
@@ -386,8 +401,8 @@ class LlmClient(private val cfg: LlmConfig) {
          */
         shouldAbort: (() -> Boolean)? = null,
     ): LlmResult {
-        if (!cfg.useFreeModel && cfg.apiKey.isBlank()) {
-            return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个。")
+        if (LlmConfig.missingApiKey(cfg.useFreeModel, cfg.apiKey)) {
+            return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个，或切到「免费」模式。")
         }
 
         // 公网明文 HTTP 警告：API Key 会明文经过网络。
