@@ -104,6 +104,10 @@ local.properties
 # 物料都在本机 docs/promo/，要发布时从本机取。
 docs/promo/*.mp4
 docs/promo/raw/
+# v2（90 秒解说版）同理：素材、中间产物、每段解说音频都不入库，源码与说明入库
+docs/promo/v2/raw/
+docs/promo/v2/audio/
+docs/promo/v2/*.mp4
 
 # 本机备份的完整开发历史（见 else/README.md）
 *.bundle
