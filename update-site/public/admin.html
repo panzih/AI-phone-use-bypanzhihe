@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>纸盒 · 更新后台</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="stylesheet" href="/style.css{{SHARE}}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23b45309'/><path d='M8 11l8-4 8 4v10l-8 4-8-4z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/></svg>">
+</head>
+<body>
+
+<!-- ───────────── 登录 ───────────── -->
+<div id="loginView" class="login-shell hidden">
+  <div class="login-card">
+    <h1>更新后台</h1>
+    <p class="sub" id="loginSub">输入管理口令</p>
+
+    <div id="loginAlert" class="alert hidden"></div>
+
+    <div class="field">
+      <label id="pwdLabel">管理口令</label>
+      <input type="password" id="pwd" autocomplete="current-password" placeholder="至少 6 位">
+    </div>
+
+    <div class="field hidden" id="pwd2Field">
+      <label>再输一遍</label>
+      <input type="password" id="pwd2" autocomplete="new-password" placeholder="确认口令">
+    </div>
+
+    <button class="btn primary" id="loginBtn" style="width:100%">进入后台</button>
+
+    <p class="sub" style="margin:16px 0 0; font-size:11.5px; line-height:1.6;">
+      口令用 PBKDF2 哈希后存在站点的 SQLite 里，明文不落盘。忘了口令就在服务器上清掉
+      <span class="mono">data/paperbox.db</span> 里的 admin_hash（会连数据一起清空，请先导出备份）。
+    </p>
+  </div>
+</div>
+
+<!-- ───────────── 后台 ───────────── -->
+<div id="appView" class="wrap hidden">
+  <div class="topbar">
+    <a class="brand" href="/{{SHARE}}">
+      <span class="box">□</span>
+      纸盒 <small>更新后台</small>
+    </a>
+    <nav class="topnav">
+      <a href="/{{SHARE}}" target="_blank">下载页</a>
+      <a href="#" id="refreshLink">刷新</a>
+      <a href="#" id="backupLink">备份</a>
+      <a href="#" id="pwdLink">改口令</a>
+      <a href="#" id="logoutLink">退出</a>
+    </nav>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="label">总下载</div>
+      <div class="value" id="stDownloads">—</div>
+      <div class="delta" id="stDownloadsToday">今日 —</div>
+    </div>
+    <div class="stat">
+      <div class="label">查询更新</div>
+      <div class="value" id="stChecks">—</div>
+      <div class="delta" id="stChecksToday">今日 —</div>
+    </div>
+    <div class="stat">
+      <div class="label">独立设备</div>
+      <div class="value" id="stDevices">—</div>
+      <div class="delta" id="stDevicesHint">按设备号去重</div>
+    </div>
+    <div class="stat">
+      <div class="label">当前最新版</div>
+      <div class="value" id="stLatest" style="font-size:23px;">—</div>
+      <div class="delta" id="stLatestHint">—</div>
+    </div>
+  </div>
+
+  <div class="chart-row" id="chartRow">
+    <section class="card" style="margin-bottom:0;">
+      <h2>最近 30 天</h2>
+      <p class="sub">每天有多少设备来查更新、有多少次下载</p>
+      <div class="chart-wrap chart" id="chart"></div>
+      <div class="legend">
+        <span><i style="background:#e8a87c;"></i>查询更新</span>
+        <span><i style="background:#c2410c;"></i>下载</span>
+      </div>
+    </section>
+
+    <section class="card" style="margin-bottom:0;">
+      <h2>版本分布</h2>
+      <p class="sub">客户端正在用的版本（按查询次数）</p>
+      <div class="bars" id="versionBars"><span class="muted" style="font-size:12.5px;">暂无数据</span></div>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:18px;">
+    <h2>发布新版本</h2>
+    <p class="sub">上传 APK 后填版本信息即可。发布后立刻成为「最新版」，App 下次检查就能拿到。</p>
+
+    <div class="grid3">
+      <div class="field">
+        <label>版本名 <span class="hint">显示给用户，如 0.10.7</span></label>
+        <input type="text" id="fName" placeholder="0.10.7">
+      </div>
+      <div class="field">
+        <label>versionCode <span class="hint">必须比上一个大</span></label>
+        <input type="number" id="fCode" placeholder="74">
+      </div>
+      <div class="field">
+        <label>渠道</label>
+        <select id="fChannel">
+          <option value="stable">stable（正式）</option>
+          <option value="beta">beta（测试）</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>更新说明 <span class="hint">会原样显示在下载页</span></label>
+      <textarea id="fChangelog" placeholder="修了什么、加了什么。空行分段，行首 - 会渲染成列表。"></textarea>
+    </div>
+
+    <div class="field">
+      <label>安装包 <span class="hint">上传文件，或填一个外链（二选一）</span></label>
+      <input type="file" id="fFile" accept=".apk,application/vnd.android.package-archive">
+      <div class="progress" id="uploadProgress"><i></i></div>
+      <input type="text" id="fApkUrl" placeholder="或填直链：https://github.com/…/app-release.apk" style="margin-top:9px;">
+      <p class="hint" style="margin:6px 0 0;">外链也走本站的下载统计，照样能记到「下载」里。</p>
+    </div>
+
+    <div class="field" style="display:flex; gap:22px; flex-wrap:wrap;">
+      <label class="checkline" style="font-weight:400;">
+        <input type="checkbox" id="fForce"> 强制更新（不更新就进不去）
+      </label>
+      <label class="checkline" style="font-weight:400;">
+        低于此 versionCode 必须更新
+        <input type="number" id="fMin" value="0" style="width:90px;">
+      </label>
+    </div>
+
+    <div style="display:flex; gap:10px; align-items:center; margin-top:4px;">
+      <button class="btn primary" id="publishBtn">上传并发布</button>
+      <span class="muted" id="publishHint" style="font-size:12.5px;"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>版本列表</h2>
+    <p class="sub">「设为最新」可以把某个旧版本退回成线上版本。</p>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr>
+            <th>版本</th>
+            <th class="num">code</th>
+            <th>状态</th>
+            <th class="num">大小</th>
+            <th class="num">下载</th>
+            <th>发布</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="versionBody">
+          <tr><td colspan="7" class="muted">读取中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>给 App 用的接口</h2>
+    <p class="sub">填进 App 的更新检查里。固定地址，发新版本不用改。</p>
+    <div class="code" id="apiUrl">—</div>
+    <div style="display:flex; gap:10px; margin-top:12px;">
+      <button class="btn ghost small" id="copyApi">复制接口地址</button>
+      <a class="btn ghost small" id="tryApi" target="_blank" href="#">在浏览器里试一下</a>
+    </div>
+  </section>
+
+  <section id="recentCard" class="card">
+    <h2>最近查询</h2>
+    <p class="sub">最近 20 次检查更新</p>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr><th>时间</th><th>客户端版本</th><th>结果</th><th>设备</th><th>IP</th></tr>
+        </thead>
+        <tbody id="recentBody"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/admin.js{{SHARE}}"></script>
+</body>
+</html>

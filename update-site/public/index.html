@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>纸盒 · 下载与更新</title>
+<meta name="description" content="纸盒 App 的官方下载页与自动更新接口。">
+<link rel="stylesheet" href="/style.css{{SHARE}}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23b45309'/><path d='M8 11l8-4 8 4v10l-8 4-8-4z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/></svg>">
+</head>
+<body>
+
+<div class="wrap">
+  <div class="topbar">
+    <a class="brand" href="/{{SHARE}}">
+      <span class="box">□</span>
+      纸盒 <small>下载与更新</small>
+    </a>
+    <nav class="topnav">
+      <a href="/admin{{SHARE}}">管理后台</a>
+    </nav>
+  </div>
+
+  <section class="hero">
+    <span class="pill" id="latestPill"><span class="dot"></span>正在读取最新版本</span>
+    <h1 id="latestTitle">纸盒</h1>
+    <p class="meta" id="latestMeta">—</p>
+    <div class="actions">
+      <a class="btn primary" id="downloadBtn" href="#" aria-disabled="true">下载 APK</a>
+      <a class="btn ghost" href="#history">历史版本</a>
+    </div>
+    <p class="meta" id="downloadHint" style="margin: 18px 0 0; font-size: 12.5px;"></p>
+  </section>
+
+  <section class="card">
+    <h2>这个版本改了什么</h2>
+    <p class="sub" id="changelogSub">—</p>
+    <div id="changelog" class="muted">读取中…</div>
+  </section>
+
+  <section class="card" id="history">
+    <h2>历史版本</h2>
+    <p class="sub">点版本号下载对应安装包。下载量按请求次数统计。</p>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr>
+            <th>版本</th>
+            <th>发布日期</th>
+            <th class="num">大小</th>
+            <th class="num">下载</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="5" class="muted">读取中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>自动更新接口</h2>
+    <p class="sub">App 每次启动时请求一次，拿到最新版本号和下载地址。无需登录、无 Key。</p>
+    <div class="code" id="apiExample">GET /api/v1/update?package=com.aiphone.assistant&amp;versionCode=73&amp;channel=stable</div>
+    <p class="sub" style="margin: 14px 0 0;">
+      返回 <span class="mono">hasUpdate</span> / <span class="mono">latest.versionCode</span> /
+      <span class="mono">latest.downloadUrl</span> / <span class="mono">latest.sha256</span> /
+      <span class="mono">force</span>。完整字段见项目根目录的
+      <span class="mono">README.md</span>。
+    </p>
+  </section>
+
+  <p class="muted" style="font-size: 12px; text-align: center; margin-top: 28px;">
+    纸盒 · 让 AI 直接操作你的安卓手机
+  </p>
+</div>
+
+<script src="/app.js{{SHARE}}"></script>
+</body>
+</html>
