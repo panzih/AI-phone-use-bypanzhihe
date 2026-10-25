@@ -106,6 +106,10 @@ app/src/main/java/com/aiphone/assistant/
 - 日志、截图、对话上下文默认都留在本机，只有你主动导出才会离开手机
 - 无广告、无统计、无后台联网（除了你主动发模型请求）
 
+## 路线图
+
+还没做的、明确不做的、以及哪些"看着像 bug 其实是平台限制"，都写在 [docs/ROADMAP.md](docs/ROADMAP.md)。
+
 ## 开源协议
 
 [MIT](LICENSE)
