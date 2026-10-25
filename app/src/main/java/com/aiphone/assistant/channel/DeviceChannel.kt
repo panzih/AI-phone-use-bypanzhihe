@@ -5,9 +5,14 @@ import com.aiphone.assistant.touch.TouchAction
 /**
  * 设备控制通道。
  *
- * 现在只有无障碍一个实现。保留这层抽象是为了：
+ * 现有三个实现：
+ *   - [AccessibilityChannel] —— 默认通道，控件树 + 手势 + 系统截图
+ *   - [DisplayChannel] —— shell 通道（Shizuku/ADB）：副屏，或"主屏但动作走 `input`"
+ *   - [BrowserChannel] —— 内置 WebView，把 DOM 摘要映射成同一套元素
+ *
+ * 保留这层抽象是为了：
  *   1. 界面不直接依赖 AutoService 这种系统组件，方便测试和替换
- *   2. 将来若要加别的通道（比如 ADB 兜底），界面代码不用动
+ *   2. 加通道时只改这里和 ChannelController，上层不用动
  *
  * 所有坐标都是**真实屏幕像素**。归一化坐标的换算在更上层做，
  * 这一层不掺和，避免两处都换算导致算两次。
