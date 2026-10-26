@@ -76,6 +76,29 @@ RLS 对 `anon` 开放读写 —— 读写都由 Node 进程发起，key 只在�
 | POST | `/api/v1/admin/upload` | 上传 APK（`X-Filename` 头 + 裸二进制） |
 | GET | `/api/v1/admin/backup` | 导出 JSON |
 
+## 发布新版本
+
+1. **把新包放进 `data/apk/`**，并把线上还在提供下载的旧包也一起放回去 ——
+   部署是**覆盖式**的（远端 `data/` 会被本地这份替换），漏掉哪个，
+   哪个版本的 `directUrl` 就 404（可以从线上 `/files/...` 先下载回来）。
+2. 重新部署这个目录（`data/` 随目录上传；`.gitignore` 只管 git，不管部署）。
+3. 写版本记录：调 `cloud.createVersion({...})`（本地 node 脚本直连云库即可，不用登录后台）。
+4. 验证两件事：`/api/v1/update?versionCode=<上一版>` 返回新版本号；
+   走 `downloadUrl` 真下一次，`sha256` 与本地一致。
+
+### ⚠️ 别用 `/api/v1/admin/upload` 传大包
+
+托管网关对 POST body 有大小上限：**10KB 能到达应用**（返回 401 说明鉴权走到了），
+**1MB 直接被网关拒成 502 bad gateway**，而 502 发生在鉴权之前 ——
+表现出来就是「明明登录了却上传失败」。3.7MB 的安装包只能靠**部署**带上去。
+
+### ⚠️ 唯一约束是 `(package, channel, version_code)`，软删的记录仍占坑
+
+重新发布同一版本号时会撞 `app_versions_unique`。两条路：复用那条旧记录
+（`is_deleted=false` + 改成新的 `apk_path` / `size` / `sha256`），或者硬删它。
+另外 `createVersion` 会**先**把旧的 `is_latest` 摘掉再插入 —— 插入失败就把
+「没有 latest」留给你（`latestVersion` 有兜底会返回最大版本号，但别依赖它）。
+
 ## 安全
 
 - 全部响应带 `X-Content-Type-Options` / `X-Frame-Options: DENY` / HSTS /
