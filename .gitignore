@@ -128,3 +128,10 @@ update-site/node_modules/
 
 # WorkBuddy 的应用标记（里面是本机绝对路径，入库没意义）
 .wbapp_*.genie
+# onetake 版宣传片：成片与素材不入库（源码 comp.html / sound.py / README 入库）
+docs/promo/onetake/*.mp4
+docs/promo/onetake/sfx.wav
+docs/promo/onetake/motion.js
+docs/promo/onetake/probe/
+docs/promo/onetake/vo/
+docs/promo/onetake/_frames/

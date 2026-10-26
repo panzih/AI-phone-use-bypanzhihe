@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>纸盒 · 一个纸箱能装什么</title>
+<!--
+  onetake composition · 纸盒 60 秒宣传片（一镜到底 · 一个纸箱）
+
+  全片只有一个物体：一个牛皮纸箱。它闭着 → 被掀开 → 镜头钻进箱内 → 箱底那块面变成屏幕 →
+  屏幕上发生的事一件件长出来 → 最后一切折回箱子、合盖、压平，压平的那块面就是「纸盒」两个字。
+  没有硬切：箱盖→箱内→屏幕→落点水波→进度点→设置页→卡片→箱底，每一次转场都由前一件东西长出来。
+
+  契约：window.__seek(t) 是纯函数；window.__ready / window.__meta / window.__motion。
+-->
+<style>
+:root{
+  --bg:#0d0b09;
+  --kraft:#e8cfa6; --kraft-hi:#f3dfbe; --kraft-lo:#8d6c45;
+  --ink:#f4ecdd; --dim:#a2947f; --blue:#6fb2ff;
+  --line:rgba(244,236,221,.13);
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:var(--bg);
+  font-family:'PingFang SC','Hiragino Sans GB',sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+#stage{position:absolute;inset:0;overflow:hidden}
+#cv{position:absolute;left:0;top:0;width:1920px;height:1080px}
+#world{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0}
+.panel{position:absolute;left:0;top:0;width:720px;height:1280px;transform-origin:0 0;
+  border-radius:40px;overflow:hidden;box-shadow:0 60px 140px rgba(0,0,0,.65)}
+#hud{position:absolute;right:16px;bottom:12px;font:13px 'SF Mono',Menlo,monospace;color:#c33;display:none}
+
+/* ── App 界面（按 0.10.7 的真实排版复刻，720×1280） ── */
+#app .appbg{position:absolute;inset:0;background:
+  radial-gradient(120% 70% at 50% 0%, #241d17 0%, #14100d 42%, #0b0908 100%)}
+.app-head{position:absolute;left:0;right:0;top:0;height:96px;display:flex;align-items:center;
+  padding:0 34px;gap:16px;border-bottom:1px solid rgba(244,236,221,.07)}
+.app-head .t{font-size:34px;font-weight:600;letter-spacing:.5px}
+.app-head .dot{width:9px;height:9px;border-radius:50%;background:var(--blue);box-shadow:0 0 16px var(--blue)}
+.app-head .gear{margin-left:auto;width:44px;height:44px;border-radius:50%;
+  border:1.5px solid rgba(244,236,221,.22);position:relative}
+.app-head .gear:after{content:"";position:absolute;inset:13px;border-radius:50%;border:2px solid rgba(244,236,221,.5)}
+#empty{position:absolute;left:0;right:0;top:96px;bottom:214px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:26px}
+#empty svg{width:150px;height:150px}
+#empty .e1{font-size:40px;font-weight:600;letter-spacing:2px}
+#empty .e2{font-size:26px;color:var(--dim);letter-spacing:1px}
+
+#thread{position:absolute;left:0;right:0;top:96px;bottom:214px;padding:30px 34px;
+  display:flex;flex-direction:column;justify-content:flex-end;gap:20px}
+.msg{align-self:flex-end;max-width:540px;background:#2a2118;border:1px solid rgba(244,236,221,.08);
+  border-radius:26px 26px 8px 26px;padding:20px 26px;font-size:30px;line-height:1.4}
+#stepslist{display:flex;flex-direction:column;gap:16px;align-items:flex-start}
+.step{display:flex;align-items:center;gap:14px;font-size:25px;color:#cfc3b0}
+.step .b{width:10px;height:10px;border-radius:50%;background:var(--blue);box-shadow:0 0 14px rgba(111,178,255,.8)}
+.step .n{font-family:'SF Mono',Menlo,monospace;font-size:21px;color:#8c8070}
+.step .x{font-family:'SF Mono',Menlo,monospace;font-size:21px;color:#a89a85}
+
+.inbar{position:absolute;left:22px;right:22px;bottom:26px;height:112px;border-radius:56px;
+  background:#211a14;border:1px solid rgba(244,236,221,.10);display:flex;align-items:center;padding:0 12px 0 34px}
+.inbar .ph{font-size:28px;color:#7a6e5e}
+.inbar .txt{font-size:29px;color:var(--ink);white-space:pre}
+.inbar .cur{display:inline-block;width:3px;height:33px;background:var(--ink);margin-left:3px;vertical-align:-5px}
+.send{margin-left:auto;width:88px;height:88px;border-radius:50%;background:#3a2f24;position:relative}
+.send:after{content:"";position:absolute;left:29px;top:32px;width:26px;height:26px;
+  border-left:3px solid #cfc3b0;border-top:3px solid #cfc3b0;transform:rotate(45deg)}
+
+#bar{position:absolute;left:18px;right:18px;bottom:150px;border-radius:26px;background:rgba(24,19,15,.95);
+  border:1px solid rgba(244,236,221,.14);padding:20px 24px}
+#bar .r1{display:flex;align-items:center;gap:14px;font-size:26px;color:#e8ddcb}
+#bar .r1 .k{color:var(--dim);font-size:21px}
+#bar .r2{margin-top:12px;font-size:22px;color:#a2957f;font-family:'SF Mono',Menlo,monospace}
+#bar .r3{margin-top:16px;display:flex;gap:12px;align-items:center}
+#bar .chip{font-size:20px;color:#c8bca9;border:1px solid rgba(244,236,221,.18);border-radius:999px;padding:6px 17px}
+#bar .prog{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:21px;color:#cfc3b0;
+  font-family:'SF Mono',Menlo,monospace}
+#bar .prog .p{width:11px;height:11px;border-radius:50%;background:var(--blue);box-shadow:0 0 14px var(--blue)}
+
+/* ── 设置页 ── */
+#set .bg{position:absolute;inset:0;background:linear-gradient(180deg,#1b1612 0%,#12100d 100%)}
+#set .hd{position:absolute;left:34px;top:46px;font-size:36px;font-weight:600}
+#set .sub{position:absolute;left:34px;top:116px;font-size:23px;color:var(--dim)}
+#set .kv{position:absolute;left:34px;right:34px;padding:24px 24px;border-radius:20px;
+  background:rgba(255,255,255,.035);border:1px solid rgba(244,236,221,.09)}
+#set .kv .lb{font-size:20px;color:var(--dim);letter-spacing:.5px}
+#set .kv .vl{margin-top:8px;font-size:26px;font-family:'SF Mono',Menlo,monospace;color:#e9dfcd}
+#set .modes{position:absolute;left:34px;top:626px;display:flex;gap:14px}
+#set .modes div{font-size:23px;padding:13px 28px;border-radius:999px;border:1px solid rgba(244,236,221,.2);color:#cbbfad}
+#set .modes div.on{background:var(--kraft);border-color:var(--kraft);color:#241c12;font-weight:600}
+#set .sect{position:absolute;left:34px;font-size:21px;color:var(--dim);letter-spacing:1px}
+#set .track{position:absolute;left:68px;right:68px;height:8px;border-radius:4px;background:rgba(244,236,221,.14)}
+#set .knob{position:absolute;top:-18px;width:44px;height:44px;border-radius:50%;background:var(--kraft);
+  box-shadow:0 6px 20px rgba(0,0,0,.55)}
+#set .pills{position:absolute;left:68px;right:68px;display:flex;justify-content:space-between}
+#set .pills span{font-size:19px;color:#8a7e6c;font-family:'SF Mono',Menlo,monospace}
+#set .arg{position:absolute;left:34px;right:34px;font-size:21px;font-family:'SF Mono',Menlo,monospace;
+  color:#9fe0b4;line-height:1.5}
+
+/* ── 隐私清单 ── */
+#priv .bg{position:absolute;inset:0;background:linear-gradient(180deg,#171310 0%,#0e0c0a 100%)}
+#priv .hd{position:absolute;left:44px;top:296px;font-size:52px;font-weight:600;line-height:1.24}
+#priv .rows{position:absolute;left:44px;right:44px;top:610px}
+#priv .row{display:flex;align-items:flex-start;gap:20px;padding:30px 0;border-top:1px solid rgba(244,236,221,.1)}
+#priv .bx{width:30px;height:30px;border-radius:9px;border:1.6px solid rgba(244,236,221,.3);flex:none;
+  margin-top:6px;position:relative}
+#priv .ck{position:absolute;left:9px;top:3px;width:8px;height:15px;border-right:3px solid #241c12;
+  border-bottom:3px solid #241c12;transform:rotate(45deg)}
+#priv .tx{font-size:28px;line-height:1.4;color:#ddd2c0}
+#priv .tx i{font-style:normal;color:var(--dim);font-size:22px;display:block;margin-top:6px}
+
+/* ── 字标 ── */
+#mark{position:absolute;white-space:nowrap;font-family:'Songti SC','STSong',serif;
+  font-size:208px;font-weight:700;letter-spacing:18px;color:var(--ink)}
+#mark span{display:inline-block;transform-origin:50% 88%}
+#tag{position:absolute;white-space:nowrap;font-size:38px;color:#b8a992;letter-spacing:4px}
+#repo{position:absolute;white-space:nowrap;font-family:'SF Mono',Menlo,monospace;font-size:23px;color:#6f6355}
+#ripple{position:absolute;left:0;top:0;border-radius:50%;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv" width="1920" height="1080"></canvas>
+  <div id="world">
+    <div id="app" class="panel">
+      <div class="appbg"></div>
+      <div class="app-head"><div class="dot"></div><div class="t">操作手机</div><div class="gear"></div></div>
+      <div id="empty">
+        <svg viewBox="0 0 108 108" fill="none" stroke="#e8cfa6" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 88V46L46 20H88V62L62 88H20Z"/><path d="M20 46H62V88"/><path d="M62 46L88 20"/>
+        </svg>
+        <div class="e1">AI 操作手机</div><div class="e2">By 潘纸盒</div>
+      </div>
+      <div id="thread">
+        <div class="msg">把 WiFi 关掉</div>
+        <div id="stepslist"></div>
+      </div>
+      <div class="inbar">
+        <div class="ph" id="ph">告诉 AI 下一步做什么</div>
+        <div class="txt" id="typed"></div><i class="cur" id="cur"></i>
+        <div class="send" id="send"></div>
+      </div>
+      <div id="bar">
+        <div class="r1"><span class="k">当前</span><span id="bnow">打开应用</span></div>
+        <div class="r2" id="bnext">下一步：读取屏幕控件树</div>
+        <div class="r3"><span class="chip">补充</span><span class="chip">接管</span><span class="chip">后台</span>
+          <span class="prog"><span class="p"></span><span id="bstep">第 3 / 19 步</span></span></div>
+      </div>
+    </div>
+
+    <div id="set" class="panel">
+      <div class="bg"></div>
+      <div class="hd">设置</div>
+      <div class="sub">模型 · 思考强度</div>
+      <div class="kv" style="top:206px"><div class="lb">接口地址</div><div class="vl">https://api.deepseek.com</div></div>
+      <div class="kv" style="top:358px"><div class="lb">API Key</div><div class="vl">••••••••••••••</div></div>
+      <div class="kv" style="top:510px"><div class="lb">模型</div><div class="vl">deepseek-chat</div></div>
+      <div class="modes"><div class="on">自定义模型</div><div>免费模型</div></div>
+      <div class="sect" style="top:752px">思考强度</div>
+      <div class="track" style="top:872px"><div class="knob" id="knob"></div></div>
+      <div class="pills" style="top:930px"><span>OFF</span><span>LOW</span><span>MED</span><span>HIGH</span><span>MAX</span></div>
+      <div class="arg" style="top:1000px" id="arg">接口参数：thinking.type = disabled</div>
+    </div>
+
+    <div id="priv" class="panel">
+      <div class="bg"></div>
+      <div class="hd">它只在你<br>手机上跑</div>
+      <div class="rows" id="rows"></div>
+    </div>
+
+    <div id="mark"></div>
+    <div id="tag">装一个 APK · 开一次无障碍权限 · 然后就不用管了</div>
+    <div id="repo">github.com/panzih/AI-phone-use-bypanzhihe</div>
+  </div>
+  <div id="hud"></div>
+</div>
+<script src="motion.js"></script>
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+//  纸盒 · 60 秒 · 一个纸箱
+//  0.0  闭着的纸箱，静              → 箱
+//  5.2  两片盖板向外掀开，箱口透光   → 箱口
+//  9.6  镜头钻进箱内，箱底立成屏幕   → 屏幕
+// 14.6  光标打字「把 WiFi 关掉」→ 发送 → 蓝色水波吞掉屏幕 → 水波收成进度点
+// 23.4  悬浮条升起来推步数          → 进度点
+// 32.2  进度点落到「打开应用」那一行，设置页从那一点张开 → 滑杆 OFF→MAX
+// 42.0  同一张纸翻面 = 隐私清单，三行打勾 → 折成一张卡片
+// 49.2  卡片落回箱里、合盖、压平，压平的那块面 =「纸盒」
+// ══════════════════════════════════════════════════════════════════════════════
+const FPS=30, DUR=60, W=1920, H=1080;
+window.__meta={dur:DUR,fps:FPS,w:W,h:H};
+
+const T={
+  lid0:5.2, lid1:7.4,
+  dive0:9.6, dive1:12.9,
+  type0:14.7, cps:8.6, send0:20.1, ripple0:20.45, ripple1:21.5,
+  bar0:23.4, step0:25.0, stepDt:2.3,
+  iris0:32.2, iris1:33.2, drag0:37.2, drag1:39.4,
+  flip0:42.0, tick0:43.4, tickDt:1.15, fold0:48.2,
+  fall0:49.4, close0:50.6, close1:53.2, flat0:54.4, flat1:56.4, end0:55.9,
+};
+const {clamp,lerp,seg,sstep,ssstep,ease,spring,spline}=OM;
+const $=id=>document.getElementById(id);
+
+// ── DOM 初始化 ──────────────────────────────────────────────────────────────
+const world=$('world'), appEl=$('app'), setEl=$('set'), privEl=$('priv');
+const ripEl=document.createElement('div'); ripEl.id='ripple'; world.appendChild(ripEl);
+const markEl=$('mark'), tagEl=$('tag'), repoEl=$('repo');
+let MARKW=0;
+const MARKL=[...'纸盒'].map(ch=>{const s=document.createElement('span');s.textContent=ch;markEl.appendChild(s);return s;});
+
+const STEP_TXT=[['01','点击 (100,100)'],['02','截屏 · 看一眼上一屏'],['03','打开应用 com.android.settings']];
+const stepEls=STEP_TXT.map(([n,t])=>{
+  const d=document.createElement('div');d.className='step';
+  d.innerHTML=`<span class="b"></span><span class="n">${n}</span><span class="x">${t}</span>`;
+  $('stepslist').appendChild(d);return d;});
+
+const PRIV=[['API Key 加密后只存本机','密钥在系统 Keystore 里，沙箱里只有密文'],
+            ['没有广告，没有统计','不后台联网，不埋点'],
+            ['每一步都留下日志','出事能一键导出 zip']];
+const privRows=PRIV.map(([t,s])=>{
+  const d=document.createElement('div');d.className='row';
+  d.innerHTML=`<div class="bx"><div class="ck" style="opacity:0"></div></div><div class="tx">${t}<i>${s}</i></div>`;
+  $('rows').appendChild(d);return d;});
+
+// ── 画布：台面 + 纸箱 ───────────────────────────────────────────────────────
+const cv=$('cv'), ctx=cv.getContext('2d');
+const DPR=Math.min(2, window.devicePixelRatio||1);
+cv.width=W*DPR; cv.height=H*DPR;
+
+const BOX={w:720, d:1280, h:96, flap:1280};
+let CAM={x:W/2,y:H/2,zoom:1,rot:0}, M=[1,0,0,1,0,0], TILT=64;
+const toScreen=(x,y)=>[M[0]*x+M[2]*y+M[4], M[1]*x+M[3]*y+M[5]];
+
+const noise=(()=>{const c=document.createElement('canvas');c.width=c.height=256;const g=c.getContext('2d');
+  const img=g.createImageData(256,256);const r=OM.rng(41);
+  for(let i=0;i<img.data.length;i+=4){const v=r()<.5?0:255;img.data[i]=img.data[i+1]=img.data[i+2]=v;img.data[i+3]=6;}
+  g.putImageData(img,0,0);return c;})();
+const fib=(()=>{const r=OM.rng(9);const a=[];for(let i=0;i<240;i++)a.push([r(),r(),r()*.9+.15,r()]);return a;})();
+
+function drawGround(){
+  const g=ctx;
+  g.setTransform(DPR,0,0,DPR,0,0);
+  g.clearRect(0,0,W,H);
+  const gr=g.createRadialGradient(W*0.5,H*0.2,60,W*0.5,H*0.44,1400);
+  gr.addColorStop(0,'#1e1813');gr.addColorStop(.55,'#110e0b');gr.addColorStop(1,'#070606');
+  g.fillStyle=gr;g.fillRect(0,0,W,H);
+  const L=OM.lattice(CAM,{depth:1.25,spacing:96,px:1.5});
+  g.setTransform(DPR*L.matrix[0],DPR*L.matrix[1],DPR*L.matrix[2],DPR*L.matrix[3],DPR*L.matrix[4],DPR*L.matrix[5]);
+  g.fillStyle='rgba(232,207,166,.10)';
+  for(let x=L.x0;x<=L.x1;x+=L.spacing)for(let y=L.y0;y<=L.y1;y+=L.spacing){
+    g.beginPath();g.arc(x,y,L.r,0,6.2832);g.fill();}
+  g.setTransform(DPR,0,0,DPR,0,0);
+  const vg=g.createRadialGradient(W/2,H/2,340,W/2,H/2,1200);
+  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(.62,'rgba(0,0,0,.22)');vg.addColorStop(1,'rgba(0,0,0,.7)');
+  g.fillStyle=vg;g.fillRect(0,0,W,H);
+  g.fillStyle=g.createPattern(noise,'repeat');g.fillRect(0,0,W,H);
+}
+
+// 世界坐标 → 屏幕：正交 + 偏航（YAW）+ 俯角（PITCH）
+// 用正交不用透视：纸箱是个小物件，正交下两个侧面和顶面同时可见，
+// 折角不会被透视拉成"漏斗"，折出来的才像纸盒。
+let PITCH=64, YAW=-24;
+function proj(p){
+  const yw=YAW*Math.PI/180, pt=PITCH*Math.PI/180;
+  const x1=p[0]*Math.cos(yw)-p[1]*Math.sin(yw);
+  const y1=p[0]*Math.sin(yw)+p[1]*Math.cos(yw);
+  return [W/2+x1, H/2+y1*Math.cos(pt)-p[2]*Math.sin(pt)];
+}
+function quad(pts, fill, stroke, alpha=1, light=0){
+  const s=pts.map(p=>toScreen(...proj(p)));
+  ctx.beginPath();ctx.moveTo(s[0][0],s[0][1]);
+  for(let i=1;i<s.length;i++)ctx.lineTo(s[i][0],s[i][1]);
+  ctx.closePath();
+  if(fill){ctx.globalAlpha=alpha;ctx.fillStyle=fill;ctx.fill();ctx.globalAlpha=1;}
+  if(light>0){                                   // 面内受光：靠近上缘亮一点
+    let y0=1e9,y1=-1e9,x0=1e9,x1=-1e9;
+    for(const q of s){y0=Math.min(y0,q[1]);y1=Math.max(y1,q[1]);x0=Math.min(x0,q[0]);x1=Math.max(x1,q[0]);}
+    const g=ctx.createLinearGradient(x0,y0,x1,y1);
+    g.addColorStop(0,`rgba(255,246,228,${light})`);
+    g.addColorStop(.55,'rgba(255,246,228,0)');
+    g.addColorStop(1,'rgba(40,26,12,.10)');
+    ctx.save();ctx.fillStyle=g;ctx.fill();ctx.restore();
+  }
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1.4;ctx.stroke();}
+}
+const KRAFT=[0xe8,0xcf,0xa6];
+function kraft(k,to=[13,11,9],mix=0){
+  const c=KRAFT.map((v,i)=>Math.round(Math.min(255,Math.max(0,v*k*(1-mix)+to[i]*mix))));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// 箱体状态：全部由时间算出来，没有累积量
+function boxState(t){
+  const lid=ease.expoOut(seg(t,T.lid0,T.lid1));                       // 掀盖
+  const close=clamp(t<T.close0?0:spring(t-T.close0,0.55,15),0,1.06);  // 合盖（弹簧）
+  const flat=ease.cubicInOut(seg(t,T.flat0,T.flat0+1.4));             // 压平（几何）
+  const dark=ease.cubicInOut(seg(t,T.flat0+1.0,T.flat1-0.2));         // 黑场（画面）
+  const dive=ssstep(T.dive0,T.dive1,t);                               // 钻进箱内
+  const out=ssstep(T.fall0-0.5,T.close0+0.1,t);                       // 镜头退出
+  const pitch=lerp(lerp(64,0,dive),64,out);
+  const yaw=lerp(lerp(-24,0,dive),-24,out);
+  return {
+    pitch:lerp(pitch,0,flat), yaw:lerp(yaw,0,flat),
+    psi:clamp(lid-close,0,1)*100,
+    h:BOX.h*(1-flat), flat, dark, lid:clamp(lid-close,0,1),
+  };
+}
+
+function drawBox(t){
+  if(t>12.95 && t<48.85) return;      // 镜头在箱内：屏幕自己铺满画面，箱子不画
+  const S=boxState(t);
+  PITCH=S.pitch; YAW=S.yaw;
+  const w=BOX.w/2, d=BOX.d/2, h=S.h;
+  const flatMix=S.flat;
+
+  // 接触阴影：箱子压住台面的那一圈暗
+  {
+    const cx=toScreen(...proj([0,0,0]));
+    const rx=Math.abs(w*Math.cos(S.yaw*Math.PI/180))+Math.abs(d*Math.sin(S.yaw*Math.PI/180));
+    const ry=(Math.abs(w*Math.sin(S.yaw*Math.PI/180))+Math.abs(d*Math.cos(S.yaw*Math.PI/180)))*Math.cos(S.pitch*Math.PI/180);
+    const g5=ctx.createRadialGradient(cx[0],cx[1]+18,10,cx[0],cx[1]+18,Math.max(rx,ry)*1.25);
+    g5.addColorStop(0,'rgba(0,0,0,.62)');g5.addColorStop(.55,'rgba(0,0,0,.30)');g5.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.save();ctx.translate(cx[0],cx[1]+18);ctx.scale(1,Math.min(1,ry/Math.max(rx,1)));ctx.translate(-cx[0],-(cx[1]+18));
+    ctx.fillStyle=g5;ctx.beginPath();ctx.arc(cx[0],cx[1]+18,Math.max(rx,ry)*1.25,0,6.2832);ctx.fill();ctx.restore();
+  }
+
+  // 箱底（也是结尾那张卡：压平时这块面变成黑场）
+  quad([[-w,-d,0],[w,-d,0],[w,d,0],[-w,d,0]], kraft(0.44), 'rgba(48,32,16,.55)', 1, 0.05);
+  // 纸纹（只在还看得见纸的时候画）
+  if(flatMix<0.55 && S.pitch>3){
+    ctx.save();
+    const a0=toScreen(...proj([-w,-d,0])), a1=toScreen(...proj([w,d,0]));
+    for(const [u,v,l,al] of fib){
+      const x=lerp(a0[0],a1[0],u), y=lerp(a0[1],a1[1],v);
+      ctx.globalAlpha=.07*al*(1-flatMix);ctx.strokeStyle='#3a2a18';ctx.lineWidth=1.2;
+      ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+18*l,y+9*l);ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  if(S.pitch<1.2 && flatMix<0.02) return;
+
+  // 内壁（先画，外面的壁后画会自然挡住近处的内壁）
+  const ins=8;
+  quad([[-w+ins,-d+ins,h],[-w+ins,d-ins,h],[-w+ins,d-ins,0],[-w+ins,-d+ins,0]], kraft(0.20,[13,11,9],flatMix*0.96));
+  quad([[w-ins,-d+ins,h],[w-ins,d-ins,h],[w-ins,d-ins,0],[w-ins,-d+ins,0]], kraft(0.30,[13,11,9],flatMix*0.96));
+  quad([[-w+ins,-d+ins,h],[w-ins,-d+ins,h],[w-ins,-d+ins,0],[-w+ins,-d+ins,0]], kraft(0.16,[13,11,9],flatMix*0.96));
+  quad([[-w+ins,d-ins,h],[w-ins,d-ins,h],[w-ins,d-ins,0],[-w+ins,d-ins,0]], kraft(0.26,[13,11,9],flatMix*0.96));
+
+  // 外壁四面
+  quad([[-w,-d,h],[-w,d,h],[-w,d,0],[-w,-d,0]], kraft(0.42,[13,11,9],flatMix*0.96), 'rgba(48,32,16,.6)');
+  quad([[w,-d,h],[w,d,h],[w,d,0],[w,-d,0]], kraft(0.68,[13,11,9],flatMix*0.96), 'rgba(48,32,16,.6)');
+  quad([[-w,-d,h],[w,-d,h],[w,-d,0],[-w,-d,0]], kraft(0.36,[13,11,9],flatMix*0.96), 'rgba(48,32,16,.6)');
+  quad([[-w,d,h],[w,d,h],[w,d,0],[-w,d,0]], kraft(0.58,[13,11,9],flatMix*0.96), 'rgba(48,32,16,.6)');
+
+  // 一片整盖：psi=0 盖住箱口，psi=132° 翻到箱子后面去（真手机盒就是一片盖）
+  const psi=S.psi*Math.PI/180*1.32, fl=BOX.flap;
+  const tipY=-d+fl*Math.cos(psi), tipZ=h+fl*Math.sin(psi);
+  quad([[-w,-d,h],[w,-d,h],[w,tipY,tipZ],[-w,tipY,tipZ]], kraft(0.68,[13,11,9],flatMix*0.96), 'rgba(48,32,16,.62)');
+
+  // 中缝
+  if(S.lid<0.3){
+    ctx.save();ctx.globalAlpha=(1-S.lid/0.3)*0.5;ctx.strokeStyle='rgba(28,18,8,.8)';ctx.lineWidth=2;
+    const m0=toScreen(...proj([-w,d-110,h])), m1=toScreen(...proj([w,d-110,h]));
+    ctx.beginPath();ctx.moveTo(m0[0],m0[1]);ctx.lineTo(m1[0],m1[1]);ctx.stroke();ctx.restore();
+  }
+  // 盖板上印的 logo（与 App 内 ic_box_logo 同一份几何）
+  if(S.lid<0.16 && flatMix<0.12){
+    const logo=[[[20,88],[20,46],[46,20],[88,20],[88,62],[62,88],[20,88]],
+                [[20,46],[62,46],[62,88]],[[62,46],[88,20]]];
+    const sc=3.2, ox=-w+(BOX.w-108*sc)/2, oy=-d+170;
+    ctx.save();ctx.globalAlpha=0.42;ctx.strokeStyle='#6a4d2b';ctx.lineWidth=3.4;
+    ctx.lineJoin='round';ctx.lineCap='round';
+    for(const sp of logo){ctx.beginPath();
+      sp.forEach((q,i)=>{const s=toScreen(...proj([ox+q[0]*sc,oy+q[1]*sc,h]));i?ctx.lineTo(s[0],s[1]):ctx.moveTo(s[0],s[1]);});
+      ctx.stroke();}
+    ctx.restore();
+  }
+
+  // 箱底那块面：盖一开就亮起来（这块面接着会变成屏幕）
+  if(S.pitch>1.2 && S.lid>0.03){
+    const m=42, z=2;
+    const q=[[-w+m,-d+m,z],[w-m,-d+m,z],[w-m,d-m,z],[-w+m,d-m,z]];
+    const ps=q.map(p=>toScreen(...proj(p)));
+    ctx.save();
+    ctx.beginPath();ctx.moveTo(ps[0][0],ps[0][1]);
+    for(let i=1;i<4;i++)ctx.lineTo(ps[i][0],ps[i][1]);
+    ctx.closePath();
+    const c0=toScreen(...proj([0,-d*0.4,z])), c1=toScreen(...proj([0,d*0.6,z]));
+    const g4=ctx.createLinearGradient(c0[0],c0[1],c1[0],c1[1]);
+    g4.addColorStop(0,`rgba(111,178,255,${.20*S.lid})`);
+    g4.addColorStop(.35,`rgba(18,24,36,${.55*S.lid})`);
+    g4.addColorStop(1,`rgba(10,12,18,${.72*S.lid})`);
+    ctx.fillStyle=g4;ctx.fill();
+    ctx.clip();
+    // 屏上隐约的几行
+    ctx.strokeStyle=`rgba(244,236,221,${.16*S.lid})`;ctx.lineWidth=3;
+    for(let i=0;i<4;i++){
+      const yy=-d*0.2+i*90;
+      const a=toScreen(...proj([-w+m+70,yy,z])), b=toScreen(...proj([w-m-70-(i%2?180:0),yy,z]));
+      ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 压平：整块画布推到黑场（这块面就是结尾卡）
+  if(S.dark>0.004){
+    ctx.save();ctx.globalAlpha=Math.min(1,S.dark*1.02);ctx.fillStyle='#0d0b09';
+    ctx.fillRect(0,0,W,H);ctx.restore();
+  }
+
+  // 掀盖时从箱口透出来的蓝光（落在箱底上）
+  if(S.lid>0.02 && S.pitch>2 && S.dark<0.5){
+    const c=toScreen(...proj([0,0,4]));
+    const rr=760*S.lid;
+    const g2=ctx.createRadialGradient(c[0],c[1],6,c[0],c[1],rr);
+    g2.addColorStop(0,`rgba(111,178,255,${.34*S.lid})`);
+    g2.addColorStop(.5,`rgba(111,178,255,${.13*S.lid})`);
+    g2.addColorStop(1,'rgba(111,178,255,0)');
+    ctx.save();ctx.globalCompositeOperation='screen';ctx.fillStyle=g2;
+    ctx.beginPath();ctx.ellipse(c[0],c[1],rr,rr*0.52,0,0,6.2832);ctx.fill();ctx.restore();
+  }
+}
+
+// ── 相机 ────────────────────────────────────────────────────────────────────
+const KEYS=[
+  {t:0.0,  x:W/2, y:500, zoom:1.02, curve:ease.sineInOut},
+  {t:4.6,  x:W/2, y:512, zoom:1.05, curve:ease.sineInOut},
+  {t:7.4,  x:W/2, y:560, zoom:0.90, curve:ease.cubicInOut},
+  {t:9.6,  x:W/2, y:566, zoom:0.94, curve:ease.sineInOut},
+  {t:12.9, x:W/2, y:700, zoom:1.62, curve:ease.quintInOut},
+  {t:14.7, x:W/2, y:940, zoom:2.05, curve:ease.sineInOut},
+  {t:16.4, x:W/2, y:1082,zoom:2.40, curve:ease.sineInOut},
+  {t:20.0, x:W/2, y:1088,zoom:2.46, curve:ease.sineInOut},
+  {t:23.0, x:W/2, y:980, zoom:1.80, curve:ease.cubicInOut},
+  {t:27.6, x:W/2, y:1000,zoom:1.92, curve:ease.sineInOut},
+  {t:33.2, x:W/2, y:620, zoom:1.62, curve:ease.sineInOut},
+  {t:36.8, x:W/2, y:760, zoom:1.94, curve:ease.sineInOut},
+  {t:41.4, x:W/2, y:640, zoom:1.90, curve:ease.sineInOut},
+  {t:45.4, x:W/2, y:650, zoom:1.78, curve:ease.sineInOut},
+  {t:48.6, x:W/2, y:600, zoom:1.62, curve:ease.cubicInOut},
+  {t:50.8, x:W/2, y:545, zoom:1.24, curve:ease.quintInOut},
+  {t:53.4, x:W/2, y:530, zoom:1.14, curve:ease.sineInOut},
+  {t:55.2, x:W/2, y:522, zoom:1.06, curve:ease.sineInOut},
+  {t:56.6, x:W/2, y:518, zoom:1.02, curve:ease.cubicInOut},
+  {t:60.0, x:W/2, y:518, zoom:1.03},
+];
+const HITS=[[7.35,8,7],[12.8,6,7],[20.22,5,7],[32.35,7,8],[53.1,11,9]];
+const handEnv=t=>sstep(0.8,2.4,t)*(1-sstep(56.0,57.6,t));
+function camAt(t){
+  const c=OM.camera(t,KEYS), e=handEnv(t)*3.2;
+  let x=c.x+e*(Math.sin(1.7*t)+0.6*Math.sin(2.9*t+1))/c.zoom;
+  let y=c.y+e*(Math.sin(1.3*t+2)+0.5*Math.sin(3.3*t))/c.zoom;
+  let rot=c.rot;
+  for(const [th,amp,decay] of HITS){
+    const s=OM.shake(t,th,{amp,decay,seed:Math.round(th*100)});
+    x+=s.x/c.zoom;y+=s.y/c.zoom;rot+=s.rot;
+  }
+  return {x,y,zoom:c.zoom,rot};
+}
+
+// ── 面板世界坐标 ────────────────────────────────────────────────────────────
+const PX=W/2-360, PY=540-640;      // 720×1280 面板左上角
+const place=(el,x,y,s=1,op=1)=>{el.style.opacity=String(op);
+  el.style.transform=`translate(${x.toFixed(2)}px,${y.toFixed(2)}px) scale(${s.toFixed(4)})`;};
+
+// ══════════════════════════════════════════════════════════════════════════
+function seek(t){
+  CAM=camAt(t); M=OM.view(CAM);
+  world.style.transform=`matrix(${M.map(v=>v.toFixed(5)).join(',')})`;
+  drawGround();
+  drawBox(t);
+  seekApp(t);
+  seekSet(t);
+  seekPriv(t);
+  seekMark(t);
+  $('hud').textContent='t='+t.toFixed(2);
+  return Promise.resolve();
+}
+
+// ── 屏幕：打字 → 发送 → 水波 → 悬浮条 ───────────────────────────────────────
+function seekApp(t){
+  const pitch=boxState(t).pitch;
+  const on = (pitch<9 || t>49.2) && t>=11.6 && t<=T.iris1+0.7;
+  appEl.style.display=on?'block':'none';
+  if(!on) return;
+  place(appEl,PX,PY,1,1);
+  appEl.style.opacity=String(clamp((10-pitch)/5,0,1));
+
+  const hasMsg=ssstep(T.send0+0.02,T.send0+0.38,t);
+  $('empty').style.opacity=String(1-hasMsg);
+  $('thread').style.opacity=String(hasMsg);
+
+  const ty=OM.typeOn(t,T.type0,'把 WiFi 关掉',{cps:T.cps});
+  $('typed').textContent=ty.str;
+  $('cur').style.opacity=String(t<T.send0&&ty.n>0?ty.caret:0);
+  $('ph').style.display=ty.n>0?'none':'block';
+
+  const p=OM.press(t,T.send0,{depth:.16,flash:.45});
+  $('send').style.transform=`scale(${p.s.toFixed(3)})`;
+  $('send').style.background=p.active?'#2f6fb5':'#3a2f24';
+  $('send').style.boxShadow=p.active?'0 0 46px rgba(111,178,255,.8)':'none';
+
+  // 落点水波：从发送键那一点涨开，最后吞掉整块屏幕
+  const rp=ease.smoother(seg(t,T.ripple0,T.ripple0+1.5));
+  const el=ripEl;
+  if(rp>0.002&&rp<1.0){
+    const r=34+1150*rp;
+    const cx=PX+640, cy=PY+1198;
+    el.style.display='block';
+    el.style.width=el.style.height=(r*2)+'px';
+    el.style.transform=`translate(${(cx-r).toFixed(1)}px,${(cy-r).toFixed(1)}px)`;
+    el.style.background='radial-gradient(circle, rgba(111,178,255,0) 0%, rgba(111,178,255,0) 66%, rgba(111,178,255,.55) 74%, rgba(160,205,255,.95) 79%, rgba(111,178,255,.35) 86%, rgba(111,178,255,0) 96%)';
+    el.style.border='2px solid rgba(190,220,255,.9)';
+    el.style.opacity=String(0.9*(1-rp*0.35));
+  } else el.style.display='none';
+
+  // 悬浮条：水波收进它右下角那个进度点
+  const barIn=sstep(T.bar0,T.bar0+0.7,t)* (1-sstep(T.iris0+0.5,T.iris1+0.5,t));
+  const barY=(1-spring(t-T.bar0,0.5,15))*300;
+  $('bar').style.display=barIn>0.004?'block':'none';
+  $('bar').style.opacity=String(barIn);
+  $('bar').style.transform=`translateY(${barY.toFixed(1)}px)`;
+
+  const k=clamp(t<T.step0?0:1+Math.floor((t-T.step0)/T.stepDt),0,3);
+  $('bstep').textContent=`第 ${[3,9,14,18][k]} / 19 步`;
+  const NOW=['打开应用','截屏','点击 (100,100)','确认结果'];
+  const NEXT=['下一步：读取屏幕控件树','下一步：等页面加载完','下一步：点 WiFi 开关','下一步：收尾并汇报'];
+  $('bnow').textContent=NOW[k];$('bnext').textContent=NEXT[k];
+
+  stepEls.forEach((el,i)=>{
+    const kk=spring(t-(T.step0+i*T.stepDt),0.62,20);
+    el.style.opacity=String(clamp(kk*1.5,0,1));
+    el.style.transform=`translateX(${((1-clamp(kk,0,1))*30).toFixed(1)}px)`;
+  });
+  const shift=clamp((t-T.step0)/7,0,1)*64;
+  $('thread').style.transform=`translateY(${-shift.toFixed(1)}px)`;
+}
+
+// ── 设置页：从「打开应用」那一行张开 ───────────────────────────────────────
+function seekSet(t){
+  const on=t>=T.iris0-0.1&&t<=T.flip0+0.55;
+  setEl.style.display=on?'block':'none';
+  if(!on) return;
+  const turn=ease.cubicInOut(seg(t,T.flip0,T.flip0+0.45));
+  setEl.style.transformOrigin='0% 50%';
+  setEl.style.transform=`translate(${PX}px,${PY}px) perspective(1700px) rotateY(${(-92*turn).toFixed(2)}deg)`;
+  setEl.style.opacity=String(1-0.15*turn);
+  const k=ease.expoOut(seg(t,T.iris0,T.iris1));
+  if(k<1){
+    const lx=250, ly=980;                 // 页面内：步骤行附近
+    setEl.style.clipPath=`circle(${(k*1400).toFixed(1)}px at ${lx}px ${ly}px)`;
+  } else setEl.style.clipPath='none';
+
+  const dk=ease.cubicInOut(seg(t,T.drag0,T.drag1));
+  const span=720-136-44;
+  $('knob').style.left=(dk*span).toFixed(1)+'px';
+  $('knob').style.transform=`scale(${(1+0.08*Math.sin(Math.PI*dk)).toFixed(3)})`;
+  const idx=Math.min(4,Math.round(dk*4));
+  const eff=['disabled (不发)','low','medium','high','max'];
+  $('arg').innerHTML=`接口参数：thinking.type = ${idx===0?'disabled':'enabled'}<br>reasoning_effort = ${eff[idx]==='disabled (不发)'?'—':eff[idx]}`;
+}
+
+// ── 隐私：同一张纸翻面 → 三行打勾 → 折成卡片 ───────────────────────────────
+function seekPriv(t){
+  const on=t>=T.flip0-0.1&&t<=T.close0+0.7;
+  privEl.style.display=on?'block':'none';
+  if(!on) return;
+  // 同一张纸翻过来：从 -92° 转回 0
+  const unfold=ease.outCubic?ease.outCubic(seg(t,T.flip0+0.45,T.flip0+1.35)):ease.cubicOut(seg(t,T.flip0+0.45,T.flip0+1.35));
+  const ry=-92*(1-unfold);
+  const fold=ease.cubicInOut(seg(t,T.fold0,T.fold0+1.2));
+  const fall=ease.cubicInOut(seg(t,T.fall0,T.close0+0.5));
+  const sx=lerp(1,0.34,fold), sy=lerp(1,0.34,fold);
+  const ty=lerp(0,170,fold)+lerp(0,260,fall);
+  privEl.style.transformOrigin='0% 50%';
+  privEl.style.transform=`translate(${(PX+(1-sx)*360).toFixed(1)}px,${(PY+ty).toFixed(1)}px) perspective(1700px) rotateY(${ry.toFixed(2)}deg) scale(${sx.toFixed(4)},${sy.toFixed(4)})`;
+  privEl.style.opacity=String((t<T.flip0+0.5?0:1)*(1-fall*0.85));
+  privRows.forEach((el,i)=>{
+    const tk=OM.tick(t,T.tick0+i*T.tickDt);
+    el.querySelector('.bx').style.background=tk.on?'var(--kraft)':'transparent';
+    el.querySelector('.bx').style.borderColor=tk.on?'var(--kraft)':'rgba(244,236,221,.3)';
+    el.querySelector('.ck').style.opacity=String(tk.on);
+    el.querySelector('.bx').style.transform=`scale(${tk.s})`;
+  });
+}
+
+// ── 结尾：压平那块面 → 字标 ────────────────────────────────────────────────
+function seekMark(t){
+  const on=t>=T.end0;
+  markEl.style.display=on?'block':'none';
+  tagEl.style.display=on?'block':'none';
+  repoEl.style.display=on?'block':'none';
+  if(!on) return;
+  const op=ssstep(T.end0,T.end0+0.45,t);
+  markEl.style.opacity=String(op);
+  MARKL.forEach((s,i)=>{
+    const d=OM.letterDrop(t,T.end0+0.05,i,{stagger:.13,dist:64,zeta:.46,omega:21});
+    s.style.opacity=String(clamp(d.op,0,1)*op);
+    s.style.transform=`translateY(${d.y.toFixed(1)}px) scale(${(1+d.sq*0.5).toFixed(3)},${(1-d.sq).toFixed(3)})`;
+  });
+  place(markEl,W/2-(MARKW||430)/2,478,1,op);
+  const tg=OM.wordRise(t,T.end0+0.85,{dist:16,zeta:.6,omega:16});
+  place(tagEl,W/2-455,624+tg.y,1,tg.op*0.95);
+  const rp=OM.wordRise(t,T.end0+1.5,{dist:10,zeta:.6,omega:14});
+  place(repoEl,W/2-330,700+rp.y,1,rp.op*0.8);
+}
+
+// ── 契约 ────────────────────────────────────────────────────────────────────
+window.__seek=async t=>{seek(t);return true;};
+window.__ready=document.fonts.ready.then(()=>{markEl.style.transform='none';MARKW=markEl.getBoundingClientRect().width;seek(0);return true;});
+window.__motion=(t0,t1)=>OM.screenTravel(camAt(t0),camAt(t1),camAt((t0+t1)/2));
+
+const q=new URLSearchParams(location.search);
+if(q.has('t')) __ready.then(()=>seek(parseFloat(q.get('t'))));
+if(q.has('hud')) $('hud').style.display='block';
+if(q.has('play')) __ready.then(()=>{const t0=performance.now();
+  (function loop(){seek(((performance.now()-t0)/1000)%DUR);requestAnimationFrame(loop);})();});
+</script>
+</body>
+</html>
