@@ -91,6 +91,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * 崩溃提示那条系统消息的 id 前缀。
+ *
+ * 它是个**会话级**提示，不是对话内容 —— 所以落盘时要按这个前缀滤掉，
+ * 否则用户以后每次打开都看到一条早就过时的"上次崩溃了"。
+ */
+private const val CRASH_NOTICE_ID_PREFIX = "crash_notice_"
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var controller: ChannelController
@@ -356,7 +364,8 @@ private fun AppRoot(
     }
     val logs = remember {
         mutableStateListOf<LogEntry>().apply {
-            addAll(savedContext?.entries ?: emptyList())
+            // 老版本可能已经把崩溃提示存进历史了，恢复时滤掉
+            addAll(savedContext?.entries?.filterNot { it.id.startsWith(CRASH_NOTICE_ID_PREFIX) } ?: emptyList())
             // 磁盘里有旧对话、却因版本不匹配被作废：留一条说明，
             // 不然消息凭空消失像 bug
             if (savedContext == null && diskContext?.entries?.isNotEmpty() == true) {
@@ -378,12 +387,12 @@ private fun AppRoot(
             if (crashes > 0) {
                 add(
                     LogEntry(
-                        id = "crash_notice_${System.currentTimeMillis()}",
+                        id = "$CRASH_NOTICE_ID_PREFIX${System.currentTimeMillis()}",
                         kind = LogKind.ERROR,
                         text = if (crashes == 1) {
                             "上次运行异常退出，崩溃现场已记录 —— 设置 → 日志 → 导出日志"
                         } else {
-                            "上次运行异常退出，另有 $crashes 份崩溃记录 —— 设置 → 日志 → 导出日志"
+                            "上次运行异常退出，已记录 $crashes 份崩溃现场 —— 设置 → 日志 → 导出日志"
                         },
                         label = "崩溃",
                     )
@@ -498,7 +507,11 @@ private fun AppRoot(
         withContext(Dispatchers.IO) {
             ContextStore.save(
                 context = context,
-                entries = logs.toList(),
+                // 崩溃提示不落盘：它是"这一次启动发现的情况"，不是对话内容。
+                // 存进去的后果是它会跟着历史一直留着，用户以后每次打开都看到
+                // 一条早就不成立的"上次崩溃了"，导出日志时也会混在对话里。
+                // 要不要提示每次启动重新判定（见上面 logs 的初始化）。
+                entries = logs.filterNot { it.id.startsWith(CRASH_NOTICE_ID_PREFIX) },
                 turns = conversation.snapshot(),
                 lastActivityAt = conversation.lastActivityAt,
                 history = modelHistory,
