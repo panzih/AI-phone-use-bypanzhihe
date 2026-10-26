@@ -453,7 +453,10 @@ class OverlayService : Service() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                cornerRadius = dp(22).toFloat()
+                // 和全应用同一套圆角（20dp = ui/design 的 Radius.xl）。
+                // 面板本身刻意**不跟随应用主题**：它浮在别人家界面上面，
+                // 只有"深底 + 白字"这一种配色在任何应用上都读得清。
+                cornerRadius = dp(20).toFloat()
                 // 90% 不透明的 #1B1B1B。不能写死不透明：窗口 alpha 0.85 时
                 // 有效遮挡会冲到 0.85，越过 Android 12+「不信任触摸」的 0.80 红线，
                 // AI 注入的点击会被系统整片丢弃。0.9 × 0.85 = 0.765，留在红线内。
@@ -478,7 +481,7 @@ class OverlayService : Service() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
-                cornerRadius = dp(9).toFloat()
+                cornerRadius = dp(8).toFloat()
                 setColor(Color.parseColor(bgColor))
             }
             setPadding(dp(6), dp(7), dp(6), dp(7))

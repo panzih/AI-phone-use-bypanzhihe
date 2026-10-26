@@ -1,0 +1,92 @@
+package com.aiphone.assistant.ui.design
+
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Shapes
+import androidx.compose.ui.unit.dp
+
+/**
+ * 间距阶梯 —— 全应用只用这几档。
+ *
+ * 原来每个页面自己写 6/8/10/12/14/16，同一件事（比如"分组之间空一点"）
+ * 在不同页面差了两三 dp，看起来就是"没对齐"。固定阶梯之后，
+ * **间距本身就能表达关系**：同一组内用 [Space.sm]，换组用 [Space.lg]，
+ * 换话题用 [Space.xl]。
+ *
+ * 基准 4dp：所有值都是 4 的倍数（8 的倍数优先），这样在任何密度下都不会
+ * 出现半像素描边。
+ */
+object Space {
+    /** 4dp —— 图标与文字之间、紧邻元素 */
+    val xs = 4.dp
+
+    /** 8dp —— 同一行里的两段 */
+    val sm = 8.dp
+
+    /** 12dp —— 一行的内边距 */
+    val md = 12.dp
+
+    /** 16dp —— 页面左右边距（唯一允许贴边的地方） */
+    val lg = 16.dp
+
+    /** 20dp —— 卡片内边距 */
+    val xl = 20.dp
+
+    /** 24dp —— 分组之间 */
+    val xxl = 24.dp
+
+    /** 32dp —— 大段落之间、列表底部留白 */
+    val huge = 32.dp
+}
+
+/**
+ * 圆角只有一个家族：8 / 12 / 16 / 20。
+ *
+ * 卡片和按钮统一用 [Radius.md]，输入框用 [Radius.md]，
+ * 只有"气泡"和"胶囊"才用 [Radius.pill] —— 圆角也是语义。
+ */
+object Radius {
+    /** 4dp —— 只用于聊天气泡那个"尖角" */
+    val xs = 4.dp
+    val sm = 8.dp
+    val md = 12.dp
+    val lg = 16.dp
+    val xl = 20.dp
+    val pill = 100.dp
+}
+
+/** Material 形状表：让 M3 自带组件（对话框、菜单、Snackbar）跟着同一套圆角走 */
+val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(Radius.sm),
+    small = RoundedCornerShape(Radius.sm),
+    medium = RoundedCornerShape(Radius.md),
+    large = RoundedCornerShape(Radius.lg),
+    extraLarge = RoundedCornerShape(Radius.xl),
+)
+
+/**
+ * 交互尺寸。
+ *
+ * [touchTarget] 是所有可点元素的最小热区（Material 48dp / iOS 44pt 的公约数，
+ * 取大的那个）。视觉上图标可以只有 20dp，但**热区不能小** ——
+ * 手指按不准是最常见的"点不动"。
+ */
+object Size {
+    val touchTarget = 48.dp
+    val rowMinHeight = 56.dp
+    val buttonHeight = 48.dp
+    val iconSm = 16.dp
+    val iconMd = 20.dp
+    val iconLg = 24.dp
+}
+
+/**
+ * 动效时长。
+ *
+ * 入场比退场慢一点（0.3s / 0.2s），这是"东西出现要看得清、消失要干脆"的
+ * 通用节奏；超过 300ms 用户会开始觉得卡。
+ */
+object Motion {
+    const val enter = 260
+    const val exit = 180
+    const val stateChange = 140
+}

@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      用 Material3 的 DayNight 父主题，跟随系统深色模式。
-      真正的配色由 Compose 里的 AiPhoneTheme 控制，这里只负责窗口本身。
+      窗口主题（浅色）。
+      真正的配色由 Compose 里的 AiPhoneTheme 决定，这里只管窗口本身：
+      背景先铺成画布色，避免 Compose 第一帧之前的白闪。
+      状态栏 / 导航栏交给 enableEdgeToEdge() 处理，所以是透明的。
     -->
-    <style name="Theme.AiPhoneAssistant" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.AiPhoneAssistant" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/app_canvas</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

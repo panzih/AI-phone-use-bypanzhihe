@@ -1,7 +1,6 @@
 package com.aiphone.assistant.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,49 +8,26 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,20 +38,42 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
-import com.aiphone.assistant.data.AppInfo
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.TapReviewMode
 import com.aiphone.assistant.data.ThinkingMode
 import com.aiphone.assistant.llm.EndpointSafety
 import com.aiphone.assistant.llm.ModelListFetcher
+import com.aiphone.assistant.ui.design.ActionRow
+import com.aiphone.assistant.ui.design.AppAlertDialog
+import com.aiphone.assistant.ui.design.AppButton
+import com.aiphone.assistant.ui.design.AppScaffold
+import com.aiphone.assistant.ui.design.AppTextField
+import com.aiphone.assistant.ui.design.AppTheme
+import com.aiphone.assistant.ui.design.Banner
+import com.aiphone.assistant.ui.design.ButtonRow
+import com.aiphone.assistant.ui.design.ButtonVariant
+import com.aiphone.assistant.ui.design.GroupCard
+import com.aiphone.assistant.ui.design.GroupDivider
+import com.aiphone.assistant.ui.design.HintText
+import com.aiphone.assistant.ui.design.LoadingRow
+import com.aiphone.assistant.ui.design.Radius
+import com.aiphone.assistant.ui.design.SectionNote
+import com.aiphone.assistant.ui.design.SectionTitle
+import com.aiphone.assistant.ui.design.SettingRow
+import com.aiphone.assistant.ui.design.Size
+import com.aiphone.assistant.ui.design.SliderSetting
+import com.aiphone.assistant.ui.design.Space
+import com.aiphone.assistant.ui.design.StatBlock
+import com.aiphone.assistant.ui.design.StatusPill
+import com.aiphone.assistant.ui.design.SwitchRow
+import com.aiphone.assistant.ui.design.Tone
+import com.aiphone.assistant.ui.design.interactiveSurface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,25 +81,30 @@ import kotlinx.coroutines.withContext
 /**
  * 设置页。
  *
- * 结构严格按手稿，三段：
+ * 结构分四段，越往下越"重"：
  *
- *   模型          接口地址 / API Key（打码） / 模型 / 图片精度
- *   更多设置      清空上下文 / 记忆 / 日志 / 副屏探针
- *   开发者设置    红字警告 / 清空上下文 / 自动清空 / 记忆三项 / 日志四项
+ *   模型        接口地址 / API Key（打码） / 模型 / 思考强度
+ *   更多设置    清空上下文 / 副屏探针与镜像 / 步数上限 / 上下文策略 / 记忆 / 日志 / 复核
+ *   开发者设置  红字警告 + 不可撤销的开关
+ *   日志        统计 / 导出 / 删除
+ *
+ * ## 为什么用"卡片分组"而不是分割线
+ *
+ * 之前整页是一条竖线串起来的长列表，用户只能靠灰字标题猜哪几行是一组。
+ * 现在每组一张卡：卡与卡之间 24dp，卡内行与行之间 1px 分割线 ——
+ * **距离**本身就说明了归属，不需要读标题。
  *
  * ## 关于 API Key
  *
  * 手稿上写了眼睛图标，所以这里是**默认打码**的，点眼睛才明文显示。
- * 一开始我把它做成普通输入框（明文常显），那在公共场合很糟糕 ——
+ * 一开始做成普通输入框（明文常显），那在公共场合很糟糕 ——
  * 别人扫一眼就把 Key 看走了。
  *
  * ## 关于"开发者设置"
  *
- * 这四组东西（清空上下文、记忆、日志、导出）对普通用户是危险的：
- * 清空上下文、清空日志都是不可撤销的。所以它们统一放在红字警告下面，
+ * 清空上下文、清空日志都是不可撤销的，所以它们统一放在红字警告下面，
  * 而不是散在日常设置里。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     state: MainUiState,
@@ -125,139 +128,122 @@ fun SettingsScreen(
         state.toast?.let { snackbar.showSnackbar(it) }
     }
 
-    Scaffold(
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            stringResource(R.string.settings_back),
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-                modifier = Modifier.windowInsetsPadding(
-                    WindowInsets.displayCutout.union(WindowInsets.statusBars)
-                ),
-            )
-        },
+    AppScaffold(
+        title = stringResource(R.string.settings_title),
+        onBack = onBack,
+        backLabel = stringResource(R.string.settings_back),
+        snackbarHostState = snackbar,
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .windowInsetsPadding(WindowInsets.navigationBars),
-            contentPadding = PaddingValues(bottom = 32.dp),
+            contentPadding = PaddingValues(bottom = Space.huge),
         ) {
             // ================= 模型 =================
-            item { SectionHeader(stringResource(R.string.settings_section_model)) }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SectionTitle(stringResource(R.string.settings_section_model), modifier = Modifier.weight(1f))
+                    if (s.useFreeModel) {
+                        StatusPill(
+                            text = "免费通道",
+                            tone = Tone.Positive,
+                            modifier = Modifier.padding(end = Space.lg),
+                        )
+                    }
+                }
+            }
             item { ModelSection(s, onSettingsChange) }
 
-            item { SectionDivider() }
-
             // ================= 更多设置 =================
-            item { SectionHeader(stringResource(R.string.settings_section_developer)) }
-            item { DeveloperWarning() }
-
+            item { SectionTitle(stringResource(R.string.settings_section_developer)) }
             item {
-                ActionRow(
-                    title = stringResource(R.string.settings_clear_context),
-                    subtitle = stringResource(R.string.settings_clear_context_sub),
-                    onClick = onClearContext,
+                DeveloperWarning(
+                    modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.xs)
                 )
             }
-
             item {
-                ActionRow(
-                    title = "运行副屏探针",
-                    subtitle = "检查副屏能否读到控件树，结果写进日志",
-                    onClick = onProbeVirtualDisplay,
-                )
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm)) {
+                    ActionRow(
+                        title = stringResource(R.string.settings_clear_context),
+                        subtitle = stringResource(R.string.settings_clear_context_sub),
+                        onClick = onClearContext,
+                    )
+                    GroupDivider()
+                    ActionRow(
+                        title = "运行副屏探针",
+                        subtitle = "检查副屏能否读到控件树，结果写进日志",
+                        onClick = onProbeVirtualDisplay,
+                    )
+                    GroupDivider()
+                    ActionRow(
+                        title = stringResource(R.string.settings_vd_mirror),
+                        subtitle = stringResource(R.string.settings_vd_mirror_sub),
+                        onClick = onLookAtVd,
+                    )
+                }
             }
-
             item {
-                ActionRow(
-                    title = stringResource(R.string.settings_vd_mirror),
-                    subtitle = stringResource(R.string.settings_vd_mirror_sub),
-                    onClick = onLookAtVd,
-                )
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm)) {
+                    StepsSliderRow(
+                        maxSteps = s.maxSteps,
+                        onChange = { onSettingsChange(s.copy(maxSteps = it)) },
+                    )
+                    GroupDivider()
+                    ContextPolicySlider(
+                        policy = s.contextPolicy,
+                        onChange = { onSettingsChange(s.copy(contextPolicy = it)) },
+                    )
+                    GroupDivider()
+                    TapReviewSlider(
+                        mode = s.tapReview,
+                        onChange = { onSettingsChange(s.copy(tapReview = it)) },
+                    )
+                }
             }
-
             item {
-                StepsSliderRow(
-                    maxSteps = s.maxSteps,
-                    onChange = { onSettingsChange(s.copy(maxSteps = it)) },
-                )
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm)) {
+                    SwitchRow(
+                        title = stringResource(R.string.settings_memory_enabled),
+                        subtitle = stringResource(R.string.settings_memory_enabled_desc),
+                        checked = s.memoryEnabled,
+                        onCheckedChange = { onSettingsChange(s.copy(memoryEnabled = it)) },
+                    )
+                    GroupDivider()
+                    SwitchRow(
+                        title = stringResource(R.string.settings_save_logs),
+                        subtitle = stringResource(R.string.settings_save_logs_desc),
+                        checked = s.saveLogs,
+                        onCheckedChange = { onSettingsChange(s.copy(saveLogs = it)) },
+                    )
+                    GroupDivider()
+                    SwitchRow(
+                        title = stringResource(R.string.settings_save_screenshots),
+                        subtitle = stringResource(R.string.settings_save_screenshots_desc),
+                        checked = s.saveScreenshots,
+                        onCheckedChange = { onSettingsChange(s.copy(saveScreenshots = it)) },
+                    )
+                    GroupDivider()
+                    SwitchRow(
+                        title = stringResource(R.string.settings_overlay_blur),
+                        subtitle = stringResource(R.string.settings_overlay_blur_desc),
+                        checked = s.overlayBlur,
+                        onCheckedChange = { onSettingsChange(s.copy(overlayBlur = it)) },
+                    )
+                    GroupDivider()
+                    SwitchRow(
+                        title = stringResource(R.string.settings_local_dismiss),
+                        subtitle = stringResource(R.string.settings_local_dismiss_desc),
+                        checked = s.localDialogDismiss,
+                        onCheckedChange = { onSettingsChange(s.copy(localDialogDismiss = it)) },
+                    )
+                }
             }
-
-            item {
-                ContextPolicySlider(
-                    policy = s.contextPolicy,
-                    onChange = { onSettingsChange(s.copy(contextPolicy = it)) },
-                )
-            }
-
-            item {
-                SwitchRow(
-                    title = stringResource(R.string.settings_memory_enabled),
-                    subtitle = stringResource(R.string.settings_memory_enabled_desc),
-                    checked = s.memoryEnabled,
-                    onCheckedChange = { onSettingsChange(s.copy(memoryEnabled = it)) },
-                )
-            }
-
-            item {
-                SwitchRow(
-                    title = stringResource(R.string.settings_save_logs),
-                    subtitle = stringResource(R.string.settings_save_logs_desc),
-                    checked = s.saveLogs,
-                    onCheckedChange = { onSettingsChange(s.copy(saveLogs = it)) },
-                )
-            }
-
-            item {
-                SwitchRow(
-                    title = stringResource(R.string.settings_save_screenshots),
-                    subtitle = stringResource(R.string.settings_save_screenshots_desc),
-                    checked = s.saveScreenshots,
-                    onCheckedChange = { onSettingsChange(s.copy(saveScreenshots = it)) },
-                )
-            }
-
-            item {
-                SwitchRow(
-                    title = stringResource(R.string.settings_overlay_blur),
-                    subtitle = stringResource(R.string.settings_overlay_blur_desc),
-                    checked = s.overlayBlur,
-                    onCheckedChange = { onSettingsChange(s.copy(overlayBlur = it)) },
-                )
-            }
-
-            item {
-                SwitchRow(
-                    title = stringResource(R.string.settings_local_dismiss),
-                    subtitle = stringResource(R.string.settings_local_dismiss_desc),
-                    checked = s.localDialogDismiss,
-                    onCheckedChange = { onSettingsChange(s.copy(localDialogDismiss = it)) },
-                )
-            }
-
-            item {
-                TapReviewSlider(
-                    mode = s.tapReview,
-                    onChange = { onSettingsChange(s.copy(tapReview = it)) },
-                )
-            }
-
-            item { SectionDivider() }
 
             // ================= 日志 =================
+            item { SectionTitle(stringResource(R.string.settings_export_logs)) }
+            item { SectionNote(stringResource(R.string.settings_export_logs_desc)) }
             item {
                 LogSection(
                     state = state,
@@ -273,6 +259,12 @@ fun SettingsScreen(
 // 模型
 // ----------------------------------------------------------------------
 
+/**
+ * 模型设置。
+ *
+ * 两条通道（自定义 / 免费）用**分段控件**切换，而不是两个并排按钮：
+ * 并排的两个按钮看起来像"两个动作"，分段控件才表达"这是同一件事的两种取值"。
+ */
 @Composable
 private fun ModelSection(
     s: AppSettings,
@@ -313,71 +305,39 @@ private fun ModelSection(
         loadFreeModels()
     }
 
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Spacer(Modifier.height(8.dp))
+    Column(modifier = Modifier.padding(horizontal = Space.lg)) {
+        ChannelToggle(
+            useFree = s.useFreeModel,
+            onChange = { onChange(s.copy(useFreeModel = it)) },
+        )
 
-        // 顶部切换：自定义 / 免费
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = { onChange(s.copy(useFreeModel = false)) },
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.settings_model_mode_custom)) }
-            Button(
-                onClick = { onChange(s.copy(useFreeModel = true)) },
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.settings_model_mode_free)) }
-        }
-
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(Space.md))
 
         if (!s.useFreeModel) {
             // ---------- 自定义模式 ----------
-            OutlinedTextField(
+            AppTextField(
                 value = s.baseUrl,
                 onValueChange = { onChange(s.copy(baseUrl = it)) },
-                label = { Text(stringResource(R.string.settings_model_provider)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
+                label = stringResource(R.string.settings_model_provider),
             )
 
             // 公网明文 HTTP 的常驻警告（评审报告第 3 节）：
             // LlmClient 里只打日志 —— 用户不会看日志，这里钉在输入框下面。
             // 判据与 LlmClient 共用 EndpointSafety，不会出现两处说法不一致。
             EndpointSafety.cleartextWarning(s.baseUrl)?.let { warning ->
-                Spacer(Modifier.height(8.dp))
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Warning,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.settings_model_public_http_warning),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                        )
-                    }
-                }
+                Spacer(Modifier.height(Space.sm))
+                Banner(
+                    text = stringResource(R.string.settings_model_public_http_warning),
+                    tone = Tone.Negative,
+                )
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Space.md))
 
-            OutlinedTextField(
+            AppTextField(
                 value = s.apiKey,
                 onValueChange = { onChange(s.copy(apiKey = it)) },
-                label = { Text(stringResource(R.string.settings_model_apikey)) },
-                singleLine = true,
+                label = stringResource(R.string.settings_model_apikey),
                 visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     IconButton(onClick = { keyVisible = !keyVisible }) {
@@ -386,40 +346,34 @@ private fun ModelSection(
                             contentDescription = stringResource(
                                 if (keyVisible) R.string.settings_apikey_hide else R.string.settings_apikey_show
                             ),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(Size.iconMd),
                         )
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Space.md))
         } else {
             // ---------- 免费模式 ----------
-            Text(
-                text = stringResource(R.string.settings_model_free_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
+            HintText(stringResource(R.string.settings_model_free_hint))
+            Spacer(Modifier.height(Space.sm))
         }
 
-        OutlinedTextField(
+        AppTextField(
             value = s.modelName,
             onValueChange = { onChange(s.copy(modelName = it)) },
-            label = { Text(stringResource(R.string.settings_model_name)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
+            label = stringResource(R.string.settings_model_name),
         )
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Space.sm))
 
         if (!s.useFreeModel) {
-            // 获取模型列表按钮（自定义模式）
-            OutlinedButton(
+            // 获取模型列表（自定义模式）：失败就地给原因，不给红框大字
+            AppButton(
+                text = stringResource(R.string.settings_model_fetch),
                 onClick = {
-                    if (fetching) return@OutlinedButton
+                    if (fetching) return@AppButton
                     fetching = true
                     fetchError = null
                     models = null
@@ -432,61 +386,54 @@ private fun ModelSection(
                             .onFailure { e -> fetchError = e.message ?: e.javaClass.simpleName }
                     }
                 },
+                variant = ButtonVariant.Secondary,
+                loading = fetching,
+                enabled = !fetching,
                 modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (fetching) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.settings_model_fetching))
-                } else {
-                    Text(stringResource(R.string.settings_model_fetch))
-                }
+            )
+            if (fetching) {
+                Spacer(Modifier.height(Space.sm))
+                LoadingRow(stringResource(R.string.settings_model_fetching))
             }
-
             fetchError?.let { err ->
-                Spacer(Modifier.height(4.dp))
-                Text(
+                Spacer(Modifier.height(Space.sm))
+                Banner(
                     text = stringResource(R.string.settings_model_fetch_failed, err),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    tone = Tone.Negative,
                 )
             }
         } else {
             // 免费模式：点开后**用接口实时读取**可选模型（失败退回内置名单）
-            OutlinedButton(
+            AppButton(
+                text = stringResource(R.string.settings_model_free_pick),
                 onClick = { openFreePicker() },
+                variant = ButtonVariant.Secondary,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(stringResource(R.string.settings_model_free_pick)) }
+            )
         }
 
         // 自定义模式：拉回来的模型列表
         models?.let { list ->
-            AlertDialog(
-                onDismissRequest = { models = null },
-                title = { Text(stringResource(R.string.settings_model_dialog_title)) },
-                text = {
+            AppAlertDialog(
+                title = stringResource(R.string.settings_model_dialog_title),
+                onDismiss = { models = null },
+                dismissText = stringResource(R.string.schedule_cancel),
+                content = {
                     if (list.isEmpty()) {
-                        Text(stringResource(R.string.settings_model_empty))
+                        HintText(stringResource(R.string.settings_model_empty))
                     } else {
-                        androidx.compose.foundation.lazy.LazyColumn {
+                        LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                             items(list) { m ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            onChange(s.copy(modelName = m))
-                                            models = null
-                                        }
-                                        .padding(vertical = 8.dp, horizontal = 4.dp),
-                                ) { Text(m, style = MaterialTheme.typography.bodyLarge) }
+                                SelectableItem(
+                                    title = m,
+                                    selected = m == s.modelName,
+                                    onClick = {
+                                        onChange(s.copy(modelName = m))
+                                        models = null
+                                    },
+                                )
                             }
                         }
-                    }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { models = null }) {
-                        Text(stringResource(R.string.schedule_cancel))
                     }
                 },
             )
@@ -496,71 +443,41 @@ private fun ModelSection(
         if (showFreePicker) {
             val live = freeLive
             val shown = live ?: freeModels
-            AlertDialog(
-                onDismissRequest = { showFreePicker = false },
-                title = { Text(stringResource(R.string.settings_model_free_pick)) },
-                text = {
-                    Column {
-                        // 列表是从哪来的，如实写出来（这就是"用接口读取"的可见面）
-                        when {
-                            freeFetching -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    "正在从接口读取模型列表 …",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            live != null -> Text(
-                                "已从接口实时读取（${live.size} 个）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            freeFetchError != null -> Text(
-                                "接口读取失败：$freeFetchError（下面用内置名单）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
+            AppAlertDialog(
+                title = stringResource(R.string.settings_model_free_pick),
+                onDismiss = { showFreePicker = false },
+                dismissText = stringResource(R.string.schedule_cancel),
+                confirmText = stringResource(R.string.settings_model_free_reload),
+                onConfirm = { loadFreeModels(force = true) },
+                content = {
+                    // 列表是从哪来的，如实写出来（这就是"用接口读取"的可见面）
+                    when {
+                        freeFetching -> LoadingRow("正在从接口读取模型列表 …")
+                        live != null -> HintText("已从接口实时读取（${live.size} 个）")
+                        freeFetchError != null -> Banner(
+                            text = "接口读取失败：$freeFetchError（下面用内置名单）",
+                            tone = Tone.Warning,
+                        )
+                    }
+                    Spacer(Modifier.height(Space.sm))
+                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                        items(shown) { m ->
+                            SelectableItem(
+                                title = m.label,
+                                subtitle = m.id,
+                                selected = m.id == s.modelName,
+                                onClick = {
+                                    onChange(s.copy(modelName = m.id))
+                                    showFreePicker = false
+                                },
                             )
                         }
-                        Spacer(Modifier.height(8.dp))
-                        androidx.compose.foundation.lazy.LazyColumn {
-                            items(shown) { m ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            onChange(s.copy(modelName = m.id))
-                                            showFreePicker = false
-                                        }
-                                        .padding(vertical = 8.dp, horizontal = 4.dp),
-                                ) {
-                                    Column {
-                                        Text(m.label, style = MaterialTheme.typography.bodyLarge)
-                                        Text(m.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { loadFreeModels(force = true) }) {
-                        Text(stringResource(R.string.settings_model_free_reload))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showFreePicker = false }) {
-                        Text(stringResource(R.string.schedule_cancel))
                     }
                 },
             )
         }
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Space.sm))
 
         ThinkingModeSlider(
             current = s.thinking,
@@ -570,9 +487,86 @@ private fun ModelSection(
             onChange = { onChange(s.copy(thinking = it)) },
             onCustomEffortChange = { onChange(s.copy(customEffort = it)) },
         )
-
-        Spacer(Modifier.height(4.dp))
     }
+}
+
+/**
+ * 分段控件：同一件事的两个取值。
+ *
+ * 选中项用卡片色浮起来（不是变蓝），这样它读起来是"当前这个"，
+ * 而不是"推荐你点这个"。
+ */
+@Composable
+private fun ChannelToggle(useFree: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AppTheme.accents.sunken, RoundedCornerShape(Radius.md))
+            .padding(Space.xs),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        Segment(
+            text = stringResource(R.string.settings_model_mode_custom),
+            selected = !useFree,
+            onClick = { onChange(false) },
+            modifier = Modifier.weight(1f),
+        )
+        Segment(
+            text = stringResource(R.string.settings_model_mode_free),
+            selected = useFree,
+            onClick = { onChange(true) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun Segment(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .height(40.dp)
+            .interactiveSurface(
+                shape = RoundedCornerShape(Radius.sm),
+                onClick = onClick,
+            )
+            .background(
+                if (selected) MaterialTheme.colorScheme.surface else androidx.compose.ui.graphics.Color.Transparent,
+                RoundedCornerShape(Radius.sm),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 列表里的可选项（选模型用）：选中态用主色的圆点，而不是整行变蓝 */
+@Composable
+private fun SelectableItem(
+    title: String,
+    onClick: () -> Unit,
+    subtitle: String? = null,
+    selected: Boolean = false,
+) {
+    SettingRow(
+        title = title,
+        subtitle = subtitle,
+        onClick = onClick,
+        trailing = {
+            if (selected) {
+                StatusPill(text = "当前", tone = Tone.Positive, dot = false)
+            }
+        },
+    )
 }
 
 /**
@@ -650,70 +644,40 @@ private fun ThinkingModeSlider(
     val index = options.indexOf(current).takeIf { it >= 0 }
         ?: options.indexOf(ThinkingMode.DEFAULT).coerceAtLeast(0)
     var draft by remember(index) { mutableFloatStateOf(index.toFloat()) }
+    val picked = options[draft.toInt().coerceIn(0, options.lastIndex)]
 
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = stringResource(R.string.settings_model_thinking),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-
-        Slider(
-            value = draft,
-            onValueChange = { draft = it },
-            onValueChangeFinished = {
-                onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
-            },
-            valueRange = 0f..options.lastIndex.toFloat(),
-            steps = (options.size - 2).coerceAtLeast(0),
-        )
-
-        Text(
-            text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        // 接口事实行：这一档到底会发什么参数。用户拿它和抓包/日志对得上。
-        Text(
-            text = stringResource(
-                R.string.settings_model_thinking_api,
-                options[draft.toInt().coerceIn(0, options.lastIndex)].apiFor(freeLane, customEffort),
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(top = 2.dp),
-        )
-
-        // 选了「自定义」才出现的输入框：用户想发什么 effort 就发什么。
-        // 留空 = 什么都不发（这一条在提示里写死，因为它是唯一"空"的含义）。
-        if (options[draft.toInt().coerceIn(0, options.lastIndex)] == ThinkingMode.CUSTOM) {
-            OutlinedTextField(
-                value = customEffort,
-                onValueChange = onCustomEffortChange,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                placeholder = { Text(stringResource(R.string.settings_thinking_custom_hint)) },
-                supportingText = {
-                    Text(
-                        if (freeLane) {
-                            stringResource(R.string.settings_thinking_custom_free_note)
-                        } else {
-                            stringResource(R.string.settings_thinking_custom_note)
-                        }
-                    )
-                },
-            )
-        }
-    }
+    SliderSetting(
+        title = stringResource(R.string.settings_model_thinking),
+        valueLabel = picked.label,
+        note = picked.note,
+        fact = stringResource(R.string.settings_model_thinking_api, picked.apiFor(freeLane, customEffort)),
+        value = draft,
+        valueRange = 0f..options.lastIndex.toFloat(),
+        steps = (options.size - 2).coerceAtLeast(0),
+        onValueChange = { draft = it },
+        onValueChangeFinished = {
+            onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
+        },
+        extra = if (picked == ThinkingMode.CUSTOM) {
+            {
+                // 选了「自定义」才出现的输入框：用户想发什么 effort 就发什么。
+                // 留空 = 什么都不发（这一条在提示里写死，因为它是唯一"空"的含义）。
+                AppTextField(
+                    value = customEffort,
+                    onValueChange = onCustomEffortChange,
+                    placeholder = stringResource(R.string.settings_thinking_custom_hint),
+                    supportingText = if (freeLane) {
+                        stringResource(R.string.settings_thinking_custom_free_note)
+                    } else {
+                        stringResource(R.string.settings_thinking_custom_note)
+                    },
+                    modifier = Modifier.padding(top = Space.sm),
+                )
+            }
+        } else {
+            null
+        },
+    )
 }
 
 // ----------------------------------------------------------------------
@@ -736,38 +700,19 @@ private fun ContextPolicySlider(
     val current = options.indexOf(policy).coerceAtLeast(0)
     var draft by remember(current) { mutableFloatStateOf(current.toFloat()) }
 
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = stringResource(R.string.settings_context_policy),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-
-        Slider(
-            value = draft,
-            onValueChange = { draft = it },
-            onValueChangeFinished = {
-                onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
-            },
-            valueRange = 0f..options.lastIndex.toFloat(),
-            // 三档之间只有两个间隔点
-            steps = (options.size - 2).coerceAtLeast(0),
-        )
-
-        Text(
-            text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    SliderSetting(
+        title = stringResource(R.string.settings_context_policy),
+        valueLabel = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
+        note = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
+        value = draft,
+        valueRange = 0f..options.lastIndex.toFloat(),
+        // 三档之间只有两个间隔点
+        steps = (options.size - 2).coerceAtLeast(0),
+        onValueChange = { draft = it },
+        onValueChangeFinished = {
+            onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
+        },
+    )
 }
 
 // ----------------------------------------------------------------------
@@ -800,37 +745,18 @@ private fun TapReviewSlider(
     val current = options.indexOf(mode).coerceAtLeast(0)
     var draft by remember(current) { mutableFloatStateOf(current.toFloat()) }
 
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = stringResource(R.string.settings_tap_review),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-
-        Slider(
-            value = draft,
-            onValueChange = { draft = it },
-            onValueChangeFinished = {
-                onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
-            },
-            valueRange = 0f..options.lastIndex.toFloat(),
-            steps = (options.size - 2).coerceAtLeast(0),
-        )
-
-        Text(
-            text = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    SliderSetting(
+        title = stringResource(R.string.settings_tap_review),
+        valueLabel = options[draft.toInt().coerceIn(0, options.lastIndex)].label,
+        note = options[draft.toInt().coerceIn(0, options.lastIndex)].note,
+        value = draft,
+        valueRange = 0f..options.lastIndex.toFloat(),
+        steps = (options.size - 2).coerceAtLeast(0),
+        onValueChange = { draft = it },
+        onValueChangeFinished = {
+            onChange(options[draft.toInt().coerceIn(0, options.lastIndex)])
+        },
+    )
 }
 
 /**
@@ -852,44 +778,25 @@ private fun StepsSliderRow(
 
     var draft by remember(stored) { mutableFloatStateOf(stored.toFloat()) }
 
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = stringResource(R.string.settings_max_steps),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = if (draft >= STEPS_UNLIMITED) {
-                    stringResource(R.string.settings_steps_unlimited)
-                } else {
-                    stringResource(R.string.settings_steps_value, draft.toInt())
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-
-        Slider(
-            value = draft,
-            onValueChange = { draft = it },
-            onValueChangeFinished = {
-                val v = draft.toInt()
-                // 满格 = 不限（存 0）
-                onChange(if (v >= STEPS_UNLIMITED) 0 else v)
-            },
-            valueRange = STEPS_MIN.toFloat()..STEPS_UNLIMITED.toFloat(),
-            // 整数刻度：(100-10+1) 个取值 → 中间 89 个分隔点
-            steps = STEPS_UNLIMITED - STEPS_MIN - 1,
-        )
-
-        Text(
-            text = stringResource(R.string.settings_max_steps_desc),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    SliderSetting(
+        title = stringResource(R.string.settings_max_steps),
+        valueLabel = if (draft >= STEPS_UNLIMITED) {
+            stringResource(R.string.settings_steps_unlimited)
+        } else {
+            stringResource(R.string.settings_steps_value, draft.toInt())
+        },
+        note = stringResource(R.string.settings_max_steps_desc),
+        value = draft,
+        valueRange = STEPS_MIN.toFloat()..STEPS_UNLIMITED.toFloat(),
+        // 整数刻度：(100-10+1) 个取值 → 中间 89 个分隔点
+        steps = STEPS_UNLIMITED - STEPS_MIN - 1,
+        onValueChange = { draft = it },
+        onValueChangeFinished = {
+            val v = draft.toInt()
+            // 满格 = 不限（存 0）
+            onChange(if (v >= STEPS_UNLIMITED) 0 else v)
+        },
+    )
 }
 
 // ----------------------------------------------------------------------
@@ -905,291 +812,75 @@ private fun LogSection(
     var confirmDelete by remember { mutableStateOf(false) }
 
     if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text(stringResource(R.string.log_delete_confirm_title)) },
-            text = { Text(stringResource(R.string.log_delete_confirm_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmDelete = false
-                        onDeleteLogs()
-                    }
-                ) {
-                    Text(
-                        text = stringResource(R.string.log_delete),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+        AppAlertDialog(
+            title = stringResource(R.string.log_delete_confirm_title),
+            body = stringResource(R.string.log_delete_confirm_body),
+            confirmText = stringResource(R.string.log_delete),
+            confirmDestructive = true,
+            onConfirm = {
+                confirmDelete = false
+                onDeleteLogs()
             },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) {
-                    Text(stringResource(R.string.schedule_cancel))
-                }
-            },
+            onDismiss = { confirmDelete = false },
+            dismissText = stringResource(R.string.schedule_cancel),
         )
     }
 
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Spacer(Modifier.height(8.dp))
-
-        Text(
-            text = stringResource(R.string.settings_export_logs),
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Medium,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.settings_export_logs_desc),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Spacer(Modifier.height(8.dp))
-
+    Column(modifier = Modifier.padding(horizontal = Space.lg)) {
         // 统计：让用户知道"有没有东西可导"
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = state.logStats,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (state.memoryStats.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = state.memoryStats,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (state.autoCapStats.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = state.autoCapStats,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
+        StatBlock(
+            lines = buildList {
+                if (state.logStats.isNotBlank()) add(state.logStats)
+                if (state.memoryStats.isNotBlank()) add(state.memoryStats)
+                if (state.autoCapStats.isNotBlank()) add(state.autoCapStats)
+            },
+        )
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(Space.md))
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            OutlinedButton(
+        ButtonRow {
+            AppButton(
+                text = stringResource(R.string.settings_export_logs_button),
                 onClick = onExportLogs,
+                variant = ButtonVariant.Secondary,
                 // 打包期间禁用 + 换文案。日志大时这一步是分钟级的，
                 // 不给交代的话用户只会觉得按钮失灵
                 enabled = !state.exporting,
+                loading = state.exporting,
                 modifier = Modifier.weight(1f),
-            ) {
-                if (state.exporting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.settings_export_working))
-                } else {
-                    Text(stringResource(R.string.settings_export_logs_button))
-                }
-            }
-            OutlinedButton(
+            )
+            AppButton(
+                text = stringResource(R.string.log_delete),
                 onClick = { confirmDelete = true },
+                variant = ButtonVariant.Danger,
                 modifier = Modifier.weight(1f),
-            ) {
-                Text(
-                    text = stringResource(R.string.log_delete),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            )
         }
 
-        Spacer(Modifier.height(16.dp))
+        if (state.exporting) {
+            Spacer(Modifier.height(Space.sm))
+            LoadingRow(stringResource(R.string.settings_export_working))
+        }
+
+        Spacer(Modifier.height(Space.lg))
     }
 }
 
 // ----------------------------------------------------------------------
-// 通用行
+// 开发者警告
 // ----------------------------------------------------------------------
-
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
-    )
-}
-
-@Composable
-private fun SectionDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(top = 16.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-    )
-}
 
 /**
  * 那行红字。
  *
  * 手稿上专门用红笔写了一遍，所以这里也做成醒目的：
- * 红底 + 警告图标，而不是一行小灰字。
+ * 危险色容器 + 警告图标，而不是一行小灰字。
  */
 @Composable
-private fun DeveloperWarning() {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(12.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Warning,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = stringResource(R.string.settings_developer_warning),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ActionRow(
-    title: String,
-    subtitle: String?,
-    onClick: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        if (subtitle != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SwitchRow(
-    title: String,
-    subtitle: String?,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            if (subtitle != null) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-/**
- * 下拉选择行。
- *
- * 没用 Material3 的 ExposedDropdownMenuBox —— 那个 API 在各版本之间
- * 改过好几次（menuAnchor 的签名变过），而这个场景只需要"点一下弹出列表"，
- * 用最朴素的 DropdownMenu 就够，且不依赖实验性 API。
- */
-@Composable
-internal fun <T> DropdownRow(
-    title: String,
-    subtitle: String?,
-    current: T,
-    options: List<T>,
-    optionLabel: (T) -> String,
-    optionEnabled: (T) -> Boolean = { true },
-    onSelect: (T) -> Unit,
-    horizontalPadding: androidx.compose.ui.unit.Dp = 16.dp,
-) {
-    var open by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = horizontalPadding, vertical = 8.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        if (subtitle != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        Box {
-            TextButton(onClick = { open = true }) {
-                Text(optionLabel(current))
-                Spacer(Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.Filled.ArrowDropDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(optionLabel(option)) },
-                        // 不可用项灰显、点不动（防止把 mode 选成 ADB）
-                        enabled = optionEnabled(option),
-                        onClick = {
-                            onSelect(option)
-                            open = false
-                        },
-                    )
-                }
-            }
-        }
-    }
+private fun DeveloperWarning(modifier: Modifier = Modifier) {
+    Banner(
+        text = stringResource(R.string.settings_developer_warning),
+        tone = Tone.Negative,
+        modifier = modifier,
+    )
 }

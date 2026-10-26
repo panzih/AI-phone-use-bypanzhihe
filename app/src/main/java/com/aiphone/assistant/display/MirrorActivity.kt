@@ -21,12 +21,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.material3.Button
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +50,13 @@ import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.shell.ShizukuBridge
 import com.aiphone.assistant.ui.AutoReturnOnForegroundEffect
+import com.aiphone.assistant.ui.design.AppButton
+import com.aiphone.assistant.ui.design.AppTheme
+import com.aiphone.assistant.ui.design.ButtonVariant
+import com.aiphone.assistant.ui.design.Radius
+import com.aiphone.assistant.ui.design.Space
+import com.aiphone.assistant.ui.design.StatusPill
+import com.aiphone.assistant.ui.design.Tone
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -180,27 +189,47 @@ private fun MirrorScreen(displayId: Int, onExit: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.statusBars))
             .windowInsetsPadding(WindowInsets.navigationBars),
     ) {
-        // 状态条
-        Text(
-            text = status,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (frame == null) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+        // 状态条：左边"是什么"，右边"现在什么状况"。
+        // 状态文字本身就是诊断信息（第几次失败、多少 KB），所以不省略、只换行。
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-        )
+                .padding(horizontal = Space.lg, vertical = Space.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.vd_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (frame == null) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(Space.sm))
+            StatusPill(
+                text = if (frame == null) "等待画面" else "已连接",
+                tone = if (frame == null) Tone.Warning else Tone.Positive,
+            )
+        }
 
-        // 画面
+        // 画面：铺在凹陷底色上。深色主题下这里是"屏幕里还有一块屏幕"，
+        // 用比画布更暗的一层才看得出边界；用 surface 会和卡片糊在一起。
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .padding(horizontal = Space.md)
+                .background(AppTheme.accents.sunken, RoundedCornerShape(Radius.lg)),
             contentAlignment = Alignment.Center,
         ) {
             val f = frame
@@ -212,31 +241,42 @@ private fun MirrorScreen(displayId: Int, onExit: () -> Unit) {
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                Text(
-                    text = stringResource(R.string.vd_mirror_waiting),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(Space.md))
+                    Text(
+                        text = stringResource(R.string.vd_mirror_waiting),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
-        // 底部操作
+        // 底部操作：退出是次要（灰描边），重试是主操作（实心）——
+        // 抓不到画面时用户唯一想做的是再试一次。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = Space.md, vertical = Space.md),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
-            OutlinedButton(onClick = onExit, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.vd_mirror_exit))
-            }
-            Button(
+            AppButton(
+                text = stringResource(R.string.vd_mirror_exit),
+                onClick = onExit,
+                variant = ButtonVariant.Secondary,
+                modifier = Modifier.weight(1f),
+            )
+            AppButton(
+                text = stringResource(R.string.vd_mirror_retry),
                 onClick = { retryTick++ },
                 modifier = Modifier.weight(1f),
-            ) {
-                Text(stringResource(R.string.vd_mirror_retry))
-            }
+            )
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Space.xs))
     }
 }

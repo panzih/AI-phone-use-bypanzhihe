@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式下的画布色，与 Ink.canvas 一致 -->
+    <color name="app_canvas">#13120E</color>
+</resources>

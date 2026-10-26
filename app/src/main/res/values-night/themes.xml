@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      窗口主题（深色）。
+      原来这里没有 values-night，全应用只有一个 Light 父主题 ——
+      Compose 那边已经切到深色了，窗口却还是浅色的：
+      启动白闪、系统弹窗白底、返回动画过渡时露出的也是白底。
+      父主题换成非 Light 版本，窗口层面的默认前景色才会跟着反过来。
+    -->
+    <style name="Theme.AiPhoneAssistant" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/app_canvas</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

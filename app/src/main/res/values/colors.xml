@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
+      画布色。和 Compose 里的 ui/design/Color.kt 一一对应 —— 两处都改才算改完。
+      它唯一的用途是 android:windowBackground：进程刚起来、Compose 还没画第一帧时
+      窗口先铺这层颜色。不设的话那几十毫秒是系统默认的白，
+      深色模式下就是一下刺眼的白闪。
+    -->
+    <color name="app_canvas">#F5F3EE</color>
+
+    <!--
       自适应图标的背景色：浅牛皮纸色。
       配深棕色的轮廓线，整体就是"纸盒"的样子。
       比原来的蓝色更贴名字，在浅色壁纸上也不会糊成一片。

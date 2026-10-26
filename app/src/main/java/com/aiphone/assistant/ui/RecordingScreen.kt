@@ -1,46 +1,32 @@
 package com.aiphone.assistant.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,9 +36,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
+import com.aiphone.assistant.ui.design.AppButton
+import com.aiphone.assistant.ui.design.AppScaffold
+import com.aiphone.assistant.ui.design.AppTextField
+import com.aiphone.assistant.ui.design.ButtonVariant
+import com.aiphone.assistant.ui.design.EmptyState
+import com.aiphone.assistant.ui.design.GroupCard
+import com.aiphone.assistant.ui.design.GroupDivider
+import com.aiphone.assistant.ui.design.HintText
+import com.aiphone.assistant.ui.design.SectionTitle
+import com.aiphone.assistant.ui.design.SettingRow
+import com.aiphone.assistant.ui.design.Size
+import com.aiphone.assistant.ui.design.Space
+import com.aiphone.assistant.ui.design.StatusPill
+import com.aiphone.assistant.ui.design.Tone
 
 /**
  * 操作记录。
@@ -70,8 +69,13 @@ import com.aiphone.assistant.R
  *   3. 学习   交给 AI 起名、写说明、去掉多余的步骤，存成技能
  *
  * 页面刻意保持线性：一次只做一件事，不需要用户在几个入口之间找。
+ *
+ * ## 视觉上怎么表达"线性"
+ *
+ * 每个步骤前面有一个**带序号的圆**（1 / 2 / 3），序号的底色跟着状态变：
+ * 灰 = 还没到，主色 = 当前这一步，绿 = 已完成。这样用户不读标题也知道
+ * 自己走到了哪儿 —— 原来三段之间只靠一条分割线，读起来是三块平行的内容。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordingScreen(
     state: MainUiState,
@@ -89,229 +93,210 @@ fun RecordingScreen(
         state.toast?.let { snackbar.showSnackbar(it) }
     }
 
-    Scaffold(
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.recording_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            stringResource(R.string.settings_back),
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-                modifier = Modifier.windowInsetsPadding(
-                    WindowInsets.displayCutout.union(WindowInsets.statusBars)
-                ),
-            )
-        },
+    // 三段的完成状态：录制中 → 第 1 步是当前；有步骤了 → 第 1 步完成、第 2 步当前
+    val hasSteps = state.recordedSteps.isNotEmpty()
+    val step1State = when {
+        state.recordingActive -> StepState.Current
+        hasSteps -> StepState.Done
+        else -> StepState.Current
+    }
+    val step2State = if (hasSteps) StepState.Current else StepState.Pending
+    val step3State = if (state.macros.isNotEmpty()) StepState.Done else StepState.Pending
+
+    AppScaffold(
+        title = stringResource(R.string.recording_title),
+        onBack = onBack,
+        backLabel = stringResource(R.string.settings_back),
+        snackbarHostState = snackbar,
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .windowInsetsPadding(WindowInsets.navigationBars),
-            contentPadding = PaddingValues(bottom = 32.dp),
+            contentPadding = PaddingValues(bottom = Space.huge),
         ) {
             // ---------- 1. 录制 ----------
+            item { StepTitle(1, stringResource(R.string.recording_title), step1State) }
             item {
-                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    Spacer(Modifier.height(12.dp))
-
-                    if (state.recordingActive) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Filled.Stop,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = stringResource(
-                                    R.string.recording_in_progress,
-                                    state.recordedSteps.size,
-                                ),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = stringResource(R.string.recording_in_progress_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Button(
-                            onClick = onStop,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.recording_stop))
-                        }
-                    } else {
-                        Text(
-                            text = stringResource(R.string.recording_intro),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Button(
-                                onClick = onStart,
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Icon(
-                                    Icons.Filled.PlayArrow,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
+                    Column(modifier = Modifier.padding(Space.lg)) {
+                        if (state.recordingActive) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                StatusPill(text = "录制中", tone = Tone.Negative)
+                                Spacer(Modifier.width(Space.sm))
+                                Text(
+                                    text = stringResource(
+                                        R.string.recording_in_progress,
+                                        state.recordedSteps.size,
+                                    ),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
-                                Spacer(Modifier.width(6.dp))
-                                Text(stringResource(R.string.recording_start))
                             }
-                            if (state.recordedSteps.isNotEmpty()) {
-                                OutlinedButton(
+                            Spacer(Modifier.height(Space.sm))
+                            HintText(stringResource(R.string.recording_in_progress_desc))
+                        } else {
+                            HintText(stringResource(R.string.recording_intro))
+                        }
+                    }
+                    GroupDivider()
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(Space.lg),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (state.recordingActive) {
+                            AppButton(
+                                text = stringResource(R.string.recording_stop),
+                                onClick = onStop,
+                                variant = ButtonVariant.Danger,
+                                icon = Icons.Filled.Stop,
+                                modifier = Modifier.weight(1f),
+                            )
+                        } else {
+                            AppButton(
+                                text = stringResource(R.string.recording_start),
+                                onClick = onStart,
+                                icon = Icons.Filled.PlayArrow,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (hasSteps) {
+                                Spacer(Modifier.width(Space.sm))
+                                AppButton(
+                                    text = stringResource(R.string.recording_discard),
                                     onClick = onDiscard,
-                                    modifier = Modifier.weight(1f),
-                                ) {
-                                    Text(stringResource(R.string.recording_discard))
-                                }
+                                    variant = ButtonVariant.Secondary,
+                                )
                             }
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
                 }
             }
 
             // ---------- 2. 录到了什么 ----------
-            if (state.recordedSteps.isNotEmpty()) {
-                item { SectionDivider() }
+            if (hasSteps) {
+                item { StepTitle(2, stringResource(R.string.recording_steps_title, state.recordedSteps.size), step2State) }
                 item {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = stringResource(
-                                R.string.recording_steps_title,
-                                state.recordedSteps.size,
-                            ),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Spacer(Modifier.height(8.dp))
-
-                        state.recordedSteps.forEachIndexed { i, label ->
-                            Row(
-                                modifier = Modifier.padding(vertical = 3.dp),
-                                verticalAlignment = Alignment.Top,
-                            ) {
-                                Text(
-                                    text = "${i + 1}.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.width(28.dp),
-                                )
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
+                    GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
+                        Column(modifier = Modifier.padding(Space.lg)) {
+                            state.recordedSteps.forEachIndexed { i, label ->
+                                Row(
+                                    modifier = Modifier.padding(vertical = Space.xs),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Text(
+                                        text = "${i + 1}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.width(22.dp),
+                                    )
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
                             }
                         }
-
-                        Spacer(Modifier.height(16.dp))
-
-                        OutlinedTextField(
-                            value = name,
-                            onValueChange = { name = it },
-                            label = { Text(stringResource(R.string.recording_name_hint)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                        )
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Button(
-                            onClick = { onLearn(name) },
-                            enabled = !state.recordingActive && !state.learning,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                stringResource(
-                                    if (state.learning) {
-                                        R.string.recording_learning
-                                    } else {
-                                        R.string.recording_learn
-                                    }
-                                )
+                        GroupDivider()
+                        Column(modifier = Modifier.padding(Space.lg)) {
+                            AppTextField(
+                                value = name,
+                                onValueChange = { name = it },
+                                label = stringResource(R.string.recording_name_hint),
                             )
+                            Spacer(Modifier.height(Space.md))
+                            AppButton(
+                                text = stringResource(
+                                    if (state.learning) R.string.recording_learning else R.string.recording_learn
+                                ),
+                                onClick = { onLearn(name) },
+                                enabled = !state.recordingActive && !state.learning,
+                                loading = state.learning,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(Space.sm))
+                            HintText(stringResource(R.string.recording_learn_desc))
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = stringResource(R.string.recording_learn_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(12.dp))
                     }
                 }
             }
 
             // ---------- 3. 已经学会的技能 ----------
-            item { SectionDivider() }
+            item { StepTitle(3, stringResource(R.string.recording_macros_title), step3State) }
             item {
-                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = stringResource(R.string.recording_macros_title),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Spacer(Modifier.height(4.dp))
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
                     if (state.macros.isEmpty()) {
-                        Text(
-                            text = stringResource(R.string.recording_macros_empty),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        EmptyState(
+                            icon = Icons.Filled.TaskAlt,
+                            title = stringResource(R.string.recording_macros_empty),
+                            body = "学会的技能会出现在这里，之后说一句话就能整段跑完。",
                         )
-                    }
-                }
-            }
-
-            items(state.macros) { macro ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(macro.title, style = MaterialTheme.typography.bodyLarge)
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = stringResource(R.string.recording_macro_steps, macro.steps),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(onClick = { onDeleteMacro(macro.id) }) {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = stringResource(R.string.recording_macro_delete),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    } else {
+                        state.macros.forEachIndexed { index, macro ->
+                            if (index > 0) GroupDivider()
+                            SettingRow(
+                                title = macro.title,
+                                subtitle = stringResource(R.string.recording_macro_steps, macro.steps),
+                                trailing = {
+                                    IconButton(onClick = { onDeleteMacro(macro.id) }) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Delete,
+                                            contentDescription = stringResource(R.string.recording_macro_delete),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(Size.iconMd),
+                                        )
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+private enum class StepState { Pending, Current, Done }
+
+/**
+ * 步骤标题：序号圆 + 标题。
+ *
+ * 圆 20dp、序号 11sp —— 足够被看见，但比标题小，不会抢走阅读顺序。
+ * 底色编码状态（灰/主色/绿），这是这一页唯一的"进度"表达。
+ */
+@Composable
+private fun StepTitle(number: Int, title: String, state: StepState) {
+    val bg = when (state) {
+        StepState.Pending -> MaterialTheme.colorScheme.outlineVariant
+        StepState.Current -> MaterialTheme.colorScheme.primary
+        StepState.Done -> com.aiphone.assistant.ui.design.AppTheme.accents.success
+    }
+    val fg = when (state) {
+        StepState.Pending -> MaterialTheme.colorScheme.onSurfaceVariant
+        StepState.Current -> MaterialTheme.colorScheme.onPrimary
+        StepState.Done -> androidx.compose.ui.graphics.Color.White
+    }
+    Row(
+        modifier = Modifier.padding(start = Space.lg, end = Space.lg, top = Space.xxl, bottom = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(20.dp).background(bg, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = number.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = fg,
+            )
+        }
+        Spacer(Modifier.width(Space.sm))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
@@ -321,10 +306,3 @@ data class MacroSummary(
     val title: String,
     val steps: Int,
 )
-
-@Composable
-private fun SectionDivider() {
-    Spacer(Modifier.height(8.dp))
-    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-    Spacer(Modifier.height(4.dp))
-}

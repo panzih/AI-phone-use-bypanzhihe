@@ -1,49 +1,52 @@
 package com.aiphone.assistant.ui
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.data.AppInfo
+import com.aiphone.assistant.ui.design.AppButton
+import com.aiphone.assistant.ui.design.AppScaffold
+import com.aiphone.assistant.ui.design.ButtonVariant
+import com.aiphone.assistant.ui.design.GroupCard
+import com.aiphone.assistant.ui.design.GroupDivider
+import com.aiphone.assistant.ui.design.HintText
+import com.aiphone.assistant.ui.design.SectionTitle
+import com.aiphone.assistant.ui.design.SettingRow
+import com.aiphone.assistant.ui.design.Space
+import com.aiphone.assistant.ui.design.StatusPill
+import com.aiphone.assistant.ui.design.SwitchRow
+import com.aiphone.assistant.ui.design.Tone
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * 关于页。
+ *
+ * 三段：品牌（我是谁、什么版本）→ 更新（唯一的"做事"区）→ 开源许可（法律事实）。
+ *
+ * 品牌区做成**居中**的，这是全应用唯一居中排版的页面 —— 它没有任务，
+ * 只有陈述，居中读起来像"名片"而不是"表单"。
+ */
 @Composable
 fun AboutScreen(
     appVersion: String,
@@ -54,95 +57,142 @@ fun AboutScreen(
     onCheckUpdate: () -> Unit,
     onBack: () -> Unit,
 ) {
-    Scaffold(
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.about_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            stringResource(R.string.settings_back),
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-                modifier = Modifier.windowInsetsPadding(
-                    WindowInsets.displayCutout.union(WindowInsets.statusBars)
-                ),
-            )
-        },
+    AppScaffold(
+        title = stringResource(R.string.about_title),
+        onBack = onBack,
+        backLabel = stringResource(R.string.settings_back),
     ) { inner ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
                 .windowInsetsPadding(WindowInsets.navigationBars),
-            contentPadding = PaddingValues(bottom = 32.dp),
+            contentPadding = PaddingValues(bottom = Space.huge),
         ) {
             item { AppHeader(appVersion) }
+
+            item { SectionTitle("更新") }
             item {
-                UpdateSection(
-                    autoCheck = autoCheck,
-                    checking = checking,
-                    checkHint = checkHint,
-                    onAutoCheckChange = onAutoCheckChange,
-                    onCheckUpdate = onCheckUpdate,
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
+                    SettingRow(
+                        title = "检查新版本",
+                        subtitle = if (checkHint.isNotBlank()) checkHint else "会去仓库读最新版本的说明",
+                        trailing = {
+                            AppButton(
+                                text = if (checking) "检查中" else "检查",
+                                onClick = onCheckUpdate,
+                                variant = ButtonVariant.Ghost,
+                                loading = checking,
+                                enabled = !checking,
+                            )
+                        },
+                    )
+                    GroupDivider()
+                    SwitchRow(
+                        title = "启动时自动检查",
+                        subtitle = "打开时查一次，有新版本会提示。关掉也能在这里手动查。",
+                        checked = autoCheck,
+                        onCheckedChange = onAutoCheckChange,
+                    )
+                }
+            }
+
+            item { SectionTitle(stringResource(R.string.about_licenses_title)) }
+            item {
+                HintText(
+                    text = stringResource(R.string.about_licenses_intro),
+                    modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.xs),
                 )
             }
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp)) }
-            item { LicenseSection() }
+            item {
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
+                    licenses.forEachIndexed { index, item ->
+                        if (index > 0) GroupDivider()
+                        SettingRow(
+                            title = item.name,
+                            subtitle = "${item.license} · ${item.note}",
+                        )
+                    }
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(Space.xxl))
+                Text(
+                    text = "开源软件，欢迎 star 和提 issue。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
 
+/**
+ * 品牌头。
+ *
+ * 版本号做成胶囊挂在名字右边，而不是单独一行"版本：0.10.8" ——
+ * 它是**属性**不是**信息**，跟着名字走才不会占掉一整行。
+ */
 @Composable
 private fun AppHeader(appVersion: String) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Spacer(Modifier.height(12.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.lg, vertical = Space.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.ic_box_logo),
+            contentDescription = null,
+            modifier = Modifier.size(56.dp),
+        )
+        Spacer(Modifier.height(Space.md))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                painter = painterResource(R.drawable.ic_box_logo),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(40.dp),
+            Text(
+                text = stringResource(R.string.app_name),
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = stringResource(R.string.settings_about_tagline),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Spacer(Modifier.width(Space.sm))
+            StatusPill(
+                text = "v${appVersion.ifBlank { "?" }}",
+                tone = Tone.Neutral,
+                dot = false,
+            )
+        }
+        Spacer(Modifier.height(Space.xs))
+        Text(
+            text = stringResource(R.string.settings_about_tagline),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+
+    Column(modifier = Modifier.padding(horizontal = Space.lg)) {
+        GroupCard {
+            InfoRow(stringResource(R.string.settings_about_author), AppInfo.AUTHOR)
+            GroupDivider()
+            InfoRow(stringResource(R.string.settings_about_license), AppInfo.LICENSE)
+            if (AppInfo.REPO_URL.isNotBlank()) {
+                GroupDivider()
+                InfoRow(stringResource(R.string.settings_about_repo), AppInfo.REPO_URL)
             }
         }
-        Spacer(Modifier.height(16.dp))
-        InfoRow(stringResource(R.string.settings_about_version), appVersion.ifBlank { "?" })
-        InfoRow(stringResource(R.string.settings_about_author), AppInfo.AUTHOR)
-        InfoRow(stringResource(R.string.settings_about_license), AppInfo.LICENSE)
-        if (AppInfo.REPO_URL.isNotBlank()) {
-            InfoRow(stringResource(R.string.settings_about_repo), AppInfo.REPO_URL)
-        }
-        Spacer(Modifier.height(8.dp))
     }
 }
 
+/** 一行"标签 → 值"。标签定宽 76dp，值可以长（仓库地址那种） */
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = Space.lg, vertical = Space.md),
+        verticalAlignment = Alignment.Top,
     ) {
         Text(
             text = label,
@@ -150,7 +200,12 @@ private fun InfoRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.width(76.dp),
         )
-        Text(text = value, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -161,97 +216,3 @@ private val licenses = listOf(
     LicenseItem("org.json", "JSON License", "JSON 解析"),
     LicenseItem("Our Free Model（参考）", "MIT", "免费模型网关协议参考"),
 )
-
-@Composable
-private fun LicenseSection() {
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Text(
-            text = stringResource(R.string.about_licenses_title),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.about_licenses_intro),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
-        licenses.forEach { item ->
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(item.name, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = "${item.license} · ${item.note}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 更新区：手动检查 + 启动时自动检查开关。
- *
- * 放在「关于」页而不是设置页：这里已经有版本号，用户想更新时先看的就是这一页。
- */
-@Composable
-private fun UpdateSection(
-    autoCheck: Boolean,
-    checking: Boolean,
-    checkHint: String,
-    onAutoCheckChange: (Boolean) -> Unit,
-    onCheckUpdate: () -> Unit,
-) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "更新",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedButton(onClick = onCheckUpdate, enabled = !checking) {
-                Text(if (checking) "检查中…" else "检查更新", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        if (checkHint.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = checkHint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("启动时自动检查", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    text = "打开时查一次，有新版本会提示。关掉也能在这里手动查。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = autoCheck, onCheckedChange = onAutoCheckChange)
-        }
-    }
-}

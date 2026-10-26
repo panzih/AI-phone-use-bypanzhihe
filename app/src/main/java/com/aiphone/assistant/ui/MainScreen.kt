@@ -1,7 +1,7 @@
 package com.aiphone.assistant.ui
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,43 +24,41 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.filled.TouchApp
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
@@ -74,21 +72,38 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
+import com.aiphone.assistant.ui.design.AppAlertDialog
+import com.aiphone.assistant.ui.design.AppTheme
+import com.aiphone.assistant.ui.design.Radius
+import com.aiphone.assistant.ui.design.SectionTitle
+import com.aiphone.assistant.ui.design.Size
+import com.aiphone.assistant.ui.design.Space
+import com.aiphone.assistant.ui.design.interactiveSurface
+
 import kotlinx.coroutines.launch
 
+/**
+ * 主界面：一屏只回答一个问题 ——「我把事说给它，它办得怎么样」。
+ *
+ * 视觉上的三层，从下往上：
+ *
+ *   顶栏   我是谁、去哪（菜单）、两个不常用动作（新开对话、设置）
+ *   对话   唯一的正文区，AI 说的话是正文，做的事是脚注
+ *   输入栏 常驻在底部拇指区，运行中长出暂停/急停
+ *
+ * 配色和字号全部走 `ui.design` 的令牌，这一层不再出现任何裸颜色值。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -133,24 +148,53 @@ fun MainScreen(
     ) {
         Scaffold(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            containerColor = MaterialTheme.colorScheme.background,
             topBar = {
                 TopAppBar(
-                    title = { Text(stringResource(R.string.main_title)) },
+                    title = {
+                        Text(
+                            text = stringResource(R.string.main_title),
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = { toggleDrawer() }) {
-                            Icon(Icons.Filled.Menu, stringResource(R.string.drawer_open))
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = stringResource(R.string.drawer_open),
+                                tint = MaterialTheme.colorScheme.onSurface,
+                            )
                         }
                     },
                     actions = {
-                        IconButton(onClick = { showClearConfirm = true }, enabled = state.logs.isNotEmpty()) {
-                            Icon(Icons.Filled.AddComment, "新开对话")
+                        IconButton(
+                            onClick = { showClearConfirm = true },
+                            enabled = state.logs.isNotEmpty(),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.AddComment,
+                                contentDescription = "新开对话",
+                                tint = if (state.logs.isNotEmpty()) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                },
+                            )
                         }
                         IconButton(onClick = onSettingsClick) {
-                            Icon(Icons.Filled.Settings, stringResource(R.string.appbar_settings))
+                            Icon(
+                                imageVector = Icons.Filled.Settings,
+                                contentDescription = stringResource(R.string.appbar_settings),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
-                    modifier = Modifier.windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.statusBars)),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                    ),
+                    modifier = Modifier.windowInsetsPadding(
+                        WindowInsets.displayCutout.union(WindowInsets.statusBars)
+                    ),
                 )
             },
             bottomBar = {
@@ -174,36 +218,64 @@ fun MainScreen(
         }
 
         if (showClearConfirm) {
-            AlertDialog(
-                onDismissRequest = { showClearConfirm = false },
-                title = { Text("新开对话") },
-                text = { Text("确定清空当前对话和操作记录、新开一段吗？此操作不可撤销。") },
-                confirmButton = {
-                    TextButton(onClick = { showClearConfirm = false; onNewConversation() }) { Text("清空并新开") }
+            AppAlertDialog(
+                title = "新开对话",
+                body = "确定清空当前对话和操作记录、新开一段吗？此操作不可撤销。",
+                confirmText = "清空并新开",
+                confirmDestructive = true,
+                onConfirm = {
+                    showClearConfirm = false
+                    onNewConversation()
                 },
-                dismissButton = {
-                    TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
-                },
+                onDismiss = { showClearConfirm = false },
             )
         }
     }
 }
 
+/**
+ * 空状态：品牌留在正中，四周全部空着。
+ *
+ * 这一屏没有任何"引导卡片""推荐任务"—— 用户打开就是为了说一句话，
+ * 塞满东西只会把输入框的意义盖掉。字号刻意收着（18sp），
+ * 让 Logo 是唯一的主体。
+ */
 @Composable
 private fun BrandCenter() {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = Space.xxl),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Image(painter = painterResource(R.drawable.ic_box_logo), contentDescription = stringResource(R.string.main_logo_desc), modifier = Modifier.size(148.dp))
-        Spacer(Modifier.height(8.dp))
-        Text(text = stringResource(R.string.main_logo_caption), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(6.dp))
-        Text(text = stringResource(R.string.main_logo_by), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        Image(
+            painter = painterResource(R.drawable.ic_box_logo),
+            contentDescription = stringResource(R.string.main_logo_desc),
+            modifier = Modifier.size(128.dp),
+        )
+        Spacer(Modifier.height(Space.lg))
+        Text(
+            text = stringResource(R.string.main_logo_caption),
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(Space.sm))
+        Text(
+            text = stringResource(R.string.main_logo_by),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
+/**
+ * 侧边抽屉。
+ *
+ * 结构上刻意分成两段：上面是"干活的地方"（控制手机 / 定时任务），
+ * 中间用 `weight(1f)` 撑开，下面是"看状态和改配置"（权限 / 设置 / 关于）。
+ * 中间那段空白不是浪费 —— 它是分组，没有它八个入口会连成一片。
+ */
 @Composable
 private fun AppDrawer(
     onControlPhone: () -> Unit,
@@ -213,47 +285,103 @@ private fun AppDrawer(
     onSettings: () -> Unit,
     onAbout: () -> Unit,
 ) {
-    ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
+    ModalDrawerSheet(
+        modifier = Modifier.width(296.dp),
+        drawerContainerColor = MaterialTheme.colorScheme.surface,
+        drawerShape = RoundedCornerShape(topEnd = Radius.xl, bottomEnd = Radius.xl),
+    ) {
         Column(
             modifier = Modifier.fillMaxSize()
                 .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.statusBars))
                 .windowInsetsPadding(WindowInsets.navigationBars),
         ) {
-            Spacer(Modifier.height(20.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)) {
-                Image(painter = painterResource(R.drawable.ic_box_logo), contentDescription = null, modifier = Modifier.size(34.dp))
-                Spacer(Modifier.width(10.dp))
-                Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(Space.xl))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm),
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_box_logo),
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                )
+                Spacer(Modifier.width(Space.md))
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
             }
-            Spacer(Modifier.height(12.dp))
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            Spacer(Modifier.height(8.dp))
-            DrawerItem(icon = Icons.Filled.PhoneAndroid, title = stringResource(R.string.drawer_control_phone), onClick = onControlPhone)
+            Spacer(Modifier.height(Space.lg))
+            DrawerItem(
+                icon = Icons.Filled.PhoneAndroid,
+                title = stringResource(R.string.drawer_control_phone),
+                onClick = onControlPhone,
+            )
             // 录制入口已下架（见 RECORDING_ENTRY_ENABLED 的说明）：功能还在，入口先收起来
             if (RECORDING_ENTRY_ENABLED) {
-                DrawerItem(icon = Icons.Filled.FiberManualRecord, title = stringResource(R.string.drawer_recording), onClick = onRecording)
+                DrawerItem(
+                    icon = Icons.Filled.FiberManualRecord,
+                    title = stringResource(R.string.drawer_recording),
+                    onClick = onRecording,
+                )
             }
-            DrawerItem(icon = Icons.Filled.Schedule, title = stringResource(R.string.drawer_schedules), onClick = onSchedules)
+            DrawerItem(
+                icon = Icons.Filled.Schedule,
+                title = stringResource(R.string.drawer_schedules),
+                onClick = onSchedules,
+            )
+
             Spacer(Modifier.weight(1f))
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            Spacer(Modifier.height(8.dp))
-            DrawerItem(icon = Icons.Filled.Lock, title = stringResource(R.string.drawer_permissions), onClick = onPermissions)
-            DrawerItem(icon = Icons.Filled.Settings, title = stringResource(R.string.drawer_settings), onClick = onSettings)
-            DrawerItem(icon = Icons.Filled.Info, title = stringResource(R.string.drawer_about), onClick = onAbout)
-            Spacer(Modifier.height(12.dp))
+
+            SectionTitle(text = "更多", modifier = Modifier.padding(top = 0.dp))
+            DrawerItem(
+                icon = Icons.Filled.Lock,
+                title = stringResource(R.string.drawer_permissions),
+                onClick = onPermissions,
+            )
+            DrawerItem(
+                icon = Icons.Filled.Settings,
+                title = stringResource(R.string.drawer_settings),
+                onClick = onSettings,
+            )
+            DrawerItem(
+                icon = Icons.Filled.Info,
+                title = stringResource(R.string.drawer_about),
+                onClick = onAbout,
+            )
+            Spacer(Modifier.height(Space.lg))
         }
     }
 }
 
+/** 抽屉里的一项：图标 20dp、文字 15sp，行高 48dp，圆角只在悬停时看得出来 */
 @Composable
 private fun DrawerItem(icon: ImageVector, title: String, onClick: () -> Unit, enabled: Boolean = true) {
-    val contentColor = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-    ListItem(
-        headlineContent = { Text(title, color = contentColor) },
-        leadingContent = { Icon(icon, contentDescription = null, tint = contentColor) },
-        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp).clip(RoundedCornerShape(28.dp)).then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
-    )
+    val color = if (enabled) MaterialTheme.colorScheme.onSurface
+    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.sm)
+            .interactiveSurface(
+                enabled = enabled,
+                shape = RoundedCornerShape(Radius.md),
+                onClick = onClick,
+            )
+            .height(Size.touchTarget)
+            .padding(horizontal = Space.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else color,
+            modifier = Modifier.size(Size.iconMd),
+        )
+        Spacer(Modifier.width(Space.md))
+        Text(text = title, style = MaterialTheme.typography.bodyLarge, color = color)
+    }
 }
 
 /**
@@ -325,8 +453,8 @@ private fun TaskOutputArea(state: MainUiState, modifier: Modifier = Modifier) {
         modifier = modifier,
         reverseLayout = true,
         // 间距串起"谁跟着谁"：动作和它的结果挨得紧，段落之间松一点
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = PaddingValues(horizontal = Space.lg, vertical = Space.md),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
         items(logs.asReversed(), key = { it.id }) { entry -> LogEntryRow(entry) }
     }
@@ -413,17 +541,17 @@ private fun Narration(text: String, caption: String?) {
         modifier = Modifier.fillMaxWidth().padding(
             // 带上标（"端侧处理"/"重发"）时上面空得多一点：那一行属于下面这段话，
             // 不能让它跟上一段贴得比自己的正文还近
-            top = if (caption != null) 10.dp else 4.dp,
+            top = if (caption != null) Space.md else Space.xs,
             bottom = 2.dp,
         ),
     ) {
         if (caption != null) {
             Text(
                 text = caption,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(3.dp))
         }
         Text(
             text = text,
@@ -441,25 +569,27 @@ private fun Narration(text: String, caption: String?) {
  */
 @Composable
 private fun QuietLine(icon: ImageVector, title: String?, body: String, color: Color) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = color,
-            modifier = Modifier.padding(top = 1.dp).size(16.dp),
+            tint = color.copy(alpha = 0.8f),
+            modifier = Modifier.padding(top = 2.dp).size(Size.iconSm),
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Space.sm))
         Column(modifier = Modifier.weight(1f)) {
             if (title != null) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = color,
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(1.dp))
             }
-            Text(text = body, style = MaterialTheme.typography.bodyMedium, color = color)
+            Text(text = body, style = MaterialTheme.typography.bodySmall, color = color)
         }
     }
 }
@@ -470,26 +600,33 @@ private fun QuietLine(icon: ImageVector, title: String?, body: String, color: Co
  * 左边留一道固定空白，气泡**最大**只能长到那儿 —— 用
  * `weight(1f, fill = false)` 而不是写死最大宽度：短句子收着、
  * 长句子换行，屏幕变宽变窄都不用改数字。
+ *
+ * 气泡是整屏唯一有大面积底色的东西，因为它是唯一"用户亲手输入"的内容。
  */
 @Composable
 private fun CommandBubble(text: String, caption: String) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = Space.sm, bottom = 2.dp),
         horizontalArrangement = Arrangement.End,
     ) {
         Spacer(Modifier.width(48.dp))
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 4.dp),
+            shape = RoundedCornerShape(
+                topStart = Radius.lg,
+                topEnd = Radius.lg,
+                bottomStart = Radius.lg,
+                bottomEnd = Radius.xs,
+            ),
             modifier = Modifier.weight(1f, fill = false),
         ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Column(modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm)) {
                 // "指令"不用写出来（谁发的显而易见），定时任务要 —— 它是这条消息的来路
                 if (caption != LABEL_COMMAND) {
                     Text(
                         text = caption,
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
                     )
                     Spacer(Modifier.height(2.dp))
@@ -500,6 +637,16 @@ private fun CommandBubble(text: String, caption: String) {
     }
 }
 
+/**
+ * 底部输入栏。
+ *
+ * 三件事必须一直成立：
+ *
+ * 1. **输入框永远在**（哪怕正在跑）—— 暂停的意义就是边看边补一句话；
+ * 2. **主操作在右下角拇指区**，并且只有 48dp 的一个圆，不抢正文；
+ * 3. **运行/暂停/停止是三种不同的颜色**：主色"发"、中性"停一下"、危险色"结束"。
+ *    以前三个都是黑圆形，用户得读图标才知道哪个会真的把任务杀掉。
+ */
 @Composable
 private fun InputBar(
     value: String,
@@ -523,12 +670,18 @@ private fun InputBar(
         runCatching { inputFocus.requestFocus() }
         keyboard?.show()
     }
-    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                 .windowInsetsPadding(WindowInsets.displayCutout)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = Space.md, vertical = Space.sm),
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(
@@ -537,18 +690,21 @@ private fun InputBar(
                     modifier = Modifier.weight(1f).focusRequester(inputFocus),
                     placeholder = {
                         Text(
-                            stringResource(
+                            text = stringResource(
                                 if (isRunning && isPaused) R.string.input_hint_paused
                                 else R.string.input_hint
-                            )
+                            ),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         )
                     },
                     maxLines = 4,
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(Radius.lg),
+                    textStyle = MaterialTheme.typography.bodyLarge,
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { onSubmit() }),
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(Space.sm))
                 if (isRunning) {
                     // 暂停期间必须有「发送」：用户停下来的目的就是补一句话，
                     // 没有发送键的话他只能靠输入法的回车，等于把功能藏起来
@@ -556,44 +712,92 @@ private fun InputBar(
                         FilledIconButton(
                             onClick = onSubmit,
                             enabled = value.isNotBlank(),
-                            modifier = Modifier.size(48.dp),
+                            modifier = Modifier.size(Size.touchTarget),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.input_send))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = stringResource(R.string.input_send),
+                                modifier = Modifier.size(Size.iconMd),
+                            )
                         }
-                        Spacer(Modifier.width(4.dp))
+                        Spacer(Modifier.width(Space.xs))
                     }
-                    // 暂停 / 继续：暂停期间输入框仍可用，敲的东西会并进下一轮
-                    FilledTonalIconButton(onClick = onPauseToggle, modifier = Modifier.size(48.dp)) {
+                    // 暂停 / 继续：中性色。它不是"结束"，不该长得像主操作
+                    FilledTonalIconButton(
+                        onClick = onPauseToggle,
+                        modifier = Modifier.size(Size.touchTarget),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = AppTheme.accents.sunken,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                        ),
+                    ) {
                         Icon(
-                            if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                            stringResource(if (isPaused) R.string.input_resume else R.string.input_pause),
+                            imageVector = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                            contentDescription = stringResource(
+                                if (isPaused) R.string.input_resume else R.string.input_pause
+                            ),
+                            modifier = Modifier.size(Size.iconMd),
                         )
                     }
-                    Spacer(Modifier.width(4.dp))
-                    // 急停：真的结束这一趟，不是"停一下"
-                    FilledIconButton(onClick = onStop, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Filled.Stop, stringResource(R.string.input_stop))
+                    Spacer(Modifier.width(Space.xs))
+                    // 急停：真的结束这一趟，不是"停一下"。危险色 + 实心，和暂停拉开
+                    FilledIconButton(
+                        onClick = onStop,
+                        modifier = Modifier.size(Size.touchTarget),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.error,
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Stop,
+                            contentDescription = stringResource(R.string.input_stop),
+                            modifier = Modifier.size(Size.iconMd),
+                        )
                     }
                 } else {
-                    FilledIconButton(onClick = onSubmit, enabled = value.isNotBlank(), modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.input_send))
+                    FilledIconButton(
+                        onClick = onSubmit,
+                        enabled = value.isNotBlank(),
+                        modifier = Modifier.size(Size.touchTarget),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = stringResource(R.string.input_send),
+                            modifier = Modifier.size(Size.iconMd),
+                        )
                     }
                 }
             }
+
             if (isRunning) {
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
+                Spacer(Modifier.height(Space.sm))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = Space.sm),
+                ) {
                     if (isPaused) {
-                        Icon(
-                            Icons.Filled.Pause,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.tertiary,
+                        Box(
+                            modifier = Modifier
+                                .size(Size.iconSm)
+                                .background(AppTheme.accents.warning, CircleShape)
                         )
                     } else {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(Size.iconSm),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                     }
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(Space.sm))
                     Text(
                         text = if (isPaused) stringResource(R.string.running_paused_hint) else runningHint,
                         style = MaterialTheme.typography.bodySmall,
