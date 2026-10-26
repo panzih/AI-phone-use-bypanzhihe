@@ -1,174 +1,130 @@
 #!/usr/bin/env python3
-"""纸盒 60 秒片的声轨：解说（macOS say）+ 一套共用一个房间的合成音效。
+"""纸盒 60 秒片（无旁白版）的声轨。
 
     python3 sound.py            # → sfx.wav（48 kHz 立体声，给 render.py --sfx）
 
-解说用 say 合成到 vo/ 下，再按下表摆到时间线上；音效全部来自 sfx_palette 的
-五个材料（air / wood / glass / sub / bubble），同一个混响房间。
+没有解说，全片靠声音讲节奏：纸的声音（air / wood）、金属般的标记音（glass）、
+低频落点（sub）。所有材料共用同一个混响房间（T60 1.25s），底下垫一层极轻的 pad。
+时间点和 comp.html 里的 T 一一对应。
 """
-import os, subprocess, wave
+import os, wave
 import numpy as np
 import sys
 sys.path.insert(0, "/tmp/onetake/scripts")
 from sfx_palette import Score, air, wood, glass, sub, bubble, wobble, SR
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VO_DIR = os.path.join(HERE, "vo")
 DUR = 60.0
-
-# ── 解说词：时间、文本、语速 ────────────────────────────────────────────────
-VO = [
-    (0.9,  "一个纸箱，能装什么？", 175),
-    (5.6,  "打开它。", 175),
-    (13.7, "说一句话就行。", 175),
-    (20.3, "剩下的它自己来。", 178),
-    (24.0, "看屏幕、决定点哪儿、一步一步往下走。", 185),
-    (30.2, "每一步都写在屏幕上，随时能停。", 182),
-    (33.6, "模型自己选，不想花钱就用免费通道。", 185),
-    (42.6, "它只在你手机上跑。", 178),
-    (48.8, "装一个 APK，开一次无障碍权限。", 180),
-    (56.2, "然后就不用管了。", 175),
-]
-
-
-def say(text, rate, path):
-    subprocess.run(["say", "-v", "Tingting", "-r", str(rate), "-o", path[:-4] + ".aiff", text], check=True)
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path[:-4] + ".aiff",
-                    "-ar", str(SR), "-ac", "1", path], check=True)
-    os.remove(path[:-4] + ".aiff")
-    with wave.open(path, "rb") as w:
-        n = w.getnframes()
-        return np.frombuffer(w.readframes(n), dtype=np.int16).astype(float) / 32768.0
 
 
 def main():
-    os.makedirs(VO_DIR, exist_ok=True)
     s = Score(dur=DUR, T60=1.25)
 
-    # ── 解说：先合成，量出每句长度（后面音效要躲开它）──────────────────────
-    lines = []
-    for i, (t, text, rate) in enumerate(VO):
-        sig = say(text, rate, os.path.join(VO_DIR, f"l{i:02d}.wav"))
-        lines.append((t, sig))
-        print(f"  VO {i:02d} @{t:5.1f}s  {len(sig)/SR:4.2f}s  {text}")
+    # ── 0.0 微距：箱盖的纸纹铺满画面，只听见房间和一点纸的呼吸 ──────────────
+    s.place(air(2.6, 80, 620, 1.1, 0.55), 0.10, 0.26, send=0.55)
+    s.place(glass(174, 3.0, 0.25), 0.55, 0.07, send=0.75)
+    s.place(sub(44, 1.8), 0.20, 0.20, send=0.3)
 
-    # ── 音效 ────────────────────────────────────────────────────────────────
-    # 开场：空气+一点玻璃泛音，箱子静静躺在台面上
-    s.place(air(1.6, 90, 700, 1.2, 0.5), 0.15, 0.30, send=0.55)
-    s.place(glass(196, 2.4, 0.35), 0.55, 0.10, send=0.7)
-    s.place(glass(294, 2.0, 0.25), 1.35, 0.07, send=0.75)
+    # ── 3.4 拉开，看清是一个纸箱：一记闷响落定 ──────────────────────────────
+    s.place(air(1.1, 700, 120, 1.0, 0.62), 2.7, 0.34, send=0.45)
+    s.place(sub(52, 1.1), 3.42, 0.40, send=0.3)
+    s.place(wood(120, 0.18), 3.44, 0.28, send=0.25)
 
-    # 掀盖：纸的撕裂/翻折声 —— 低频 whoosh 起，翻过去那一下一记木响
-    s.place(air(1.9, 120, 900, 0.9, 0.35), 5.15, 0.55, pan=-0.2, send=0.45, pan_to=0.35)
-    s.place(wood(120, 0.20), 5.28, 0.42, pan=-0.15, send=0.3)
-    s.place(air(1.1, 400, 2600, 1.6, 0.6), 6.30, 0.30, pan=0.2, send=0.5)
-    s.place(wood(96, 0.26), 7.32, 0.50, send=0.35)
-    s.place(sub(52, 0.9), 7.34, 0.34, send=0.25)
+    # ── 3.6–7.0 掀盖：纸的撕开与翻折 ────────────────────────────────────────
+    s.place(air(2.4, 110, 900, 0.85, 0.30), 3.58, 0.52, pan=-0.25, send=0.45, pan_to=0.3)
+    s.place(wood(96, 0.26), 3.66, 0.34, pan=-0.2, send=0.3)
+    s.place(air(1.3, 500, 2600, 1.5, 0.62), 5.10, 0.28, pan=0.25, send=0.5)
+    s.place(sub(48, 0.9), 6.96, 0.34, send=0.28)
 
-    # 下潜：一路往上抽的气
-    s.place(air(3.2, 130, 3200, 0.8, 0.72), 9.55, 0.55, pan=0.0, send=0.5, pan_to=-0.1)
-    s.place(sub(44, 1.6), 11.6, 0.42, send=0.35)
-    s.place(bubble(320, 0.5), 12.75, 0.25, send=0.4)
+    # ── 7.0–10.4 钻进箱内 ───────────────────────────────────────────────────
+    s.place(air(3.0, 120, 3400, 0.8, 0.70), 7.05, 0.52, send=0.5, pan_to=-0.1)
+    s.place(wobble(120), 9.30, 0.16, send=0.4)
+    s.place(bubble(300, 0.6), 10.30, 0.28, send=0.45)
 
-    # 打字：每个字一记木响（11 个「把 WiFi 关掉」的字）
+    # ── 10.6 字落下来：两个音的玻璃 ─────────────────────────────────────────
+    s.place(glass(392, 2.2, 0.55), 10.64, 0.16, pan=-0.2, send=0.7)
+    s.place(glass(587, 1.8, 0.35), 10.76, 0.10, pan=0.2, send=0.75)
+
+    # ── 11.9 打字：每个字一记木响 ───────────────────────────────────────────
     for i in range(11):
-        t = 14.7 + i / 8.6
-        s.place(wood(210 + 18 * (i % 3), 0.055), t, 0.16, pan=-0.1 + 0.02 * i, send=0.15)
-    # 发送
-    s.place(wood(150, 0.14), 20.10, 0.45, send=0.3)
-    # 水波：一记气泡 + 一片空气扫出去
-    s.place(bubble(300, 0.7), 20.46, 0.40, send=0.5)
-    s.place(air(1.5, 260, 1800, 1.1, 0.3), 20.48, 0.34, pan=-0.3, send=0.55, pan_to=0.4)
-    s.place(glass(392, 1.9, 0.4), 20.52, 0.12, send=0.6)
+        t = 11.9 + i / 8.4
+        s.place(wood(206 + 16 * (i % 3), 0.05), t, 0.15, pan=-0.12 + 0.025 * i, send=0.12)
 
-    # 悬浮条升起 + 三条步骤
-    s.place(air(0.8, 220, 1200, 1.3, 0.5), 23.35, 0.34, send=0.4)
-    s.place(sub(58, 0.8), 23.42, 0.30, send=0.25)
-    for i, (t, f) in enumerate([(25.0, 523), (27.3, 587), (29.6, 659)]):
-        s.place(glass(f, 0.9, 0.5), t, 0.16, pan=0.25, send=0.5)
-    # 字幕/条上的小刻度
-    for t in [26.3, 28.6]:
-        s.place(wood(300, 0.06), t, 0.10, pan=0.2, send=0.2)
+    # ── 14.0 发送 + 水波 ────────────────────────────────────────────────────
+    s.place(wood(146, 0.15), 14.00, 0.44, send=0.3)
+    s.place(bubble(280, 0.8), 14.32, 0.40, send=0.5)
+    s.place(air(1.7, 240, 1900, 1.1, 0.30), 14.34, 0.34, pan=-0.3, send=0.55, pan_to=0.4)
+    s.place(glass(392, 2.0, 0.45), 14.38, 0.11, send=0.65)
 
-    # 设置页张开：一层玻璃扫过去
-    s.place(air(1.2, 900, 300, 1.0, 0.4), 32.15, 0.28, pan=0.1, send=0.55)
-    s.place(glass(523, 1.6, 0.5), 32.30, 0.16, send=0.6)
-    # 滑杆拖动
-    for i in range(7):
-        s.place(wood(340 + 6 * i, 0.035), 37.2 + i * 0.31, 0.07, pan=0.3, send=0.15)
-    s.place(glass(784, 1.2, 0.5), 39.35, 0.13, send=0.55)
+    # ── 17.0 悬浮条升起 + 三条动作 ──────────────────────────────────────────
+    s.place(air(0.8, 260, 1300, 1.3, 0.5), 16.98, 0.32, send=0.4)
+    s.place(sub(56, 0.9), 17.04, 0.30, send=0.28)
+    for i, (t, f) in enumerate([(18.20, 523), (19.35, 587), (20.50, 659)]):
+        s.place(glass(f, 0.9, 0.5), t, 0.14, pan=0.28, send=0.5)
 
-    # 翻页：纸张横扫
-    s.place(air(0.85, 1600, 420, 1.5, 0.35), 41.98, 0.40, pan=0.35, send=0.4, pan_to=-0.35)
-    s.place(air(0.75, 1400, 520, 1.5, 0.3), 42.45, 0.34, pan=-0.35, send=0.4, pan_to=0.25)
-    for i, (t, f) in enumerate([(43.4, 523), (44.55, 622), (45.70, 740)]):
-        s.place(glass(f, 1.1, 0.6), t, 0.15, pan=-0.2 + 0.2 * i, send=0.55)
-        s.place(wood(260, 0.05), t, 0.09, send=0.15)
+    # ── 20.4 / 21.26 / 22.12 三下重击（全片的 burst）─────────────────────────
+    for i, (t, f) in enumerate([(20.40, 110), (21.26, 96), (22.12, 84)]):
+        s.place(wood(f, 0.22), t, 0.62, pan=-0.15 + 0.15 * i, send=0.35)
+        s.place(sub(46 - i * 2, 1.1), t, 0.52, send=0.3)
+        s.place(air(0.32, 900, 300, 1.2, 0.4), t, 0.22, send=0.3)
 
-    # 折成卡片、掉回箱里
-    s.place(air(0.9, 900, 260, 1.3, 0.4), 48.15, 0.30, send=0.45)
-    s.place(air(1.2, 420, 140, 1.0, 0.55), 49.35, 0.34, pan=0.0, send=0.4)
-    # 合盖：两记，第二记是落定
-    s.place(wood(110, 0.22), 50.62, 0.48, send=0.35)
-    s.place(sub(50, 1.0), 50.64, 0.30, send=0.25)
-    s.place(wood(86, 0.30), 53.08, 0.66, send=0.4)
-    s.place(sub(42, 1.5), 53.10, 0.52, send=0.3)
-    # 压平：气往下走
-    s.place(air(2.0, 700, 90, 0.9, 0.62), 54.40, 0.40, send=0.45)
-    s.place(sub(38, 2.0), 55.55, 0.40, send=0.35)
-    # 字标：三个音一起落
-    for i, f in enumerate([392, 494, 587]):
-        s.place(glass(f, 2.6, 0.55), 55.92 + i * 0.07, 0.13, pan=-0.2 + 0.2 * i, send=0.7)
+    # ── 23.0 设置页从一点张开 ───────────────────────────────────────────────
+    s.place(air(1.3, 1000, 260, 1.0, 0.35), 22.98, 0.30, pan=0.1, send=0.55)
+    s.place(glass(523, 1.7, 0.5), 23.10, 0.15, send=0.6)
+    s.place(glass(392, 2.4, 0.35), 23.34, 0.10, send=0.7)
 
-    # ── 配乐床：极轻的 pad，只在没有人声时垫住空气 ─────────────────────────
-    def pad(freqs, t0, t1, gain=0.055):
-        n = int((t1 - t0) * SR)
+    # ── 26.6–29.6 滑杆拖动 ──────────────────────────────────────────────────
+    for i in range(9):
+        s.place(wood(330 + 7 * i, 0.03), 26.6 + i * 0.34, 0.06, pan=0.3, send=0.14)
+    s.place(glass(784, 1.4, 0.5), 29.55, 0.12, send=0.55)
+
+    # ── 31.0 翻面：一张纸翻过去 ─────────────────────────────────────────────
+    s.place(air(0.75, 1800, 480, 1.5, 0.32), 30.98, 0.42, pan=0.4, send=0.4, pan_to=-0.35)
+    s.place(air(0.70, 1500, 560, 1.5, 0.28), 31.42, 0.36, pan=-0.35, send=0.4, pan_to=0.25)
+
+    # ── 32.2 / 33.15 / 34.1 三行打勾 ────────────────────────────────────────
+    for i, (t, f) in enumerate([(32.20, 523), (33.15, 622), (34.10, 740)]):
+        s.place(glass(f, 1.2, 0.6), t, 0.13, pan=-0.2 + 0.2 * i, send=0.55)
+        s.place(wood(250, 0.045), t, 0.08, send=0.14)
+
+    # ── 35.2 镜头退出箱口 ───────────────────────────────────────────────────
+    s.place(air(1.9, 420, 2400, 0.9, 0.45), 35.20, 0.34, send=0.45, pan_to=0.15)
+    s.place(wood(112, 0.2), 36.62, 0.34, send=0.3)
+    s.place(sub(50, 1.0), 36.66, 0.28, send=0.26)
+    # 合盖落定
+    s.place(wood(88, 0.3), 38.96, 0.66, send=0.4)
+    s.place(sub(42, 1.6), 38.98, 0.56, send=0.32)
+
+    # ── 39.8 / 40.75 / 41.7 三步砸下来 ──────────────────────────────────────
+    for i, (t, f) in enumerate([(39.80, 132), (40.75, 118), (41.70, 104)]):
+        s.place(wood(f, 0.2), t, 0.44, pan=-0.25 + 0.25 * i, send=0.3)
+        s.place(sub(54 - i * 2, 0.9), t, 0.30, send=0.24)
+        s.place(glass(523 + i * 110, 1.0, 0.45), t + 0.02, 0.10, send=0.5)
+
+    # ── 43.0 压平 ───────────────────────────────────────────────────────────
+    s.place(air(2.2, 760, 70, 0.85, 0.58), 43.00, 0.44, send=0.45)
+    s.place(sub(36, 2.4), 44.10, 0.46, send=0.35)
+    s.place(wood(70, 0.4), 44.55, 0.30, send=0.3)
+
+    # ── 47.0 字标：三个音一起落下来 ────────────────────────────────────────
+    for i, f in enumerate([349, 440, 523]):
+        s.place(glass(f, 3.0, 0.5), 47.02 + i * 0.09, 0.14, pan=-0.25 + 0.25 * i, send=0.72)
+    s.place(sub(44, 2.2), 47.02, 0.34, send=0.34)
+
+    # ── 49–58 结尾：一声很轻的泛音收尾 ──────────────────────────────────────
+    s.place(glass(659, 3.4, 0.35), 50.40, 0.08, pan=0.2, send=0.8)
+    s.place(glass(880, 3.0, 0.25), 53.20, 0.06, pan=-0.2, send=0.85)
+    s.place(air(2.6, 300, 90, 0.9, 0.6), 56.20, 0.16, send=0.5)
+
+    # ── 房间底噪：极低的一层空气，让真正的安静不是数字零 ──────────────────
+    for t0, d in [(0.0, 12.0), (12.0, 11.0), (23.0, 12.0), (35.0, 12.0), (47.0, 13.0)]:
+        n = int(d * SR)
         tt = np.arange(n) / SR
-        sig = np.zeros(n)
-        for k, f in enumerate(freqs):
-            sig += np.sin(2 * np.pi * f * tt + k) * (0.8 ** k)
-            sig += 0.22 * np.sin(2 * np.pi * f * 2 * tt + 0.7 * k)
-        env = np.minimum(1, tt / 1.2) * np.minimum(1, (n / SR - tt) / 1.6)
-        return sig * env * gain / len(freqs)
+        env = np.minimum(1, tt / 1.2) * np.minimum(1, (d - tt) / 1.5)
+        s.place(np.sin(2 * np.pi * 62 * tt) * env * 0.006, t0, 1.0, send=0.2)
 
-    for t0, t1, ch in [(0.0, 13.0, [98, 147, 196]),
-                       (13.0, 32.0, [110, 165, 220]),
-                       (32.0, 42.0, [87, 131, 175]),
-                       (42.0, 54.0, [98, 147, 196]),
-                       (54.0, 60.0, [73, 110, 147])]:
-        s.place(pad(ch, t0, t1), t0, 1.0, send=0.6)
-
-    mix = s.mix(peak_db=-9.0)
-
-    # ── 把人声叠上去，并在人声处压住配乐 ────────────────────────────────────
-    vo_track = np.zeros((len(mix), 2))
-    for t, sig in lines:
-        i0 = int(t * SR)
-        n = min(len(sig), len(vo_track) - i0)
-        if n > 0:
-            vo_track[i0:i0 + n, 0] += sig[:n]
-            vo_track[i0:i0 + n, 1] += sig[:n]
-    # 人声包络（20 ms 窗 + 120 ms 平滑）
-    env = np.abs(vo_track[:, 0])
-    win = int(0.02 * SR)
-    env = np.convolve(env, np.ones(win) / win, mode="same")
-    env = np.convolve(env, np.ones(int(0.12 * SR)) / int(0.12 * SR), mode="same")
-    duck = 1.0 - 0.62 * np.clip(env / (env.max() + 1e-9) * 1.6, 0, 1)
-    out = mix * duck[:, None] + vo_track * 1.05
-
-    # 首尾淡入淡出 + 归一
-    n = len(out)
-    fi, fo = int(0.5 * SR), int(1.2 * SR)
-    out[:fi] *= np.linspace(0, 1, fi)[:, None]
-    out[-fo:] *= np.linspace(1, 0, fo)[:, None]
-    out = out / (np.abs(out).max() + 1e-9) * 0.70   # 峰值 -3.1 dBFS，给 AAC 留余量
-
-    path = os.path.join(HERE, "sfx.wav")
-    with wave.open(path, "wb") as w:
-        w.setnchannels(2); w.setsampwidth(2); w.setframerate(SR)
-        w.writeframes((np.clip(out, -1, 1) * 32767).astype(np.int16).tobytes())
-    peak = 20 * np.log10(np.abs(out).max())
-    print(f"{path}: {len(s.events)} 个音效事件 + {len(lines)} 句解说，峰值 {peak:.1f} dBFS，时长 {n/SR:.1f}s")
+    s.write(os.path.join(HERE, "sfx.wav"), peak_db=-3.2)
+    print(f"{len(s.events)} 个音效事件（无旁白），{DUR:.0f} 秒")
 
 
 if __name__ == "__main__":
