@@ -185,6 +185,7 @@
     <string name="settings_export_logs">导出日志</string>
     <string name="settings_export_logs_desc">打包成 zip，可以直接发给别人</string>
     <string name="settings_log_stats">共 %1$d 次记录 · %2$s</string>
+    <string name="settings_log_crash">· 崩溃 %1$d 份</string>
     <string name="settings_memory_stats">记忆：%1$d 条 · %2$s</string>
     <string name="settings_export_done">已生成：%1$s</string>
     <string name="settings_export_working">正在打包…</string>

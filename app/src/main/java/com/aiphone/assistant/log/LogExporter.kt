@@ -77,6 +77,7 @@ object LogExporter {
     fun exportEverything(context: Context, summary: String): Result<File> {
         val runs = AppLog.listRuns(context)
         val diagDir = File(AppLog.logRoot(context), "diag")
+        val crashes = CrashGuard.listAll(context)
         val autocap = AutoCapture.dir(context)
         val memory = File(AppLog.rootDir(context), "memory.md")
         val conversation = File(AppLog.rootDir(context), "conversation.json")
@@ -90,7 +91,7 @@ object LogExporter {
             ZipOutputStream(out.outputStream().buffered()).use { zos ->
                 addText(
                     zos, "manifest.txt",
-                    manifest(runs.size, AutoCapture.count(context), index.totalSteps),
+                    manifest(runs.size, AutoCapture.count(context), index.totalSteps, crashes.size),
                 )
                 addText(zos, "device.txt", summary)
                 // ---- 一览表：先看这个，再决定翻哪一次 ----
@@ -111,6 +112,12 @@ object LogExporter {
                 diagDir.listFiles()?.filter { it.isFile && isExportable(it) }?.forEach { f ->
                     addEntry(zos, f, "logs/diag/${f.name}")
                 }
+                // 崩溃现场（每次一份，进程死亡那一刻写的）
+                crashes.forEach { f -> addEntry(zos, f, "logs/crash/${f.name}") }
+                // 应用级日志：不属于任何一次任务的记录（启动、崩溃提示、后台服务）
+                AppLog.logRoot(context).listFiles()
+                    ?.filter { it.isFile && (it.name == "app.log" || it.name == "app.log.1") }
+                    ?.forEach { f -> addEntry(zos, f, "logs/${f.name}") }
                 // 自动截图
                 autocap.listFiles()?.filter { it.isFile && isExportable(it) }
                     ?.sortedBy { it.name }?.forEach { f ->
@@ -168,12 +175,27 @@ object LogExporter {
         zos.closeEntry()
     }
 
-    private fun manifest(runCount: Int, shotCount: Int, stepCount: Int): String = buildString {
+    private fun manifest(
+        runCount: Int,
+        shotCount: Int,
+        stepCount: Int,
+        crashCount: Int,
+    ): String = buildString {
         appendLine("纸盒日志包")
         appendLine("导出时间：${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
         appendLine()
+        if (crashCount > 0) {
+            // 崩过就顶在最前面。翻包的人第一件要知道的事就是这个
+            appendLine("⚠️ 这个包里包含 $crashCount 份崩溃记录（logs/crash/），先看它们。")
+            appendLine()
+        }
         appendLine("内容：")
         appendLine("  index.csv      一览表：每次运行的结局、步数、耗时、可疑原因（**先看这个**）")
+        if (crashCount > 0) {
+            appendLine("  logs/crash/    崩溃现场（$crashCount 份）：异常类型、完整堆栈、")
+            appendLine("                 崩溃前的最近 400 条日志、当时在跑什么任务")
+        }
+        appendLine("  logs/app.log   应用级日志：启动、任务之外的记录（含轮转的上一代 app.log.1）")
         appendLine("  logs/runs/     每次任务的完整记录（$runCount 次，共 $stepCount 步）")
         appendLine("    run.log        每一步的文字记录；含该步**原样发给模型**的界面元素列表")
         appendLine("    report.json    结构化记录；每条 step 里的 uiTree 就是那一刻模型看到的元素")
@@ -219,6 +241,13 @@ object LogExporter {
         }
         val diag = File(AppLog.logRoot(context), "diag")
         diag.listFiles()?.forEach { it.delete() }
+        // 崩溃记录与应用级日志也属于"日志"，一起清；内存里那份副本同步清掉，
+        // 否则下一次崩溃会把刚删掉的内容又吐回一份新文件里
+        CrashGuard.deleteAll(context)
+        AppLog.logRoot(context).listFiles()
+            ?.filter { it.isFile && (it.name == "app.log" || it.name == "app.log.1") }
+            ?.forEach { it.delete() }
+        AppLog.clearRecent()
         n += AutoCapture.deleteAll(context)
         AppLog.exportDir(context).listFiles()?.forEach { it.delete() }
         // 对话 JSON 会引用 images/ 下的原始截图，删除时必须一起清理。

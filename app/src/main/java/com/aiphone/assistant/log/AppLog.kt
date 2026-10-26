@@ -102,10 +102,18 @@ class RunLogger internal constructor(
      */
     fun line(message: String, tag: String = "App", level: String = "I") {
         synchronized(lock) {
-            if (closed) return
             val stamped = "[${TIME.format(Date())}] $message"
-            runCatching { logFile.appendText(stamped + "\n") }
+            if (closed) {
+                // 收尾之后才到的日志（清理、异步回调、服务停止）不是噪声 ——
+                // 恰恰是这类收尾阶段最容易出问题，而它们以前在这里被**整段丢掉**。
+                // report.json 已经写过，接不进去了，但文字流还可以留着。
+                runCatching { logFile.appendText("$stamped [收尾后] $message\n") }
+            } else {
+                runCatching { logFile.appendText(stamped + "\n") }
+            }
         }
+        // 内存里留一份给崩溃处理器（进程被系统直接打死时，文件可能还没来得及刷）
+        AppLog.remember(level, tag, message)
         // 同时打 logcat。不放在 synchronized 里，避免拖慢文件写入。
         runCatching {
             when (level) {
@@ -329,7 +337,17 @@ class RunLogger internal constructor(
                     put("outcome", outcome ?: JSONObject.NULL)
                     put("steps", steps)
                 }
-                reportFile.writeText(root.toString(2))
+                // 先写临时文件再改名。直接 writeText 到一个非空文件上时，
+                // 如果进程在这中间被杀（崩溃、被系统清理），留下的是一个
+                // **只有前半段的 JSON** —— 解析必然失败，那次运行的结构化记录
+                // 等于整份作废。同目录 rename 是原子的，要么旧文件、要么新文件。
+                val tmp = File(runDir, "$REPORT_NAME.tmp")
+                tmp.writeText(root.toString(2))
+                if (!tmp.renameTo(reportFile)) {
+                    // 改名失败（极少见：文件系统不支持或目标被占用）就退回直写
+                    reportFile.writeText(root.toString(2))
+                    tmp.delete()
+                }
                 // 每步一份 md：导出包里最常被翻的就是它
                 writeStepMarkdown()
             }
@@ -385,6 +403,24 @@ object AppLog {
 
     @Volatile
     private var current: RunLogger? = null
+
+    /**
+     * 最近日志的内存副本。**始终有值**，不随任务创建/结束变化。
+     *
+     * 崩溃处理器靠它拿到"死之前最后几百行" —— 见 [CrashGuard] 的类注释。
+     */
+    private val recent = RecentLog()
+
+    /** 应用级日志（`logs/app.log`）：不属于任何一次任务的记录写这里 */
+    private const val APP_LOG = "app.log"
+
+    /** 轮转阈值。超过就把当前文件改成 `.1`，重开一个新的 */
+    private const val APP_LOG_MAX_BYTES = 512 * 1024L
+
+    private val appLogLock = Any()
+
+    /** 独立的时间格式：这一份只在 [appLogLock] 里用（SimpleDateFormat 不线程安全） */
+    private val appLogTime = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
     /**
      * 应用级 Context。
@@ -479,10 +515,90 @@ object AppLog {
         }
     }
 
-    /** 便捷方法：没有活动任务时静默丢弃 */
-    fun i(message: String, tag: String = "App") { current?.line(message, tag, "I") }
-    fun w(message: String, tag: String = "App") { current?.line(message, tag, "W") }
-    fun e(message: String, tag: String = "App") { current?.line(message, tag, "E") }
+    /** 便捷方法：有任务就进任务的 run.log，没任务就进 app.log —— **两边都不丢** */
+    fun i(message: String, tag: String = "App") = write("I", tag, message)
+    fun w(message: String, tag: String = "App") = write("W", tag, message)
+    fun e(message: String, tag: String = "App") = write("E", tag, message)
+
+    /**
+     * 所有 `i/w/e` 的公共出口。
+     *
+     * 以前这里是 `current?.line(...)` —— **没有活动任务时整条消息直接蒸发**。
+     * 0.10.6 那个"点发送就闪退"就正好落在这种时刻：检查在任务开始之前，
+     * `current` 还是 null，于是用户导出日志后包里一条相关记录都没有。
+     *
+     * 现在改成两条路：有任务进 run.log（保持原来的组织方式），
+     * 没任务进应用级 app.log（按时间顺序，跨任务）。
+     */
+    private fun write(level: String, tag: String, message: String) {
+        val logger = current
+        if (logger != null) {
+            logger.line(message, tag, level)
+        } else {
+            appLine(level, tag, message)
+            // 任务外也要照常进内存副本和 logcat —— 与 logger 内部那套保持一致
+            remember(level, tag, message)
+            runCatching {
+                when (level) {
+                    "E" -> android.util.Log.e(RunLogger.LOGCAT_TAG, "$tag: $message")
+                    "W" -> android.util.Log.w(RunLogger.LOGCAT_TAG, "$tag: $message")
+                    else -> android.util.Log.i(RunLogger.LOGCAT_TAG, "$tag: $message")
+                }
+            }
+        }
+    }
+
+    /** 塞进内存环形缓冲，给崩溃处理器用 */
+    internal fun remember(level: String, tag: String, message: String) {
+        recent.add(level, tag, message)
+    }
+
+    /** 崩溃处理器取现场用 */
+    fun recentSnapshot(): List<String> = recent.dump()
+
+    /** 「删除日志」之后清空，避免崩一次把刚删掉的内容又吐回新文件里 */
+    fun clearRecent() = recent.clear()
+
+    /**
+     * 应用级日志：不属于任何一次任务的记录。
+     *
+     * 有轮转（超过 [APP_LOG_MAX_BYTES] 就把当前文件顶成 `.1`），
+     * 所以就算一直用也不会无限涨 —— 只保留最近两代。
+     */
+    fun appLine(level: String, tag: String, message: String) {
+        val ctx = appContext ?: return
+        runCatching {
+            val file = File(logRoot(ctx), APP_LOG)
+            synchronized(appLogLock) {
+                if (file.length() > APP_LOG_MAX_BYTES) {
+                    val old = File(logRoot(ctx), "$APP_LOG.1")
+                    old.delete()
+                    file.renameTo(old)
+                }
+                file.appendText("${appLogTime.format(Date())} $level/$tag: $message\n")
+            }
+        }
+    }
+
+    /**
+     * 记一条"应用起来了"。
+     *
+     * 单看这一行没什么用，但配上 `app.log` 的轮转，它回答一个很实际的问题：
+     * **崩溃记录里的那次死亡之后，应用到底是被重启了还是就此没再打开过**。
+     */
+    fun boot() {
+        val ctx = appContext ?: return
+        val v = runCatching {
+            val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+            // longVersionCode：versionCode 在 API 28 之后弃用，用这个字段取
+            "${info.versionName}(${info.longVersionCode})"
+        }.getOrDefault("?")
+        appLine("I", "启动", "应用启动 · $v · pid ${android.os.Process.myPid()}")
+        val crash = runCatching { CrashGuard.unreportedCount(ctx) }.getOrDefault(0)
+        if (crash > 0) {
+            appLine("W", "启动", "有 $crash 份崩溃记录还没有提示过用户")
+        }
+    }
 
     /**
      * 记一条**任务结束之后**才发生的事。

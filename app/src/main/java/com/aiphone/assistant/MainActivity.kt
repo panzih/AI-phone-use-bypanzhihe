@@ -46,6 +46,7 @@ import com.aiphone.assistant.llm.LlmConfig
 import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.AppLog
 import com.aiphone.assistant.log.AutoCapture
+import com.aiphone.assistant.log.CrashGuard
 import com.aiphone.assistant.log.LogExporter
 import com.aiphone.assistant.memory.Conversation
 import com.aiphone.assistant.memory.MemoryStore
@@ -117,7 +118,9 @@ class MainActivity : ComponentActivity() {
 
         controller = ChannelController(applicationContext)
         store = SettingsStore(this)
-        // 让任务结束后的事件（记忆归纳）也能落盘 —— 那时没有活动 logger
+        // 日志系统已经在 PaperboxApp.onCreate 里 attach 过了（那里更早，
+        // 服务/广播先起来时也能写盘）。这里再调一次是幂等的兜底，
+        // 防止有人把 Application 换掉之后日志静默失效。
         AppLog.attach(this)
 
         // 冷启动时把定时任务取出来
@@ -366,6 +369,28 @@ private fun AppRoot(
                     )
                 )
             }
+            // 上次是崩着退出的：说一句，并指出日志在哪。
+            //
+            // 以前闪退之后用户唯一能看到的是"应用没了"，日志要靠自己想到去
+            // 设置里导出 —— 而导出包里往往什么也没有（崩溃没进日志系统）。
+            // 现在崩溃一定会落盘，这里负责让用户知道**它存在**。
+            val crashes = CrashGuard.unreportedCount(context)
+            if (crashes > 0) {
+                add(
+                    LogEntry(
+                        id = "crash_notice_${System.currentTimeMillis()}",
+                        kind = LogKind.ERROR,
+                        text = if (crashes == 1) {
+                            "上次运行异常退出，崩溃现场已记录 —— 设置 → 日志 → 导出日志"
+                        } else {
+                            "上次运行异常退出，另有 $crashes 份崩溃记录 —— 设置 → 日志 → 导出日志"
+                        },
+                        label = "崩溃",
+                    )
+                )
+                // 提示过就不再重复弹：冷启动一次就够，否则每次开都刷一条
+                CrashGuard.markReported(context)
+            }
         }
     }
     val conversation = remember {
@@ -518,9 +543,19 @@ private fun AppRoot(
                 val total = runs.sumOf { run ->
                     run.walkTopDown().filter { it.isFile }.sumOf { it.length() }
                 }
-                val log = context.getString(
-                    R.string.settings_log_stats, runs.size, formatBytes(total)
-                )
+                val crashCount = CrashGuard.listAll(context).size
+                val log = buildString {
+                    append(
+                        context.getString(
+                            R.string.settings_log_stats, runs.size, formatBytes(total)
+                        )
+                    )
+                    // 崩溃记录不是"某次运行"，单独一块统计里也标一下 ——
+                    // 否则用户在设置页看不出日志里还有这类东西
+                    if (crashCount > 0) {
+                        append(context.getString(R.string.settings_log_crash, crashCount))
+                    }
+                }
 
                 val (memCount, memChars) = MemoryStore.stats(context)
                 val mem = if (memCount > 0) {

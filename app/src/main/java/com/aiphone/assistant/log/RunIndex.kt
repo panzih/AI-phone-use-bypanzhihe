@@ -37,6 +37,15 @@ object RunIndex {
         val truncatedSteps: Int,
         /** 哪几步"读不到控件树"（rootAvailable=false），最多记前 8 个 */
         val noTreeSteps: List<Int>,
+        /**
+         * report.json 在不在。
+         *
+         * 它只在一次运行**正常收尾**时写（`RunLogger.close`）。所以文件缺失
+         * 基本只有两种解释：这个目录是旧版本留下的（那时还没有 report.json），
+         * 或者 —— **进程在这次运行中途死掉了**（崩溃、被系统杀掉）。
+         * 后者是最该细看的那种，以前在 index.csv 里和"旧版本"长得一模一样。
+         */
+        val hasReport: Boolean = true,
     )
 
     /** 汇总结果 */
@@ -60,11 +69,14 @@ object RunIndex {
         var success: Boolean? = null
         var outcome = ""
         var truncated = 0
+        var hasReport = false
         val noTree = mutableListOf<Int>()
 
         runCatching {
             if (!report.isFile) return@runCatching
             val root = JSONObject(report.readText())
+            // 解析成功才算"有"。坏掉的 JSON 和没有一样：那次运行没正常收尾
+            hasReport = true
             task = root.optString("task", dir.name)
             if (root.has("startedAt")) startedAt = root.optLong("startedAt")
             if (root.has("durationMs")) durationMs = root.optLong("durationMs")
@@ -84,7 +96,7 @@ object RunIndex {
             android.util.Log.w("RunIndex", "解析 ${dir.name} 的 report.json 失败：$it")
         }
 
-        return Row(dir.name, task, startedAt, durationMs, steps, success, outcome, truncated, noTree)
+        return Row(dir.name, task, startedAt, durationMs, steps, success, outcome, truncated, noTree, hasReport)
     }
 
     private fun uiFileHasTruncation(dir: File, step: Int): Boolean {
@@ -127,10 +139,11 @@ object RunIndex {
      * 判据只用 report.json 里可靠存在的东西，不做推断。
      */
     fun suspicion(r: Row): String = buildList {
+        if (!r.hasReport) add("没有 report.json（崩溃或未收尾）")
         if (r.success == false) add("失败")
         if (r.noTreeSteps.isNotEmpty()) add("有读不到控件树的步")
         if (r.truncatedSteps > 0) add("元素列表被截断")
-        if ((r.steps ?: 0) == 0) add("一步都没走")
+        if (r.hasReport && (r.steps ?: 0) == 0) add("一步都没走")
     }.joinToString("；")
 
     private fun formatTime(ms: Long): String =

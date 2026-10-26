@@ -142,6 +142,19 @@ class RunIndexTest {
     }
 
     @Test
+    fun `没有 report 的目录会被标成崩溃或未收尾`() {
+        // report.json 只在正常收尾时写。目录在、文件不在 = 那次进程死在半路，
+        // 这是导出包里最该先翻的那一条，不能和"旧版本没这文件"混在一起看不出来
+        val crashed = tmp.newFolder("20261025_180000_打开设置")
+        val row = RunIndex.parseRun(crashed)
+        assertEquals(false, row.hasReport)
+        assertTrue(RunIndex.suspicion(row).contains("崩溃或未收尾"))
+        // 有 report 的正常运行不该被误标
+        val ok = run("ok", report("好的", success = true, outcome = "完成", steps = listOf(1 to "a")))
+        assertTrue(RunIndex.parseRun(ok).hasReport)
+    }
+
+    @Test
     fun `csv 会转义逗号和引号`() {
         val dir = run("r", report("给李四发, 你好", success = true, outcome = "他说\"好\"", steps = emptyList()))
         val csv = RunIndex.build(listOf(dir)).csv
