@@ -573,9 +573,10 @@ private fun SelectableItem(
  * 免费模式的内置模型名单（**只当兜底**）。
  *
  * 正常路径是打开选择器时用接口实时读取（[ModelListFetcher.fetchFree]）——
- * 这份名单只在读不到时顶上，所以不需要"永远最新"，但仍然按 **2026-10-22**
- * 网关 /zen/v1/models 的实时目录校对过（当时 10 个免费模型，全部收录），并剔除了三类：
- *  - 已下架：deepseek-v4-flash-free（已升级为 v4.1）、union-alpha、ling-3.0-flash-fin-free
+ * 这份名单只在读不到时顶上，按 **2026-10-27** 网关 /inference/v1/models 的
+ * 实时目录校对过（当时免费池 9 个，全部收录），并剔除了三类：
+ *  - 已下架：deepseek-v4-flash-free（已升级为 v4.1）、union-alpha、
+ *    ling-3.0-flash-fin-free、minimax-m3.1-flash-free（10-27 核对时已不在目录里）
  *  - 中国大陆地域锁（网关直接 403 RegionError）：muse-spark-*、cat-jam-free，
  *    且 muse-spark 走的是另一套 /responses 端点，国内手机也用不了
  *  - 测试占位：test
@@ -584,7 +585,6 @@ private fun SelectableItem(
 private val freeModels = listOf(
     FreeModel("deepseek-v4.1-flash-free", "DeepSeek V4.1 Flash"),
     FreeModel("glm-5.3-flash-free", "GLM 5.3 Flash"),
-    FreeModel("minimax-m3.1-flash-free", "MiniMax M3.1 Flash"),
     FreeModel("mimo-v2.6-flash-free", "MiMo V2.6 Flash"),
     FreeModel("nemotron-3.5-super-vl-free", "Nemotron 3.5 Super VL"),
     FreeModel("nemotron-3.5-lightning-free", "Nemotron 3.5 Lightning"),

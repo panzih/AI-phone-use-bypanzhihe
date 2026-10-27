@@ -1,5 +1,60 @@
 # 更新日志
 
+## 0.11.1
+
+> **免费通道修复**：上游 10 月中旬把免密池换成了 v2 报文，旧报文全线 403。
+> 这次按上游源码把整套契约重写了，顺带把"额度用完"和"协议被拒"分开报。
+
+### 为什么会坏
+
+免费模型来自 Our Free Model（DSH 插件）反带出来的 opencode.ai 免密池。
+那个池子的客户端契约在 **2026-10-14 / 10-16** 改过一轮，一共六项一起变，
+每一项单独都是 403 FreeTierError：
+
+| 项 | 我们原来发的（v1） | 上游现在要的（v2） |
+|---|---|---|
+| 端点 | `/zen/v1/chat/completions` | `/inference/v1/chat/completions` |
+| User-Agent | `opencode/1.18.31 (linux arm64; …)` | `opencode/latest/2.0.26/cli`（整串匹配） |
+| 请求头 | 带 `x-opencode-request` | 不带（v2 收到即 403），且 `x-opencode-session` 与 `x-opencode-session-id` 必须同时有 |
+| project | `prj_<sha256>` | 固定字符串 `global` |
+| 工具闸门 | `bash` + `read` 空桩 | `read` + `shell`，描述与 schema 必须与官方 CLI **逐字一致** |
+| `tool_choice` | 无工具时补 `none` | `none` 即 403，不下发 |
+
+网关校验的是"你是不是官方客户端"，不是"你有没有 Key" —— 所以少一项、
+多一项、改一个词，结果都一样：403。
+
+### 改了什么
+
+- **新增 `llm/FreeLaneWire.kt`**：把这份"别人的协议"从 `LlmClient` 里拆出来，
+  端点 / UA / 四个 session 头 / 两个工具定义 / 错误类型判定全部集中在一处，
+  文件头写着与 v1 的逐项对照。改协议只动这一处。
+- **`LlmClient`**：端点、请求头、`buildBody` 的 tools 全部切到 v2；删掉
+  `x-opencode-request` 与 `prj_` 那套；注入的工具改成官方定义，并在系统提示里
+  补一句"read/shell 是占位，别调"（它们是**真工具**，不打招呼模型真会去读文件）。
+  `probeAudio` 也跟同一套指纹，否则探针会错报"不支持语音"。
+- **模型目录**：`/inference/v1/models`（旧 `/zen/v1/models` 目前还能通，但没必要
+  留两个变量）。内置兜底名单按今天的实时目录校正：去掉已下架的
+  `minimax-m3.1-flash-free`，剩 9 个。
+
+### 顺带把"失败"说清楚
+
+以前所有 4xx 都归成一句"请求太频繁或额度用完了"。现在免费通道三种失败分开说：
+
+- **额度用完（429 FreeUsageLimitError）**：这份额度按**出口 IP** 记，不是按手机 ——
+  同一个网络下所有设备共用。文案会带 `Retry-After` 换算出的恢复时间
+  （实测约 16 小时，即 UTC 0 点），并提示"想马上继续就切自定义通道填自己的 Key"。
+- **指纹被拒（403 FreeTierError）**：明说"上游改版了，不是你设置错了，等更新"。
+- **地区锁（403 RegionError）**：提示换一个免费模型。
+
+### 验证到哪一步
+
+- 单元测试：`FreeLaneBodyTest` 改成钉 v2 契约（tools 逐字、不下发 tool_choice、
+  session 编码落在 `0xfc0–0xfff`），全绿。
+- 模型目录：App 里实测能读（`/inference/v1/models` 返回 9 个免费模型）。
+- ⚠️ **端到端还没验证**：这台机器的出口 IP 今天的免费额度已经用完了
+  （网关回 `429`，`Retry-After` 约 16 小时），要等 UTC 0 点（北京时间早 8 点）
+  重置后才能真发一句话确认。手上有别的网络时可以直接试。
+
 ## 0.11.0
 
 > **界面重写**：一套设计系统统管全部页面，深浅色都按同一套规则走。

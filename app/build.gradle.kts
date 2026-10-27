@@ -40,8 +40,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 76      // 0.11.0：界面重写（统一设计系统）
-        versionName = "0.11.0"
+        versionCode = 77      // 0.11.1：免费通道跟进上游 v2 报文
+        versionName = "0.11.1"
     }
 
     /**

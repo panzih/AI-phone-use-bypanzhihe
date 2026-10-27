@@ -76,16 +76,55 @@ class FreeLaneBodyTest {
     }
 
     @Test
-    fun `免费通道_gate三件套齐全`() {
-        // 上游免密门禁：stream、tools（bash + read 空桩）、tool_choice，
-        // 少任何一件都会被 403 拦在门外（实测）
+    fun `免费通道_v2门禁三件套齐全`() {
+        // 2026-10 上游改成 v2：stream + 逐字的 read/shell + **不发** tool_choice。
+        // 少任何一件、或者多发一个 tool_choice:"none"，都是 403 FreeTierError。
         val b = body(useFree = true, thinking = ThinkingMode.OFF)
         assertTrue("免费通道必须流式", b.getBoolean("stream"))
-        assertEquals("none", b.getString("tool_choice"))
+
+        assertFalse("v2 见到 tool_choice:\"none\" 直接 403，绝不能下发：$b", b.has("tool_choice"))
+
         val tools = b.getJSONArray("tools")
         assertEquals(2, tools.length())
-        assertEquals("bash", tools.getJSONObject(0).getJSONObject("function").getString("name"))
-        assertEquals("read", tools.getJSONObject(1).getJSONObject("function").getString("name"))
+        val read = tools.getJSONObject(0).getJSONObject("function")
+        val shell = tools.getJSONObject(1).getJSONObject("function")
+        assertEquals("read", read.getString("name"))
+        assertEquals("shell", shell.getString("name"))
+
+        // 定义必须与官方 CLI 逐字一致：v2 比对的是描述和 schema 本身，桩定义会被拒
+        assertTrue(
+            "read 的描述必须是官方原文",
+            read.getString("description").startsWith("Read the contents of a file or directory."),
+        )
+        assertEquals(
+            "read 的 path 参数不能省",
+            "File or directory to read",
+            read.getJSONObject("parameters").getJSONObject("properties")
+                .getJSONObject("path").getString("description"),
+        )
+        assertTrue(
+            "shell 的描述必须是官方原文",
+            shell.getString("description").startsWith("Execute a shell command and return its output."),
+        )
+        assertTrue(
+            "shell 必须带 command 参数",
+            shell.getJSONObject("parameters").getJSONObject("properties").has("command"),
+        )
+
+        // 注入的是真工具，必须同时告诉模型别调
+        val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertTrue("必须带上占位说明：$system", system.contains(FreeLaneWire.PLACEHOLDER_NOTE))
+    }
+
+    @Test
+    fun `免费通道会话id编码合法`() {
+        // 网关校验的是编码不是形状：12 位 hex 必须是降序 ~(ts<<12|counter)，
+        // 低 12 位落在 0xfc0–0xfff（counter 1–63）
+        val id = FreeLaneWire.newSessionId()
+        assertTrue("形状不对：$id", Regex("^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$").matches(id))
+        val timePart = id.substring(4, 16)
+        val low12 = timePart.substring(9).toInt(16)
+        assertTrue("低 12 位必须在 0xfc0–0xfff，实际 ${low12.toString(16)}：$id", low12 in 0xfc0..0xfff)
     }
 
     // ---- 截图消息（图片形态） ----

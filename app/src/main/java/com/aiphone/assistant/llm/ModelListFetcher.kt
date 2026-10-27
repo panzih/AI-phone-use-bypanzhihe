@@ -81,13 +81,15 @@ object ModelListFetcher {
      *         message 是人能看懂的中文原因
      */
     fun fetchFree(): List<String> {
-        val conn = (URL(FREE_MODELS_URL).openConnection() as HttpURLConnection).apply {
+        val conn = (URL(FreeLaneWire.modelsUrl()).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 15_000
+            // 目录端点不需要 session 头（实测不带也放行），但 UA 要跟上 v2 ——
+            // 旧 UA 是上游点名拒掉的那一串，留着等于给将来埋一个坑。
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Authorization", "Bearer public")
-            setRequestProperty("User-Agent", "opencode/1.18.31 (linux arm64; node20.0.0)")
+            setRequestProperty("User-Agent", FreeLaneWire.CLIENT_UA)
             setRequestProperty("x-opencode-client", "cli")
         }
 
@@ -119,9 +121,7 @@ object ModelListFetcher {
 
     /**
      * 网关目录里 85 个条目既含免费池、也含**付费目录**（claude / gpt / gemini /
-     * kimi / grok …）。免费通道只能选免费的那批：
-     *
-     *   - `-free` 后缀的（"deepseek-v4.1-flash-free"、"glm-5.3-flash-free" …）
+     * kimi / grok …）。免费通道只能选免费的那批：     *   - `-free` 后缀的（"deepseek-v4.1-flash-free"、"glm-5.3-flash-free" …）
      *   - 少数不带后缀但属于免费池的（"big-pickle"）
      *
      * 另外排掉目录里的测试占位条目（"test" —— 真的出现在目录里，
@@ -146,7 +146,4 @@ object ModelListFetcher {
             else -> "$base/v1/models"
         }
     }
-
-    /** 免费池的模型目录（和 LlmClient 的免费端点同源：/zen/v1） */
-    private const val FREE_MODELS_URL = "https://opencode.ai/zen/v1/models"
 }

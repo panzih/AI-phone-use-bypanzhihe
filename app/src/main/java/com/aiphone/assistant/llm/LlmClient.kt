@@ -226,61 +226,13 @@ class LlmClient(private val cfg: LlmConfig) {
     private val activeConn = AtomicReference<HttpURLConnection?>(null)
 
     /**
-     * 免费通道的 session id：整个 App 进程复用一个，不然每请求新建会被 429。
+     * 免费通道的 session id：整个 App 进程复用一个。
      *
-     * 2026-10-13 起网关不再只校验格式：12 位 hex 必须是**反相时间戳**
-     * （`~(Date.now() * 0x1000 + counter) & 48bit`），低 12 bit 解码后
-     * 必须落在 [0, 63]。随机 hex 只有 ~1.5% 概率命中，几乎必 403。
-     * 照抄 opencode2dsh v0.3.12 的 `invertedTimestampHex()`（issue #62）。
+     * 免费池的额度是**按 session 记账**的，每个请求换一个新 id 会把额度打散成
+     * 一堆"新会话"，反而更快撞 429。id 的编码规则（反相时间戳 + counter 1–63）
+     * 在 [FreeLaneWire.newSessionId]。
      */
-    private val freeSessionId = "ses_" + invertedTimestampHex() + randomBase62(14)
-
-    /** 每请求一个的 request id：req_ 前缀 + 32 位随机 hex（照抄 v0.3.12 ids.ts randomID('req', 16)）。 */
-    private fun freeRequestId(): String = "req_" + randomHex(32)
-
-    /**
-     * project id：prj_ 前缀 + sha256('prj\x00opencode2dsh:default-project') 前 12 字节 hex。
-     * 照抄 v0.3.12 ids.ts stableID('prj', 'opencode2dsh:default-project')，固定值。
-     */
-    private val freeProjectId: String by lazy {
-        val digest = MessageDigest.getInstance("SHA-256").digest("prj\u0000opencode2dsh:default-project".toByteArray())
-        "prj_" + digest.sliceArray(0 until 12).joinToString("") { "%02x".format(it) }
-    }
-
-    /**
-     * 反相时间戳：12 位 hex，低 12 bit 是 counter=1（反相后为 0xffe），
-     * 高 36 bit 是毫秒时间戳反相。网关只校验低 12 bit ∈ [0, 63]，
-     * 高 36 bit 不查（1970 年的时间戳也能过）。
-     *
-     * 为什么叫"反相"：opencode 官方客户端为了让 id 按字符串排序时最新的在前，
-     * 把时间戳按位取反了。真实 session 的时间段总是以 `ffe` 结尾，
-     * 就是 counter=1 反相后的结构性结果，不是魔法标记。
-     */
-    private fun invertedTimestampHex(): String {
-        val now = System.currentTimeMillis()
-        // now * 0x1000 + 1，然后按位取反，遮罩到 48 bit（12 hex）
-        val current = (now shl 12) or 1L
-        val inverted = current.inv() and 0xFFFFFFFFFFFFL
-        return inverted.toString(16).padStart(12, '0')
-    }
-
-    /** 生成指定长度的 base62 随机串（0-9 A-Z a-z）。 */
-    private fun randomBase62(length: Int): String {
-        val alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        val rnd = java.util.Random()
-        return StringBuilder().apply {
-            repeat(length) { append(alphabet[rnd.nextInt(62)]) }
-        }.toString()
-    }
-
-    /** 生成指定长度的小写 hex 随机串。 */
-    private fun randomHex(length: Int): String {
-        val hex = "0123456789abcdef"
-        val rnd = java.util.Random()
-        return StringBuilder().apply {
-            repeat(length) { append(hex[rnd.nextInt(16)]) }
-        }.toString()
-    }
+    private val freeSessionId = FreeLaneWire.newSessionId()
 
     /** 外部叫停（急停按钮 / 任务被停止）。置上之后不再重发 */
     private val abortFlag = AtomicBoolean(false)
@@ -489,27 +441,14 @@ class LlmClient(private val cfg: LlmConfig) {
             readTimeout = cfg.timeoutMs
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            // 免费通道强制流式，Accept 必须是 text/event-stream（OFM gatewayHeaders 逻辑）；
-            // 自定义通道保持 application/json。
-            setRequestProperty("Accept", if (cfg.useFreeModel) "text/event-stream" else "application/json")
             if (cfg.useFreeModel) {
-                // 免费通道：伪装成 opencode CLI 客户端
-                // 照抄 opencode2dsh v0.3.12 ids.ts disguiseHeaders()（实测 3/4 模型 200）：
-                //   UA = opencode/1.18.31 (platform arch; nodeX)
-                //   x-opencode-client = cli
-                //   x-opencode-session / x-session-affinity / X-Session-Id = session（三个都带）
-                //   x-opencode-request = req_<32hex>
-                //   x-opencode-project = prj_<24hex>
-                // 注意：v0.3.12 不带 x-opencode-session-id（那是 issue #78 的错误结论）
-                setRequestProperty("Authorization", "Bearer public")
-                setRequestProperty("User-Agent", "opencode/1.18.31 (linux arm64; node20.0.0)")
-                setRequestProperty("x-opencode-client", "cli")
-                setRequestProperty("x-opencode-session", freeSessionId)
-                setRequestProperty("x-session-affinity", freeSessionId)
-                setRequestProperty("X-Session-Id", freeSessionId)
-                setRequestProperty("x-opencode-request", freeRequestId())
-                setRequestProperty("x-opencode-project", freeProjectId)
+                // 免费通道：整套 v2 指纹（UA / 四个 session 头 / project=global）见
+                // FreeLaneWire.applyHeaders。⚠️ 绝不要在这里补 x-opencode-request ——
+                // 那是 v1 专用头，v2 收到就回 403。
+                FreeLaneWire.applyHeaders(this, freeSessionId, stream = true)
             } else {
+                // 自定义通道：普通 OpenAI 兼容请求，Accept 用 application/json
+                setRequestProperty("Accept", "application/json")
                 setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
             }
         }
@@ -552,7 +491,9 @@ class LlmClient(private val cfg: LlmConfig) {
             }
 
             if (code !in 200..299) {
-                httpFailure(code, text)
+                // Retry-After 只在 429 有意义（免费池用它报"到额度重置还有多久"）
+                val retryAfter = runCatching { conn.getHeaderField("Retry-After")?.trim()?.toLong() }.getOrNull()
+                httpFailure(code, text, retryAfter)
             } else {
                 parseResponse(text, prefixReused, prefixTotal)
             }
@@ -757,10 +698,11 @@ class LlmClient(private val cfg: LlmConfig) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 if (cfg.useFreeModel) {
-                    setRequestProperty("Authorization", "Bearer public")
-                    setRequestProperty("User-Agent", "opencode/1.18.31 (linux arm64; node20.0.0)")
-                    setRequestProperty("x-opencode-client", "cli")
+                    // 探针也走同一套 v2 指纹：少一个 session 头就是 403，
+                    // 那样探针会错报"不支持语音"（其实是没进去门）
+                    FreeLaneWire.applyHeaders(this, freeSessionId, stream = false, accept = "application/json")
                 } else {
+                    setRequestProperty("Accept", "application/json")
                     setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
                 }
             }
@@ -786,9 +728,9 @@ class LlmClient(private val cfg: LlmConfig) {
      * 三种都要能用，所以按后缀判断，不硬编码。
      */
     private fun endpoint(): String {
-        // 免费通道走 /zen/v1（照抄 v0.3.12 catalog.ts ZEN_BASE_URL = https://opencode.ai/zen）
-        // 实测 2026-10-16：/zen/v1 + v0.3.12 契约 3/4 模型 200 成功
-        if (cfg.useFreeModel) return "https://opencode.ai/zen/v1/chat/completions"
+        // 免费通道走 /inference/v1（2026-10 上游改版；旧的 /zen/v1 对话端点
+        // 对免费 model 一律 403 FreeTierError）。端点与请求头的全部常量在 FreeLaneWire。
+        if (cfg.useFreeModel) return FreeLaneWire.chatUrl()
         val base = cfg.baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) return "https://api.deepseek.com/v1/chat/completions"
         return when {
@@ -831,10 +773,19 @@ class LlmClient(private val cfg: LlmConfig) {
     ): JSONObject {
         val messages = JSONArray()
 
+        // 免费通道要往系统提示里补一句"read/shell 是占位、别调"。
+        // 那两个工具是网关门禁逼着声明的，但它们是**真工具**（定义逐字来自官方 CLI），
+        // 不打招呼模型真的会拿 read 去读文件。自定义通道不掺这句。
+        val systemContent = if (cfg.useFreeModel) {
+            "$system\n\n${FreeLaneWire.PLACEHOLDER_NOTE}"
+        } else {
+            system
+        }
+
         messages.put(
             JSONObject().apply {
                 put("role", "system")
-                put("content", system)
+                put("content", systemContent)
             }
         )
 
@@ -913,54 +864,16 @@ class LlmClient(private val cfg: LlmConfig) {
             // effort 走 ThinkingMode.effortOf：CUSTOM 档的值来自用户输入，
             // 留空就**一个字段都不发**（等价「默认」，绝不发空串 —— 那多半 400）
             ThinkingMode.effortOf(cfg.thinking, cfg.customEffort)?.let { put("reasoning_effort", it) }
-            // 免费通道（opencode.ai 免密池）的客户端契约。
-            // 照抄 opencode2dsh v0.3.12（2026-10-16 实测 3/4 模型 HTTP 200）：
-            //   1. 端点 /zen/v1/chat/completions（Bearer public 可用）
+            // 免费通道（opencode.ai 免密池）的 v2 报文契约，全部细节见 FreeLaneWire：
+            //   1. 端点 /inference/v1/chat/completions（/zen/v1 对免费 model 一律 403）
             //   2. body.stream = true（非流式直接 403）
-            //   3. body.tools 必须声明 bash + read，parameters.properties 为空桩 {}
-            //      （v0.3.12 messages.ts: "Schemas and descriptions go uninspected"）
-            //   4. tool_choice = "none"（无客户端工具时，模型不会真的调用）
-            //   5. session id 的 12 位 hex 必须是反相时间戳（低 12bit ∈ [0,63]）
-            //   6. 请求头伪装 CLI：UA 1.18.31 + x-opencode-client:cli + 三个 session 头
-            // 源头：opencode2dsh v0.3.12 ids.ts / messages.ts / zen-adapter.ts / catalog.ts
+            //   3. tools 必须**逐字**声明官方 CLI 的 read + shell 两个工具 ——
+            //      v2 比对的是描述与参数 schema 本身，空桩已经失效
+            //   4. **不发 tool_choice**：v2 见到 "none" 直接 403
+            //   5. session id 的编码必须合法（FreeLaneWire.newSessionId）
+            // 断言在 FreeLaneBodyTest 里钉着，改这条链路先跑它。
             if (cfg.useFreeModel) {
-                val tools = JSONArray()
-                // bash：空桩 parameters（v0.3.12 freeLaneGateTool 原样）
-                tools.put(
-                    JSONObject().apply {
-                        put("type", "function")
-                        put(
-                            "function",
-                            JSONObject().apply {
-                                put("name", "bash")
-                                put("description", "Reserved for the host runtime; do not call it.")
-                                put("parameters", JSONObject().apply {
-                                    put("type", "object")
-                                    put("properties", JSONObject())
-                                })
-                            },
-                        )
-                    },
-                )
-                // read：空桩 parameters（v0.3.12 freeLaneGateTool 原样）
-                tools.put(
-                    JSONObject().apply {
-                        put("type", "function")
-                        put(
-                            "function",
-                            JSONObject().apply {
-                                put("name", "read")
-                                put("description", "Reserved for the host runtime; do not call it.")
-                                put("parameters", JSONObject().apply {
-                                    put("type", "object")
-                                    put("properties", JSONObject())
-                                })
-                            },
-                        )
-                    },
-                )
-                put("tools", tools)
-                put("tool_choice", "none")
+                put("tools", FreeLaneWire.tools())
             }
             // 免费通道必须流式（OFM aggregate.js/adapter.js 全部强制 stream:true）；
             // 自定义通道保持非流式，响应是单个 JSON。
@@ -1078,11 +991,41 @@ class LlmClient(private val cfg: LlmConfig) {
      *   5xx / 429 / 408 —— 服务端自己或链路的事，等一会儿可能就好了
      *   其余 4xx       —— 我们的请求本身有问题，重发一百次也还是一样
      */
-    private fun httpFailure(code: Int, body: String): Try {
+    private fun httpFailure(code: Int, body: String, retryAfterSec: Long? = null): Try {
         val detail = runCatching {
             JSONObject(body).optJSONObject("error")?.optString("message", "")
         }.getOrNull().orEmpty().ifBlank { body.take(200) }
         Log.w(TAG, "HTTP $code：$detail")
+
+        // ---- 免费通道的三种专用失败 ----
+        // 必须分开说，因为三种的"用户能做什么"完全不同：
+        //   额度用完 → 等，或者换自己的 Key
+        //   指纹被拒 → 什么都做不了，等 App 更新
+        //   地区锁   → 换个模型
+        // 混成一句"请求太频繁或额度用完了"，用户只会去反复点发送。
+        if (cfg.useFreeModel) {
+            when {
+                FreeLaneWire.freeQuotaExhausted(body) -> return Try.Fatal(
+                    buildString {
+                        append("免费通道今天的额度用完了")
+                        retryAfterSec?.let { append("，约 ${formatWait(it)} 后恢复") }
+                        append("。\n")
+                        append("这份额度按**出口 IP** 记账，不是按这台手机 —— ")
+                        append("同一个网络下所有设备、所有免费模型共用一份。\n")
+                        append("想马上继续：去「设置 → 模型」切到自定义通道，填自己的 API Key。")
+                    },
+                )
+
+                FreeLaneWire.fingerprintRejected(body) -> return Try.Fatal(
+                    "免费通道的客户端身份被网关拒了 —— 上游又改版了，这不是你哪里设置错了，要等 App 跟着更新。\n" +
+                        "服务端说明：$detail",
+                )
+
+                FreeLaneWire.regionBlocked(body) -> return Try.Fatal(
+                    "这个免费模型在当前地区不可用，换一个模型试试。\n服务端说明：$detail",
+                )
+            }
+        }
 
         val reason = when (code) {
             401, 403 -> "API Key 不对或没有权限。检查「设置 → 模型」里的 Key。"
@@ -1105,6 +1048,13 @@ class LlmClient(private val cfg: LlmConfig) {
         } else {
             Try.Fatal("$reason\n服务端说明：$detail")
         }
+    }
+
+    /** 把 Retry-After 的秒数说成人话（免费池一次就是十几小时，说"58536 秒"没人看得懂） */
+    private fun formatWait(sec: Long): String = when {
+        sec >= 3600 -> "%.1f 小时".format(sec / 3600.0)
+        sec >= 60 -> "${sec / 60} 分钟"
+        else -> "${sec} 秒"
     }
 
     /**
