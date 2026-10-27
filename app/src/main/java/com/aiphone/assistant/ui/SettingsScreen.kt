@@ -48,6 +48,7 @@ import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.TapReviewMode
 import com.aiphone.assistant.data.ThinkingMode
 import com.aiphone.assistant.llm.EndpointSafety
+import com.aiphone.assistant.llm.FreeModelCatalog
 import com.aiphone.assistant.llm.ModelListFetcher
 import com.aiphone.assistant.ui.design.ActionRow
 import com.aiphone.assistant.ui.design.AppAlertDialog
@@ -366,6 +367,20 @@ private fun ModelSection(
             label = stringResource(R.string.settings_model_name),
         )
 
+        // 免费通道：把当前这个模型的能力摊在明面上。
+        // 它决定了"AI 能不能看截图"和"思考档位调得动多少"，不该藏着。
+        if (s.useFreeModel) {
+            val spec = FreeModelCatalog.specFor(s.modelName)
+            Spacer(Modifier.height(Space.xs))
+            HintText(
+                buildString {
+                    append(spec.label.ifBlank { s.modelName })
+                    append(" · ")
+                    append(spec.summary)
+                },
+            )
+        }
+
         Spacer(Modifier.height(Space.sm))
 
         if (!s.useFreeModel) {
@@ -462,9 +477,12 @@ private fun ModelSection(
                     Spacer(Modifier.height(Space.sm))
                     LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                         items(shown) { m ->
+                            val spec = FreeModelCatalog.specFor(m.id)
                             SelectableItem(
-                                title = m.label,
-                                subtitle = m.id,
+                                title = spec.label.ifBlank { m.label },
+                                // 一行小字说清"这个模型收不收图、窗口多大" ——
+                                // 以前 9 个模型在选单里长得一模一样，选错了要等 400 才知道
+                                subtitle = spec.summary,
                                 selected = m.id == s.modelName,
                                 onClick = {
                                     onChange(s.copy(modelName = m.id))

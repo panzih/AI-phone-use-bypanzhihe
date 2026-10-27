@@ -38,11 +38,14 @@ class FreeLaneBodyTest {
         thinking: ThinkingMode,
         image: ByteArray? = null,
         customEffort: String = "",
+        // 免费通道默认用池子里真实存在的 id：能力表按 id 查，用假 id 会落到
+        // 保守兜底（纯文本、无档位），测不到真实的档位映射
+        model: String = if (useFree) "deepseek-v4.1-flash-free" else "test-model",
     ): JSONObject = LlmClient(
         LlmConfig(
             baseUrl = "https://api.example.com/v1",
             apiKey = "test-key",
-            model = "test-model",
+            model = model,
             useFreeModel = useFree,
             thinking = thinking,
             customEffort = customEffort,
@@ -61,11 +64,48 @@ class FreeLaneBodyTest {
     }
 
     @Test
-    fun `免费通道_LOW档保留thinking与effort`() {
+    fun `免费通道_LOW档只发effort不发thinking`() {
+        // 免费池只认 reasoning_effort 一个表达（上游 effortPatch 也只发这一个），
+        // 多发 thinking 对象是对非标准字段的额外风险
         val b = body(useFree = true, thinking = ThinkingMode.LOW)
-        assertEquals("enabled", b.getJSONObject("thinking").getString("type"))
+        assertFalse("免费通道不该带 thinking：$b", b.has("thinking"))
         assertEquals("low", b.getString("reasoning_effort"))
         assertFalse("思考模式不传 temperature：$b", b.has("temperature"))
+    }
+
+    @Test
+    fun `免费通道_不认的档位降到模型认的`() {
+        // nemotron-3.5-super 声明的档位最高到 xhigh，发 max 会被网关判 400 invalid_value
+        val b = body(useFree = true, thinking = ThinkingMode.MAX, model = "nemotron-3.5-super-vl-free")
+        assertEquals("xhigh", b.getString("reasoning_effort"))
+    }
+
+    @Test
+    fun `免费通道_没有推理的模型一个档位都不发`() {
+        // jev-1.13 没有推理能力，带 reasoning_effort 会被拒
+        val b = body(useFree = true, thinking = ThinkingMode.HIGH, model = "jev-1.13-free")
+        assertFalse("无推理模型不能带 reasoning_effort：$b", b.has("reasoning_effort"))
+        assertFalse("免费通道本来就不带 thinking：$b", b.has("thinking"))
+    }
+
+    @Test
+    fun `免费通道_不看图的模型把图摘掉`() {
+        // 收图片会直接报错的模型：与其整轮失败，不如退回纯文本（只靠控件树）
+        val b = body(
+            useFree = true,
+            thinking = ThinkingMode.OFF,
+            image = jpeg,
+            model = "nemotron-3.5-lightning-free",
+        )
+        val content = b.getJSONArray("messages").getJSONObject(1).get("content")
+        assertTrue("不看图的模型应该只发纯文本：$content", content is String)
+    }
+
+    @Test
+    fun `免费通道_看图的模型照发图片`() {
+        val b = body(useFree = true, thinking = ThinkingMode.OFF, image = jpeg, model = "glm-5.3-flash-free")
+        val content = b.getJSONArray("messages").getJSONObject(1).get("content")
+        assertTrue("看图的模型应该发图文数组：$content", content is org.json.JSONArray)
     }
 
     @Test

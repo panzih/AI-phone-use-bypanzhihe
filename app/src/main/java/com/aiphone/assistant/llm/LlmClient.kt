@@ -793,7 +793,14 @@ class LlmClient(private val cfg: LlmConfig) {
             messages.put(
                 JSONObject().apply {
                     put("role", turn.role)
-                    val image = turn.imageBytes
+                    // 免费通道里不是每个模型都看图：nemotron-lightning / jev / beam /
+                    // flint 收图片会直接报错。这里按模型能力把图**摘掉**，只发文字 ——
+                    // 与其让整轮 400，不如让它在纯控件树模式下继续跑。
+                    val image = if (cfg.useFreeModel && !FreeModelCatalog.supportsImages(cfg.model)) {
+                        null
+                    } else {
+                        turn.imageBytes
+                    }
                     // 图片跟着它所属的那条消息，每次请求都原样重发。
                     // 这是前缀能被缓存命中的前提（见 ChatTurn 的说明）
                     if (image != null && image.isNotEmpty()) {
@@ -854,16 +861,35 @@ class LlmClient(private val cfg: LlmConfig) {
             // Kimi 等）保持原样，那边的 disabled 是有意义的。
             // 自定义档留空 = "用服务商默认"，那时连通开关都不发（发了 enabled
             // 却不说强度，某些上游会把思考强行打开，反而不是用户要的"别管"）
+            // thinking 字段：免费通道**整个不发**。
+            //
+            // 2026-10-16 线上事故（0.9.11 用户实测）：OFF 档发
+            // `thinking:{"type":"disabled"}`，space-bunny-free 的上游对
+            // 非标准字段做严格校验，直接回 400 invalid_request。
+            // 现在的免费池只认 `reasoning_effort` 一个表达（上游插件的
+            // effortPatch 也只发这一个字段），多发一个 thinking 对象纯属风险。
+            //
+            // 自定义通道（DeepSeek / Kimi 等）保持原样，那边的 disabled 是有意义的。
+            // 自定义档留空 = "用服务商默认"，那时连通开关都不发（发了 enabled
+            // 却不说强度，某些上游会把思考强行打开，反而不是用户要的"别管"）
             val customBlank = cfg.thinking == ThinkingMode.CUSTOM && cfg.customEffort.isBlank()
-            cfg.thinking.toggle?.let { toggle ->
-                val offOnFreeLane = cfg.useFreeModel && cfg.thinking == ThinkingMode.OFF
-                if (!offOnFreeLane && !customBlank) {
-                    put("thinking", JSONObject().put("type", toggle))
+            if (!cfg.useFreeModel) {
+                cfg.thinking.toggle?.let { toggle ->
+                    if (!customBlank) put("thinking", JSONObject().put("type", toggle))
                 }
             }
             // effort 走 ThinkingMode.effortOf：CUSTOM 档的值来自用户输入，
             // 留空就**一个字段都不发**（等价「默认」，绝不发空串 —— 那多半 400）
-            ThinkingMode.effortOf(cfg.thinking, cfg.customEffort)?.let { put("reasoning_effort", it) }
+            //
+            // 免费通道再过一道 FreeModelCatalog：每个模型只认自己声明的档位
+            // （nemotron-super 不认 max、jev 完全没有推理），发错了是
+            // 400 invalid_value —— 网关会校验这个字段，不是忽略。
+            val effort = ThinkingMode.effortOf(cfg.thinking, cfg.customEffort)
+            if (cfg.useFreeModel) {
+                FreeModelCatalog.resolveEffort(cfg.model, effort)?.let { put("reasoning_effort", it) }
+            } else {
+                effort?.let { put("reasoning_effort", it) }
+            }
             // 免费通道（opencode.ai 免密池）的 v2 报文契约，全部细节见 FreeLaneWire：
             //   1. 端点 /inference/v1/chat/completions（/zen/v1 对免费 model 一律 403）
             //   2. body.stream = true（非流式直接 403）
@@ -892,7 +918,13 @@ class LlmClient(private val cfg: LlmConfig) {
         buildList {
             add("system".hashCode() * 31 + system.hashCode())
             history.forEach { t ->
-                val image = t.imageBytes
+                // 和 buildBody 保持同一套"图到底发不发"的判定，否则指纹会声称
+                // "这条带了图"、实际却没发，缓存前缀对不上还查不出来
+                val image = if (cfg.useFreeModel && !FreeModelCatalog.supportsImages(cfg.model)) {
+                    null
+                } else {
+                    t.imageBytes
+                }
                 add(
                     t.role.hashCode() * 31 +
                         t.text.hashCode() * 7 +
