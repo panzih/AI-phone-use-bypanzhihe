@@ -3,6 +3,7 @@ package com.aiphone.assistant
 import android.app.Application
 import com.aiphone.assistant.log.AppLog
 import com.aiphone.assistant.log.CrashGuard
+import com.aiphone.assistant.task.TaskHost
 
 /**
  * 应用入口。
@@ -23,6 +24,16 @@ import com.aiphone.assistant.log.CrashGuard
  * 所以把初始化提到 Application：任何组件起来之前，日志和崩溃捕获都已经就位。
  */
 class PaperboxApp : Application() {
+
+    /**
+     * 任务状态与应用级协程。
+     *
+     * 挂在 Application 而不是 Activity：旋转屏幕/分屏/改字体都会重建
+     * Activity，任务不能跟着 `rememberCoroutineScope()` 一起被取消。
+     * 懒加载：只有真正进主界面/跑任务时才创建，冷启动的广播/服务
+     * （定时任务、崩溃捕获）不受影响。
+     */
+    val taskHost: TaskHost by lazy { TaskHost(this) }
 
     override fun onCreate() {
         super.onCreate()

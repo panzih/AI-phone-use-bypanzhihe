@@ -18,10 +18,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -62,6 +60,9 @@ import com.aiphone.assistant.schedule.ScheduleReceiver
 import com.aiphone.assistant.schedule.Schedule
 import com.aiphone.assistant.schedule.ScheduleStore
 import com.aiphone.assistant.schedule.Scheduler
+import com.aiphone.assistant.task.CRASH_NOTICE_ID_PREFIX
+import com.aiphone.assistant.task.TASK_INTERRUPTED_ID_PREFIX
+import com.aiphone.assistant.task.TaskHost
 import com.aiphone.assistant.overlay.OverlayBus
 import com.aiphone.assistant.overlay.OverlayService
 import com.aiphone.assistant.shell.ShizukuBridge
@@ -93,14 +94,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-/**
- * 崩溃提示那条系统消息的 id 前缀。
- *
- * 它是个**会话级**提示，不是对话内容 —— 所以落盘时要按这个前缀滤掉，
- * 否则用户以后每次打开都看到一条早就过时的"上次崩溃了"。
- */
-private const val CRASH_NOTICE_ID_PREFIX = "crash_notice_"
 
 class MainActivity : ComponentActivity() {
 
@@ -264,7 +257,10 @@ private fun AppRoot(
     onOpenOverlaySettings: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // 任务状态与协程都挂在 Application 上：Activity 因旋转/分屏重建时，
+    // 任务不会跟着 rememberCoroutineScope 一起被取消（见 TaskHost）。
+    val host = (context.applicationContext as PaperboxApp).taskHost
+    val scope = host.scope
 
     // 通知权限（Android 13+）。前台服务的常驻通知里挂了「急停」按钮；
     // 用户拒绝也没关系 —— 悬浮窗上的急停照常能用，所以不阻塞流程。
@@ -275,15 +271,15 @@ private fun AppRoot(
     var screen by remember { mutableStateOf(Screen.CONTROL) }
     var input by remember { mutableStateOf("") }
     var settings by remember { mutableStateOf(store.load()) }
-    var isRunning by remember { mutableStateOf(false) }
-    var stopRequested by remember { mutableStateOf(false) }
+    var isRunning by host.isRunningState
+    var stopRequested by host.stopRequestedState
 
     /**
      * 上一趟任务的 Agent。复评要用它手里的完整历史 + 系统提示词 ——
      * 复用同一份才能吃到缓存（见 Agent.review 的说明）。
      */
-    var lastAgent by remember { mutableStateOf<Agent?>(null) }
-    var reviewing by remember { mutableStateOf(false) }
+    var lastAgent by host.lastAgentState
+    var reviewing by host.reviewingState
     // 「真的停下来了」以 Agent 为准：它在等待点广播，界面只照它显示。
     // 不用本地开关的原因很简单 —— 点了暂停到它真停下之间有几十毫秒，
     // 那段时间界面已经说"已暂停"、而 AI 还在动，是最让人心慌的错位。
@@ -325,8 +321,8 @@ private fun AppRoot(
      * "不限"档下一条长对话会被反复整体归纳 —— 又贵，又会把前面任务的
      * 内容重新总结一遍塞进记忆里。
      */
-    var taskTurnStart by remember { mutableIntStateOf(0) }
-    var progress by remember { mutableStateOf("") }
+    var taskTurnStart by host.taskTurnStartState
+    var progress by host.progressState
     var toast by remember { mutableStateOf<String?>(null) }
 
     // ---- 操作记录 ----
@@ -351,62 +347,15 @@ private fun AppRoot(
     // （旧前缀已失效，接着用只会静默失缓存）。技能目录和记忆一样
     // 是「冻结快照」：存下来、续接时沿用当初那一份，学了新技能
     // 不会把旧上下文清掉（想用新技能就手动清空重开）。
-    val diskContext = remember { ContextStore.load(context) }
-    val savedContext = remember(diskContext) {
-        diskContext?.takeIf {
-            it.promptVersion == AgentPrompt.VERSION &&
-                it.modelName == settings.modelName &&
-                it.skillCatalog == currentCatalog
-        }
-    }
-    val logs = remember {
-        mutableStateListOf<LogEntry>().apply {
-            // 老版本可能已经把崩溃提示存进历史了，恢复时滤掉
-            addAll(savedContext?.entries?.filterNot { it.id.startsWith(CRASH_NOTICE_ID_PREFIX) } ?: emptyList())
-            // 磁盘里有旧对话、却因版本不匹配被作废：留一条说明，
-            // 不然消息凭空消失像 bug
-            if (savedContext == null && diskContext?.entries?.isNotEmpty() == true) {
-                add(
-                    LogEntry(
-                        id = "prompt_reset_${System.currentTimeMillis()}",
-                        kind = LogKind.SYSTEM,
-                        text = "提示词版本 / 模型 / 技能目录变化，已开新上下文",
-                        label = "上下文",
-                    )
-                )
-            }
-            // 上次是崩着退出的：说一句，并指出日志在哪。
-            //
-            // 以前闪退之后用户唯一能看到的是"应用没了"，日志要靠自己想到去
-            // 设置里导出 —— 而导出包里往往什么也没有（崩溃没进日志系统）。
-            // 现在崩溃一定会落盘，这里负责让用户知道**它存在**。
-            val crashes = CrashGuard.unreportedCount(context)
-            if (crashes > 0) {
-                add(
-                    LogEntry(
-                        id = "$CRASH_NOTICE_ID_PREFIX${System.currentTimeMillis()}",
-                        kind = LogKind.ERROR,
-                        text = if (crashes == 1) {
-                            "上次运行异常退出，崩溃现场已记录 —— 设置 → 日志 → 导出日志"
-                        } else {
-                            "上次运行异常退出，已记录 $crashes 份崩溃现场 —— 设置 → 日志 → 导出日志"
-                        },
-                        label = "崩溃",
-                    )
-                )
-                // 提示过就不再重复弹：冷启动一次就够，否则每次开都刷一条
-                CrashGuard.markReported(context)
-            }
-        }
-    }
-    val conversation = remember {
-        Conversation().apply {
-            restore(
-                savedTurns = savedContext?.turns ?: emptyList(),
-                savedActivityAt = savedContext?.lastActivityAt ?: 0L,
-            )
-        }
-    }
+    //
+    // 恢复只在第一次进主界面时做（TaskHost 内部有 initialized 守卫），
+    // Activity 重建时直接用内存里那份 —— 重新读盘会把任务刚产生的
+    // 日志和历史盖掉。
+    host.initialize(settings, currentCatalog)
+    val diskContext = host.diskContext
+    val savedContext = host.savedContext
+    val logs = host.logs
+    val conversation = host.conversation
 
     /**
      * 定时任务放在哪块屏上跑。
@@ -415,7 +364,7 @@ private fun AppRoot(
      * 手动输入的任务永远是 false。所以它不能放进 AppSettings ——
      * 那是个全局开关，没法逐条任务区分。
      */
-    var runOnVirtualDisplay by remember { mutableStateOf(false) }
+    var runOnVirtualDisplay by host.runOnVirtualDisplayState
 
     /**
      * **模型那一侧的历史**，和 [logs] 的作用域一样长。
@@ -424,7 +373,7 @@ private fun AppRoot(
      * 落盘和 [logs] 走同一个 `ContextStore.save` —— 分成两次写的话，
      * 那个防抖保存会用旧值把新历史盖掉。
      */
-    var modelHistory by remember { mutableStateOf(savedContext?.history ?: emptyList()) }
+    var modelHistory by host.modelHistoryState
 
     /**
      * 上一个请求的指纹链，跨任务维持"前缀复用"自查。
@@ -432,7 +381,7 @@ private fun AppRoot(
      * 和 [modelHistory] 同生共死：少了它，这次任务的第一次请求就没有
      * "上一次"可比，日志里永远是 0/0，前缀有没有被打断看不出来。
      */
-    var modelFingerprints by remember { mutableStateOf(savedContext?.fingerprints ?: emptyList()) }
+    var modelFingerprints by host.modelFingerprintsState
 
     /**
      * 这段上下文**开头**注入进系统提示词的那份记忆。
@@ -441,7 +390,7 @@ private fun AppRoot(
      * 所以记忆文件即使后来变长了，这段上下文里也只能继续用当初那一份 ——
      * 想用新的，就清空上下文重开一段。
      */
-    var contextMemory by remember { mutableStateOf(savedContext?.memorySnapshot ?: "") }
+    var contextMemory by host.contextMemoryState
 
     /**
      * 这段上下文**系统提示词里用的那份技能目录快照**。
@@ -451,9 +400,7 @@ private fun AppRoot(
      * 所以这里固定住当初那一份 —— 技能**执行**仍走实时注册表（新技能立刻
      * 可用），想知道提示词里也有新技能，就清空上下文重开一段。
      */
-    var contextSkillCatalog by remember {
-        mutableStateOf(savedContext?.skillCatalog ?: currentCatalog)
-    }
+    var contextSkillCatalog by host.contextSkillCatalogState
 
     /**
      * 这条上下文**建起来时用的模型名**。
@@ -467,9 +414,7 @@ private fun AppRoot(
      * 连清 17 次，每次还都落盘 + 遍历日志目录，对话里刷一屏"上下文已重开"。
      * 所以这里冻结快照，真正比对放到 [submit] —— 那一刻才是它唯一有意义的时刻。
      */
-    var contextModelName by remember {
-        mutableStateOf(savedContext?.modelName ?: settings.modelName)
-    }
+    var contextModelName by host.contextModelNameState
 
     fun addLog(kind: LogKind, text: String, label: String? = null) {
         logs.add(
@@ -508,7 +453,10 @@ private fun AppRoot(
                 // 存进去的后果是它会跟着历史一直留着，用户以后每次打开都看到
                 // 一条早就不成立的"上次崩溃了"，导出日志时也会混在对话里。
                 // 要不要提示每次启动重新判定（见上面 logs 的初始化）。
-                entries = logs.filterNot { it.id.startsWith(CRASH_NOTICE_ID_PREFIX) },
+                entries = logs.filterNot {
+                    it.id.startsWith(CRASH_NOTICE_ID_PREFIX) ||
+                        it.id.startsWith(TASK_INTERRUPTED_ID_PREFIX)
+                },
                 turns = conversation.snapshot(),
                 lastActivityAt = conversation.lastActivityAt,
                 history = modelHistory,
@@ -1223,6 +1171,10 @@ private fun AppRoot(
         taskTurnStart = conversation.size
         conversation.add(Turn(Turn.Role.USER, task))
 
+        // 进程死亡标记：正常结束会在 finally 里删掉；没删掉就说明
+        // 这次任务被系统连进程一起回收了，下次启动明确报告（见 TaskHost）
+        host.markTaskStarted(task)
+
         scope.launch {
             isRunning = true
             // 镜像页要靠它判断"有没有任务在跑"（OverlayBus.taskRunning 的注释里说明了原因）
@@ -1231,18 +1183,19 @@ private fun AppRoot(
             // 无障碍的连接检查已经提到 submit() 最前面了（见那里的注释：
             // 放这儿会把用户输入清掉、还往上下文里多塞一条任务消息）。
 
-            // 起悬浮窗。没权限时 OverlayService 会自己退出，
-            // 任务照常跑，只是用户看不到进度和急停按钮。
+            // 起前台服务。没悬浮窗权限时 OverlayService 不画窗口，
+            // 但仍保持前台服务与通知栏的「急停」—— 任务照常跑，
+            // 只是看不到屏幕上的进度面板。
             // 悬浮条的背景模糊是**设置项**（默认关）：在起服务之前把它同步过去，
             // 服务里建窗口时才读得到
             OverlayBus.overlayBlurEnabled = settings.overlayBlur
             if (Settings.canDrawOverlays(context)) {
-                OverlayService.start(context)
+                OverlayService.start(context.applicationContext)
             } else {
                 addLog(
                     LogKind.ERROR,
-                    "没有悬浮窗权限，这次看不到进度面板和急停按钮。" +
-                        "到「权限」页里开一下。",
+                    "没有悬浮窗权限，这次看不到屏幕上的进度面板；" +
+                        "下拉通知栏仍可用「急停」。到「权限」页里开一下可显示悬浮窗。",
                     "悬浮窗不可用",
                 )
             }
@@ -1255,9 +1208,14 @@ private fun AppRoot(
             // 把纸盒拉回前台的局部函数
             fun bringAppToFront() {
                 val intent = android.content.Intent(context, MainActivity::class.java).apply {
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    addFlags(
+                        android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                    )
                 }
-                context.startActivity(intent)
+                // 任务可能比 Activity 活得久（旋转/分屏重建），必须用
+                // applicationContext + NEW_TASK，不能攥着已经销毁的 Activity
+                context.applicationContext.startActivity(intent)
             }
             if (runOnVirtualDisplay) {
                 addLog(LogKind.SYSTEM, "正在创建副屏 ...", "副屏")
@@ -1368,9 +1326,13 @@ private fun AppRoot(
                 progress = ""
                 // 任务结束，无条件把纸盒界面拉回前台（无论中途有没有让开）
                 bringAppToFront()
-                OverlayService.stop(context)
+                OverlayService.stop(context.applicationContext)
                 refreshStats()
             }
+        }.invokeOnCompletion {
+            // 正常结束、异常退出、副屏建屏失败提前 return —— 都算这次任务收尾了。
+            // 不放在上面的 finally 里：建屏失败是在 try 之前 return 的。
+            host.markTaskFinished()
         }
     }
 

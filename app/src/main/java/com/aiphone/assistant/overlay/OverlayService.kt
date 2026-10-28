@@ -144,11 +144,13 @@ class OverlayService : Service() {
             else -> {
                 android.util.Log.i(TAG, "onStartCommand：可以画悬浮窗 = ${canDrawOverlays()}")
                 if (!canDrawOverlays()) {
-                    // 没有权限就干不了活。这里不弹 UI（Service 弹窗体验很差），
-                    // 交给主界面去引导用户授权。
+                    // 没有悬浮窗权限：**不画窗口，但保留前台服务**。
+                    // 任务还要继续跑，进程需要前台优先级才不容易被系统回收；
+                    // 通知里的「急停」也仍然有效。OverlayBus.service 置空后，
+                    // 所有悬浮窗更新都变成 no-op，不会碰到没初始化的 View。
                     OverlayBus.service = null
-                    stopSelf()
-                    return START_NOT_STICKY
+                    android.util.Log.i(TAG, "没有悬浮窗权限，仅保留前台服务与急停通知")
+                    return START_STICKY
                 }
                 showOverlay()
             }
