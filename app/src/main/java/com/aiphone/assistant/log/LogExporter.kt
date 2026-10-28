@@ -171,7 +171,7 @@ object LogExporter {
 
     private fun addText(zos: ZipOutputStream, name: String, text: String) {
         zos.putNextEntry(ZipEntry(name))
-        zos.write(text.toByteArray(Charsets.UTF_8))
+        zos.write(LogSanitizer.redact(text).toByteArray(Charsets.UTF_8))
         zos.closeEntry()
     }
 
@@ -225,7 +225,15 @@ object LogExporter {
         appendLine("  如果某一步写着「读不到根节点」，那是无障碍服务当时没真正生效，")
         appendLine("  不是模型看错了 —— 这一类失败会和别的失败区分开写。")
         appendLine()
-        appendLine("device.txt 中的 API Key 已打码；对话、日志和截图仍可能包含敏感内容，分享前请核对接收者。")
+        appendLine("敏感内容与脱敏：")
+        appendLine("  - 文本文件（.log / .txt / .json / .md / .csv 等）导出前已尽力脱敏：")
+        appendLine("    sk- 开头的 API Key、Authorization: Bearer …、password/密码、验证码/OTP 字段。")
+        appendLine("  - 截图（autocap/、images/、screenshots/）是原始画面，**没有做任何遮挡**：")
+        appendLine("    可能包含聊天内容、支付页面、验证码、身份证/银行卡等。")
+        appendLine("  - 对话、日志、记忆和定时任务本身也可能包含敏感内容；脱敏不是 100% 保证。")
+        appendLine("  - device.txt 里的 API Key 另外做了打码。")
+        appendLine()
+        appendLine("分享前请核对接收者；不要把整包发到公开群/公开仓库。")
     }
 
     /**
@@ -256,10 +264,23 @@ object LogExporter {
         return n
     }
 
+    /**
+     * 文本文件先脱敏再写入；图片/二进制原样复制（截图没法可靠脱敏，
+     * 由 manifest 明确告知）。
+     */
     private fun addEntry(zos: ZipOutputStream, file: File, entryName: String) {
+        if (isTextFile(file)) {
+            addText(zos, entryName, file.readText())
+            return
+        }
         zos.putNextEntry(ZipEntry(entryName))
         file.inputStream().use { it.copyTo(zos) }
         zos.closeEntry()
+    }
+
+    private fun isTextFile(file: File): Boolean = when (file.extension.lowercase()) {
+        "log", "txt", "json", "md", "csv", "xml", "yaml", "yml" -> true
+        else -> false
     }
 
     private fun stamp(): String =

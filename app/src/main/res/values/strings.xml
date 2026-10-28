@@ -203,7 +203,7 @@
     <string name="settings_save_screenshots">保存截图到本地</string>
     <string name="settings_save_screenshots_desc">每一步的截图都存下来（比较占空间）</string>
     <string name="settings_export_logs">导出日志</string>
-    <string name="settings_export_logs_desc">打包成 zip，可以直接发给别人</string>
+    <string name="settings_export_logs_desc">打包成 zip，可以直接发给别人；导出前会提示包里可能有哪些敏感内容</string>
     <string name="settings_log_stats">共 %1$d 次记录 · %2$s</string>
     <string name="settings_log_crash">· 崩溃 %1$d 份</string>
     <string name="settings_memory_stats">记忆：%1$d 条 · %2$s</string>
@@ -211,6 +211,9 @@
     <string name="settings_export_working">正在打包…</string>
     <string name="settings_export_failed">导出失败：%1$s</string>
     <string name="settings_export_share_failed">已打包好，但分享面板没打开：%1$s（再点一次试试）</string>
+    <string name="export_notice_title">导出前请确认</string>
+    <string name="export_notice_body">这个 zip 会包含：运行日志、对话记录、记忆、定时任务、自动截图和手动截图，以及设备/设置概览。\n\n可能含验证码、聊天内容、支付页面、账号/密码、身份证/银行卡等敏感信息。文本文件会尽量脱敏（API Key、密码、验证码等），但截图不会做任何遮挡。\n\n只发给信任的人，不要发到公开群或公开仓库。</string>
+    <string name="export_notice_confirm">继续导出</string>
     <!-- 内置浏览器（AI 直接操作的 WebView） -->
     <string name="browser_title">内置浏览器</string>
     <string name="browser_back">后退</string>

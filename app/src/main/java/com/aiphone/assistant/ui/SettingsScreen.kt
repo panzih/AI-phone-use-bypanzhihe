@@ -906,6 +906,23 @@ private fun LogSection(
     onDeleteLogs: () -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
+    // 导出前风险提示：包里有对话、截图、定时任务，可能含验证码/支付页面。
+    // 不点确认不打包。
+    var showExportNotice by remember { mutableStateOf(false) }
+
+    if (showExportNotice) {
+        AppAlertDialog(
+            title = stringResource(R.string.export_notice_title),
+            body = stringResource(R.string.export_notice_body),
+            confirmText = stringResource(R.string.export_notice_confirm),
+            onConfirm = {
+                showExportNotice = false
+                onExportLogs()
+            },
+            onDismiss = { showExportNotice = false },
+            dismissText = stringResource(R.string.schedule_cancel),
+        )
+    }
 
     if (confirmDelete) {
         AppAlertDialog(
@@ -937,7 +954,7 @@ private fun LogSection(
         ButtonRow {
             AppButton(
                 text = stringResource(R.string.settings_export_logs_button),
-                onClick = onExportLogs,
+                onClick = { showExportNotice = true },
                 variant = ButtonVariant.Secondary,
                 // 打包期间禁用 + 换文案。日志大时这一步是分钟级的，
                 // 不给交代的话用户只会觉得按钮失灵
