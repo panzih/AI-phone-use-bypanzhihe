@@ -113,7 +113,7 @@ internal object RunGuards {
      * 模型换个做法（换元素、先要图、open_app 重开）就活了。
      *
      * 现在端侧只陈述事实，怎么处置由云端决定；硬停由
-     * `Agent.STUCK_ADVICE_LIMIT` 兜底（提醒几次仍无进展才停）。
+     * `AgentLimits.STUCK_ADVICE_LIMIT` 兜底（提醒几次仍无进展才停）。
      *
      * @param sameTree 连续"界面和上一步一样"的步数（只应在 [treeObservable] 为真时累加）
      * @param repeatAction 连续给出同一批动作的次数

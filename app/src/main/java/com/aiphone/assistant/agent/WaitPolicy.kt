@@ -50,7 +50,7 @@ internal object WaitPolicy {
     /**
      * 是否已经到达想去的应用（open_app 的本地判据）。
      *
-     * 冷启动的固定等待（原 [Agent.OPEN_STABLE_MIN_MS] 1500ms）对"秒开"的应用
+     * 冷启动的固定等待（原 [AgentLimits.OPEN_STABLE_MIN_MS] 1500ms）对"秒开"的应用
      * 是纯浪费。本地能直接问系统"现在前台是谁" —— 目标包名到了前台、
      * 且界面静止够 [arrivedSettleMs]，就可以放行，不必等满 1.5 秒。
      *
