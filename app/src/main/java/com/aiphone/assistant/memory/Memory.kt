@@ -8,6 +8,10 @@ import com.aiphone.assistant.log.AppLog
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -148,6 +152,42 @@ object MemoryStore {
      */
     const val INJECT_CHARS_LIMIT = 6000
 
+    /**
+     * 记忆文件的硬上限。
+     *
+     * 记忆是只增不减的，一直写下去会无限长：注入提示词只取末尾 6000 字，
+     * 前面那些永远不会被读到，却一直占磁盘、拖慢每次读取。所以超过上限
+     * 就压缩，只保留**最新的**一部分 —— 新的认知通常最有用。
+     */
+    const val MAX_CHARS = 60_000
+
+    /** 最多留多少条 */
+    const val MAX_ENTRIES = 300
+
+    /** 压缩后保留的字符数；留出余量，避免每写一条都压缩 */
+    private const val KEEP_CHARS = 40_000
+
+    /** 压缩后最多保留的条数 */
+    private const val KEEP_ENTRIES = 200
+
+    /** 单条正文上限，防止模型一次写进来几千字把文件撑爆 */
+    private const val MAX_ENTRY_CHARS = 2_000
+
+    /** 文件头。压缩重写时用它，避免把用户手工改过的说明也当成记忆保留 */
+    private const val HEADER = """# 记忆
+
+> 纸盒在每次任务结束后自动沉淀的「用户洞察」，只增不减。
+> AI 在新开上下文时会读取这里的内容，也可以随时调 recall_memory 技能查看。
+
+"""
+
+    /** 写记忆的结果。去重和失败要分开，界面才能说清楚为什么没写 */
+    sealed class AppendResult {
+        object Written : AppendResult()
+        object Duplicate : AppendResult()
+        data class Failed(val reason: String) : AppendResult()
+    }
+
     fun file(context: Context): File = File(AppLog.rootDir(context), FILE_NAME)
 
     fun exists(context: Context): Boolean =
@@ -168,27 +208,59 @@ object MemoryStore {
     /**
      * 追加一条。**这是唯一的写入方式**。
      *
-     * 每次都写到文件末尾，之前的内容一个字节都不会被碰。
+     * 每次都写到文件末尾，之前的内容一个字节都不会被碰；写完后如果
+     * 超过 [MAX_CHARS] / [MAX_ENTRIES] 就压缩（只留最新的）。
+     *
+     * 去重按**正文规范化后完全相同**判断：模型对同一件事反复归纳时，
+     * 文件不该无限堆同一条。标题不同但正文一样也算重复。
      */
-    fun append(context: Context, entry: MemoryEntry): Boolean = runCatching {
+    fun append(context: Context, entry: MemoryEntry): AppendResult = runCatching {
+        val body = entry.body.trim().take(MAX_ENTRY_CHARS)
+        if (body.isBlank()) return@runCatching AppendResult.Failed("记忆正文为空")
+
         val f = file(context)
-        if (!f.exists()) {
-            f.writeText(
-                buildString {
-                    appendLine("# 记忆")
-                    appendLine()
-                    appendLine("> 纸盒在每次任务结束后自动沉淀的「用户洞察」，只增不减。")
-                    appendLine("> AI 在新开上下文时会读到这里的内容，也可以随时调 recall_memory 技能查看。")
-                    appendLine()
-                }
-            )
+        val existing = read(context)
+        if (isDuplicate(existing, body)) {
+            AppLog.i("记忆重复，已跳过：${entry.title}", "记忆")
+            return@runCatching AppendResult.Duplicate
         }
-        f.appendText(formatEntry(entry))
+
+        if (existing.isBlank()) f.writeText(HEADER)
+        f.appendText(formatEntry(entry.copy(body = body)))
         AppLog.i("记忆 +1：${entry.title}", "记忆")
-        true
+
+        val text = f.readText()
+        if (text.length > MAX_CHARS || entryCount(text) > MAX_ENTRIES) {
+            compact(context, text)
+        }
+        AppendResult.Written
     }.getOrElse {
         AppLog.w("写记忆失败：${it.message}", "记忆")
+        AppendResult.Failed(it.message ?: "写文件失败")
+    }
+
+    /**
+     * 手动压缩：只保留最新的 [KEEP_CHARS] / [KEEP_ENTRIES]。
+     *
+     * @return true = 确实压小了；false = 没东西可压（空文件/已经很小）
+     */
+    fun compress(context: Context): Boolean = runCatching {
+        val text = read(context)
+        if (text.isBlank()) return@runCatching false
+        val beforeChars = text.length
+        val beforeCount = entryCount(text)
+        compact(context, text)
+        val after = read(context)
+        after.length < beforeChars || entryCount(after) < beforeCount
+    }.getOrElse {
+        AppLog.w("压缩记忆失败：${it.message}", "记忆")
         false
+    }
+
+    /** 清空记忆。只影响之后新开的上下文 —— 当前上下文里的快照不会被动。 */
+    fun clear(context: Context) {
+        runCatching { file(context).delete() }
+        AppLog.i("记忆已清空", "记忆")
     }
 
     private fun formatEntry(entry: MemoryEntry): String = buildString {
@@ -197,6 +269,69 @@ object MemoryStore {
         appendLine()
         appendLine(entry.body.trim())
         appendLine()
+    }
+
+    private fun entryCount(text: String): Int =
+        Regex("(?m)^## ").findAll(text).count()
+
+    /** 按 `## ` 标题切出每一条记忆（含标题行） */
+    private fun entries(text: String): List<String> {
+        val starts = Regex("(?m)^## ").findAll(text).map { it.range.first }.toList()
+        return starts.mapIndexed { i, start ->
+            val end = starts.getOrNull(i + 1) ?: text.length
+            text.substring(start, end).trimEnd()
+        }
+    }
+
+    private fun entryBody(block: String): String =
+        block.lineSequence().drop(1).joinToString("\n").trim()
+
+    private fun normalize(s: String): String =
+        s.replace(Regex("\\s+"), " ").trim()
+
+    private fun isDuplicate(existing: String, body: String): Boolean {
+        val target = normalize(body)
+        if (target.isBlank()) return true
+        return entries(existing).any { normalize(entryBody(it)) == target }
+    }
+
+    /** 只保留最新的若干条，重写成完整文件（原子替换，避免压缩途中被杀留半截） */
+    private fun compact(context: Context, text: String) {
+        val all = entries(text)
+        var chars = 0
+        val kept = ArrayDeque<String>()
+        for (e in all.asReversed()) {
+            if (kept.isNotEmpty() &&
+                (chars + e.length > KEEP_CHARS || kept.size >= KEEP_ENTRIES)
+            ) break
+            kept.addFirst(e)
+            chars += e.length
+        }
+        writeAtomically(
+            file(context),
+            HEADER + kept.joinToString("\n\n") + "\n",
+        )
+        AppLog.i("记忆已压缩：${all.size} 条 → ${kept.size} 条 / $chars 字符", "记忆")
+    }
+
+    private fun writeAtomically(main: File, text: String) {
+        main.parentFile?.mkdirs()
+        val tmp = File(main.parentFile, "${main.name}.tmp")
+        FileOutputStream(tmp).use { out ->
+            out.write(text.toByteArray(Charsets.UTF_8))
+            out.flush()
+            out.fd.sync()
+        }
+        try {
+            Files.move(
+                tmp.toPath(),
+                main.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (e: AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), main.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     /** 条数 + 字符数，给设置页显示 */
@@ -389,12 +524,13 @@ object MemoryWriter {
         return try {
             lock.withLock {
                 when (val r = LlmDistiller(llm).distill(turns)) {
-                    is DistillResult.Entry ->
-                        if (MemoryStore.append(context, r.entry)) {
-                            Outcome.Written(r.entry.title)
-                        } else {
-                            Outcome.NotWritten("写文件失败（磁盘满或权限问题）")
-                        }
+                    is DistillResult.Entry -> when (val a = MemoryStore.append(context, r.entry)) {
+                        MemoryStore.AppendResult.Written -> Outcome.Written(r.entry.title)
+                        MemoryStore.AppendResult.Duplicate ->
+                            Outcome.NotWritten("和已有记忆重复，已跳过")
+                        is MemoryStore.AppendResult.Failed ->
+                            Outcome.NotWritten(a.reason)
+                    }
                     is DistillResult.GaveUp -> Outcome.NotWritten(r.reason)
                 }
             }

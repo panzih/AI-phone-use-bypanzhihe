@@ -116,44 +116,21 @@ class FreeLaneBodyTest {
     }
 
     @Test
-    fun `免费通道_v2门禁三件套齐全`() {
-        // 2026-10 上游改成 v2：stream + 逐字的 read/shell + **不发** tool_choice。
-        // 少任何一件、或者多发一个 tool_choice:"none"，都是 403 FreeTierError。
+    fun `免费通道_照官方客户端发流式且不要工具`() {
+        // 逐字节抄的是官方 2.2.0 客户端抓下来的包：stream + stream_options.include_usage，
+        // 既不声明 tools 也不带 tool_choice（那套老闸门已经不用了）
         val b = body(useFree = true, thinking = ThinkingMode.OFF)
         assertTrue("免费通道必须流式", b.getBoolean("stream"))
-
-        assertFalse("v2 见到 tool_choice:\"none\" 直接 403，绝不能下发：$b", b.has("tool_choice"))
-
-        val tools = b.getJSONArray("tools")
-        assertEquals(2, tools.length())
-        val read = tools.getJSONObject(0).getJSONObject("function")
-        val shell = tools.getJSONObject(1).getJSONObject("function")
-        assertEquals("read", read.getString("name"))
-        assertEquals("shell", shell.getString("name"))
-
-        // 定义必须与官方 CLI 逐字一致：v2 比对的是描述和 schema 本身，桩定义会被拒
         assertTrue(
-            "read 的描述必须是官方原文",
-            read.getString("description").startsWith("Read the contents of a file or directory."),
+            "官方客户端带 stream_options.include_usage：$b",
+            b.getJSONObject("stream_options").getBoolean("include_usage"),
         )
-        assertEquals(
-            "read 的 path 参数不能省",
-            "File or directory to read",
-            read.getJSONObject("parameters").getJSONObject("properties")
-                .getJSONObject("path").getString("description"),
-        )
-        assertTrue(
-            "shell 的描述必须是官方原文",
-            shell.getString("description").startsWith("Execute a shell command and return its output."),
-        )
-        assertTrue(
-            "shell 必须带 command 参数",
-            shell.getJSONObject("parameters").getJSONObject("properties").has("command"),
-        )
+        assertFalse("免费通道不该带 tools：$b", b.has("tools"))
+        assertFalse("绝不能下发 tool_choice：$b", b.has("tool_choice"))
 
-        // 注入的是真工具，必须同时告诉模型别调
+        // 系统提示不要被"占位工具"的说明污染
         val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
-        assertTrue("必须带上占位说明：$system", system.contains(FreeLaneWire.PLACEHOLDER_NOTE))
+        assertEquals("系统提示必须原样", "你是一个助手", system)
     }
 
     @Test

@@ -1347,6 +1347,27 @@ private fun AppRoot(
         toast = context.getString(R.string.settings_clear_context_done)
     }
 
+    /** 压缩记忆：只保留最近的一部分，去掉重复。 */
+    fun compressMemory() {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { MemoryStore.compress(context) }
+            refreshStats()
+            toast = context.getString(
+                if (ok) R.string.settings_memory_compress_done
+                else R.string.settings_memory_compress_none
+            )
+        }
+    }
+
+    /** 清空记忆文件。当前上下文里的快照不动 —— 动了会让缓存前缀整段失效。 */
+    fun clearMemory() {
+        scope.launch {
+            withContext(Dispatchers.IO) { MemoryStore.clear(context) }
+            refreshStats()
+            toast = context.getString(R.string.settings_memory_cleared)
+        }
+    }
+
     /**
      * 看副屏画面。
      *
@@ -1747,6 +1768,8 @@ private fun AppRoot(
             onLookAtVd = { lookAtVirtualDisplay() },
             onExportLogs = { exportLogs() },
             onDeleteLogs = { deleteLogs() },
+            onCompressMemory = { compressMemory() },
+            onClearMemory = { clearMemory() },
         )
 
         Screen.ABOUT -> AboutScreen(

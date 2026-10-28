@@ -1,5 +1,55 @@
 # 更新日志
 
+## 0.11.2
+
+> **免费通道第二次修复**：0.11.1 那版是照上游插件的**文档**写的，写错了。
+> 这一版是照**官方客户端的实包**写的。
+
+### 0.11.1 错在哪
+
+上游插件（`dsh-our-free-model`）的模块注释里有一张"v2 报文对照表"，我照抄了它：
+端点 `/inference/v1`、`project: global`、`Authorization: Bearer public`、
+必须注入 `read`/`shell` 两个工具。**这五条里有四条是错的**（或者说过时了）。
+
+判断"额度用完"也是错的：我当时只用了两种客户端（curl、Node）去试，
+都回 429，就下了"按出口 IP 记的日额度用完"的结论。实际上同一台机器上
+**官方 OpenCode 客户端一直是好的**——是请求本身有问题，不是网络。
+
+### 这次是怎么查的
+
+不再猜，直接看官方客户端发什么：把 `OpenCode.app` 自带 CLI（2.2.0）的
+provider `baseURL` 指到本地一个会打印头部的代理上，让它自己发一次
+`chat/completions`，逐字节抄下来。对照结果：
+
+| 项 | 0.11.1（照文档） | **实测官方 2.2.0** |
+|---|---|---|
+| 端点 | `/inference/v1/chat/completions` | **`/inference/openai/v1/chat/completions`** |
+| `Authorization` | `Bearer public` | **整个头都不发** |
+| `x-opencode-project` | 固定 `global` | **40 位 hex**（sha1 形状，本机稳定） |
+| 追踪头 | 无 | **`b3` + `traceparent`** 各一条，同一条 trace |
+| 工具闸门 | 必须注入 `read`/`shell` | **不需要**，一个工具都不发 |
+| body | `stream:true` | `stream:true` + `stream_options.include_usage` |
+
+模型目录仍在 `/inference/v1/models`（`openai/v1/models` 是 404）——官方客户端的
+模型表来自 models.dev，不走网关目录，所以这两条路径不一样。
+
+### 改了什么
+
+- `FreeLaneWire` 按上表重写：端点、UA（`opencode/latest/2.2.0/cli`）、
+  不发行、40 位 project、b3/traceparent 追踪头。
+- `LlmClient`：免费通道不再注入工具、不再往系统提示里塞"别调 read/shell"，
+  改发 `stream_options.include_usage`。SSE 累积器本来就会跳过只有 usage 的尾帧。
+- 新增 `FreeLaneHeadersTest`：把"和官方一致"钉成断言（没有 Authorization、
+  四个 session 头同值、project 40 位 hex 且稳定、b3 与 traceparent 同 trace）。
+
+### 说明
+
+- 本机（走代理）用 curl/Node 复现这套报文仍然是 429，而官方 CLI 直连是 200 ——
+  说明这条通道对**客户端形态**还有一层判断，不是报文能完全对齐的。
+  手机上用的是 Android 自己的 TLS 栈，实际能不能过只能真机验。
+- 0.11.1 那条"额度按出口 IP 记账、约 16 小时后恢复"的文案保留，但降级为
+  "遇到 429 时的解释"，不再是"免费通道挂了的原因"。
+
 ## 0.11.1
 
 > **免费通道修复**：上游 10 月中旬把免密池换成了 v2 报文，旧报文全线 403。

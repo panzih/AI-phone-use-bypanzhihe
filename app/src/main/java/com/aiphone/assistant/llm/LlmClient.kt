@@ -773,19 +773,10 @@ class LlmClient(private val cfg: LlmConfig) {
     ): JSONObject {
         val messages = JSONArray()
 
-        // 免费通道要往系统提示里补一句"read/shell 是占位、别调"。
-        // 那两个工具是网关门禁逼着声明的，但它们是**真工具**（定义逐字来自官方 CLI），
-        // 不打招呼模型真的会拿 read 去读文件。自定义通道不掺这句。
-        val systemContent = if (cfg.useFreeModel) {
-            "$system\n\n${FreeLaneWire.PLACEHOLDER_NOTE}"
-        } else {
-            system
-        }
-
         messages.put(
             JSONObject().apply {
                 put("role", "system")
-                put("content", systemContent)
+                put("content", system)
             }
         )
 
@@ -890,20 +881,19 @@ class LlmClient(private val cfg: LlmConfig) {
             } else {
                 effort?.let { put("reasoning_effort", it) }
             }
-            // 免费通道（opencode.ai 免密池）的 v2 报文契约，全部细节见 FreeLaneWire：
-            //   1. 端点 /inference/v1/chat/completions（/zen/v1 对免费 model 一律 403）
-            //   2. body.stream = true（非流式直接 403）
-            //   3. tools 必须**逐字**声明官方 CLI 的 read + shell 两个工具 ——
-            //      v2 比对的是描述与参数 schema 本身，空桩已经失效
-            //   4. **不发 tool_choice**：v2 见到 "none" 直接 403
-            //   5. session id 的编码必须合法（FreeLaneWire.newSessionId）
+            // 免费通道（opencode.ai 免费池）的报文，逐字节照官方客户端（详见 FreeLaneWire）：
+            //   1. 端点 /inference/openai/v1/chat/completions
+            //   2. 必须 stream:true，并带 stream_options.include_usage（官方就是这么发的）
+            //   3. **不发 tools**：客户端那道老闸门已经不用了，凭空塞工具反而多一份风险
+            //   4. 请求头里没有 Authorization（由 FreeLaneWire.applyHeaders 负责）
             // 断言在 FreeLaneBodyTest 里钉着，改这条链路先跑它。
             if (cfg.useFreeModel) {
-                put("tools", FreeLaneWire.tools())
+                put("stream", true)
+                put("stream_options", JSONObject().put("include_usage", true))
+            } else {
+                // 自定义通道保持非流式，响应是单个 JSON
+                put("stream", false)
             }
-            // 免费通道必须流式（OFM aggregate.js/adapter.js 全部强制 stream:true）；
-            // 自定义通道保持非流式，响应是单个 JSON。
-            put("stream", cfg.useFreeModel)
         }
     }
 
@@ -1040,9 +1030,9 @@ class LlmClient(private val cfg: LlmConfig) {
                 FreeLaneWire.freeQuotaExhausted(body) -> return Try.Fatal(
                     buildString {
                         append("免费通道今天的额度用完了")
-                        retryAfterSec?.let { append("，约 ${formatWait(it)} 后恢复") }
+                        retryAfterSec?.let { append("，约 ${formatWait(it)}后恢复") }
                         append("。\n")
-                        append("这份额度按**出口 IP** 记账，不是按这台手机 —— ")
+                        append("这份额度按出口 IP 记账，不是按这台手机 —— ")
                         append("同一个网络下所有设备、所有免费模型共用一份。\n")
                         append("想马上继续：去「设置 → 模型」切到自定义通道，填自己的 API Key。")
                     },

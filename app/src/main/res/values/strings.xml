@@ -184,6 +184,16 @@
     <string name="settings_context_policy">上下文</string>
     <string name="settings_memory_enabled">开启记忆</string>
     <string name="settings_memory_enabled_desc">开了就每次任务结束后让 AI 归纳一条记忆，追加到记忆文件末尾（只增不减，多花一次纯文字的模型调用）。新开上下文时会自动带上；上下文没重开时，AI 可以自己调 recall_memory 技能查看</string>
+    <string name="settings_memory_compress">压缩记忆</string>
+    <string name="settings_memory_compress_desc">只保留最近的一部分并去掉重复条目；不会删除技能和定时任务</string>
+    <string name="settings_memory_compress_done">记忆已压缩</string>
+    <string name="settings_memory_compress_none">记忆已经很小，无需压缩</string>
+    <string name="settings_memory_clear">清空记忆</string>
+    <string name="settings_memory_clear_desc">删除全部记忆文件。只影响之后新开的上下文，当前对话里的记忆快照不会被改动</string>
+    <string name="settings_memory_clear_confirm_title">清空所有记忆？</string>
+    <string name="settings_memory_clear_confirm_body">会删除 memory.md 里的全部内容，且不能撤销。技能、定时任务、日志和当前对话不受影响；当前上下文里已经注入的记忆快照也会继续用到这段对话结束。</string>
+    <string name="settings_memory_clear_confirm">清空记忆</string>
+    <string name="settings_memory_cleared">记忆已清空</string>
     <string name="settings_save_logs">保存日志</string>
     <string name="settings_save_logs_desc">每次执行写一份 run.log，出问题才有得查</string>
     <string name="settings_save_screenshots">保存截图到本地</string>

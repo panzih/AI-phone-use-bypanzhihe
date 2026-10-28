@@ -9,6 +9,10 @@ import com.aiphone.assistant.ui.LogKind
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * 对话的持久化。
@@ -157,10 +161,41 @@ object ContextStore {
         }.onFailure { AppLog.w("清理历史图片失败：${it.message}", "对话") }
     }
 
-    fun load(context: Context): SavedContext? = runCatching {
-        val f = file(context)
-        if (!f.exists()) return null
-        val o = JSONObject(f.readText())
+    /**
+     * 读上下文。
+     *
+     * 主文件读不出来（写一半被杀、磁盘损坏、手工编辑错）时自动回退
+     * 到 [backupFile]，并把备份恢复成主文件 —— 用户最多丢最后一次
+     * 防抖保存之前的一小段，而不是整个对话凭空消失。
+     */
+    fun load(context: Context): SavedContext? {
+        val main = file(context)
+        val backup = backupFile(context)
+        if (!main.exists() && !backup.exists()) return null
+
+        val primary = runCatching {
+            main.takeIf { it.exists() }?.readText()?.let { parse(context, it) }
+        }
+        primary.getOrNull()?.let { return it }
+        val why = primary.exceptionOrNull()?.message ?: "文件不存在"
+
+        val fallback = runCatching {
+            backup.takeIf { it.exists() }?.readText()?.let { parse(context, it) }
+        }
+        fallback.getOrNull()?.let { restored ->
+            AppLog.w("对话文件不可用（$why），已回退到备份并恢复主文件", "对话")
+            runCatching {
+                backup.copyTo(main, overwrite = true)
+            }.onFailure { AppLog.w("恢复对话主文件失败：${it.message}", "对话") }
+            return restored
+        }
+
+        AppLog.w("对话文件不可用（$why），备份也不可用；按新开上下文处理", "对话")
+        return null
+    }
+
+    private fun parse(context: Context, raw: String): SavedContext {
+        val o = JSONObject(raw)
 
         val entries = o.optJSONArray("entries")?.let { arr ->
             (0 until arr.length()).mapNotNull { i ->
@@ -196,7 +231,7 @@ object ContextStore {
             }
         } ?: emptyList()
 
-        SavedContext(
+        return SavedContext(
             entries = entries,
             turns = turns,
             lastActivityAt = o.optLong("lastActivityAt", 0L),
@@ -227,7 +262,7 @@ object ContextStore {
             modelName = o.optString("modelName", ""),
             skillCatalog = o.optString("skillCatalog", ""),
         )
-    }.getOrNull()
+    }
 
     fun save(
         context: Context,
@@ -298,11 +333,48 @@ object ContextStore {
                 put("modelName", modelName)
                 put("skillCatalog", skillCatalog)
             }
-            file(context).writeText(o.toString())
+            // 先写临时文件并 fsync，再原子替换主文件；替换前把旧主文件
+            // 复制成备份。写到一半被杀时，主文件要么是旧的、要么是新的，
+            // 绝不会是半截 JSON（load 还会在主文件坏掉时回退备份）。
+            writeAtomically(file(context), backupFile(context), o.toString())
             // 被裁掉的那些消息带过的图，此刻已经没人引用了 —— 就地清掉，
             // 否则图片目录会随任务次数一直长大
             pruneImages(context, imagesWritten)
         }.onFailure { AppLog.w("保存对话失败：${it.message}", "对话") }
+    }
+
+    private fun backupFile(context: Context): File =
+        File(AppLog.rootDir(context), "$FILE_NAME.bak")
+
+    /**
+     * 原子写：`.tmp` 写完 + fsync，再原子替换主文件。
+     *
+     * 先备份旧主文件再替换：即使替换过程中进程被杀，load 也能从
+     * `.bak` 回退。不用 `renameTo(main→bak)` 是因为那会出现"主文件
+     * 短暂不存在"的窗口，而这个窗口里被杀就只剩备份。
+     */
+    private fun writeAtomically(main: File, backup: File, text: String) {
+        main.parentFile?.mkdirs()
+        val tmp = File(main.parentFile, "${main.name}.tmp")
+        FileOutputStream(tmp).use { out ->
+            out.write(text.toByteArray(Charsets.UTF_8))
+            out.flush()
+            out.fd.sync()
+        }
+        if (main.exists()) {
+            runCatching { main.copyTo(backup, overwrite = true) }
+                .onFailure { AppLog.w("备份对话文件失败：${it.message}", "对话") }
+        }
+        try {
+            Files.move(
+                tmp.toPath(),
+                main.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (e: AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), main.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     /**
@@ -333,6 +405,9 @@ object ContextStore {
     /** 只在上下文真的被清掉时调用 */
     fun clear(context: Context) {
         runCatching { file(context).delete() }
+        // 备份也要删：否则下一次 load 会把刚清掉的旧上下文"恢复"回来
+        runCatching { backupFile(context).delete() }
+        runCatching { File(file(context).parentFile, "$FILE_NAME.tmp").delete() }
         // 上下文都没了，图留着谁也引用不到（save 时也会清，这里顺手让它立刻释放）
         runCatching { imageDir(context).deleteRecursively() }
     }

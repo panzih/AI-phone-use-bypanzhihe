@@ -120,9 +120,12 @@ fun SettingsScreen(
     onClearContext: () -> Unit,
     onExportLogs: () -> Unit,
     onDeleteLogs: () -> Unit,
+    onCompressMemory: () -> Unit,
+    onClearMemory: () -> Unit,
 ) {
     val s = state.settings
     val snackbar = remember { SnackbarHostState() }
+    var showClearMemory by remember { mutableStateOf(false) }
 
     // 一次性提示：显示完不清状态也没关系，内容一样时不会重复弹
     LaunchedEffect(state.toast) {
@@ -219,6 +222,21 @@ fun SettingsScreen(
                         onCheckedChange = { onSettingsChange(s.copy(memoryEnabled = it)) },
                     )
                     GroupDivider()
+                    ActionRow(
+                        title = stringResource(R.string.settings_memory_compress),
+                        subtitle = state.memoryStats.ifBlank {
+                            stringResource(R.string.settings_memory_compress_desc)
+                        },
+                        onClick = onCompressMemory,
+                    )
+                    GroupDivider()
+                    ActionRow(
+                        title = stringResource(R.string.settings_memory_clear),
+                        subtitle = stringResource(R.string.settings_memory_clear_desc),
+                        destructive = true,
+                        onClick = { showClearMemory = true },
+                    )
+                    GroupDivider()
                     SwitchRow(
                         title = stringResource(R.string.settings_save_logs),
                         subtitle = stringResource(R.string.settings_save_logs_desc),
@@ -260,6 +278,20 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+
+    if (showClearMemory) {
+        AppAlertDialog(
+            title = stringResource(R.string.settings_memory_clear_confirm_title),
+            body = stringResource(R.string.settings_memory_clear_confirm_body),
+            confirmText = stringResource(R.string.settings_memory_clear_confirm),
+            confirmDestructive = true,
+            onConfirm = {
+                showClearMemory = false
+                onClearMemory()
+            },
+            onDismiss = { showClearMemory = false },
+        )
     }
 }
 
