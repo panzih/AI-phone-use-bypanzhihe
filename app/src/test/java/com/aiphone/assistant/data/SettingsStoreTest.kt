@@ -2,6 +2,7 @@ package com.aiphone.assistant.data
 
 import android.content.Context
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -109,9 +110,10 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun `更新设置_默认自动检查_且没跳过任何版本`() {
+    fun `更新设置_默认不自动检查_且没跳过任何版本`() {
         val s = AppSettings()
-        assertTrue("默认应该自动检查更新", s.autoCheckUpdate)
+        // 2026-10-27 整改：检查更新会发送 IP/UA/Android ID，默认改为关闭
+        assertFalse("默认不该自动检查更新", s.autoCheckUpdate)
         assertEquals("默认不该跳过任何版本", 0, s.skippedUpdateCode)
     }
 

@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.aiphone.assistant.agent.Agent
@@ -82,6 +83,7 @@ import com.aiphone.assistant.ui.ScheduleScreen
 import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.UpdateDialog
+import com.aiphone.assistant.ui.design.AppAlertDialog
 import com.aiphone.assistant.update.ApkInstaller
 import com.aiphone.assistant.update.UpdateChecker
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
@@ -1811,6 +1813,25 @@ private fun AppRoot(
                 updateError = null
             },
             onSkip = { skipUpdate() },
+        )
+    }
+
+    // 老版本用户可能已经开着免费通道，但没有确认过风险说明。
+    // 启动时补一次：确认才继续用免费通道，否则切回自定义（不会静默继续发送）。
+    if (settings.useFreeModel && !settings.freeLaneNoticeAccepted) {
+        AppAlertDialog(
+            title = stringResource(R.string.settings_model_free_notice_title),
+            body = stringResource(R.string.settings_model_free_notice_body),
+            confirmText = stringResource(R.string.settings_model_free_notice_accept),
+            onConfirm = {
+                settings = settings.copy(freeLaneNoticeAccepted = true)
+                store.save(settings)
+            },
+            dismissText = stringResource(R.string.settings_model_free_notice_decline),
+            onDismiss = {
+                settings = settings.copy(useFreeModel = false, freeLaneNoticeAccepted = true)
+                store.save(settings)
+            },
         )
     }
 }

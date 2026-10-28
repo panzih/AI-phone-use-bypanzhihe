@@ -8,8 +8,6 @@ import com.aiphone.assistant.agent.AgentLimits.BROWSER_EVAL_MAX_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_HTML_DEFAULT_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_HTML_MAX_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_LOAD_SETTLE_MS
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_STOP_TOKENS
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_WARN_TOKENS
 import com.aiphone.assistant.agent.AgentLimits.FOREGROUND_YIELD_MS
 import com.aiphone.assistant.agent.AgentLimits.FOREGROUND_YIELD_POLL_MS
 import com.aiphone.assistant.agent.AgentLimits.LOCAL_DISMISS_LIMIT

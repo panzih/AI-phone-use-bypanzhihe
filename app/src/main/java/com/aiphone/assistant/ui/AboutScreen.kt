@@ -90,9 +90,35 @@ fun AboutScreen(
                     GroupDivider()
                     SwitchRow(
                         title = "启动时自动检查",
-                        subtitle = "打开时查一次，有新版本会提示。关掉也能在这里手动查。",
+                        subtitle = "默认关闭。开启后每次启动会向更新站发送 IP、User-Agent、设备标识（Android ID）、包名和版本号，用于版本分发与统计；关掉也能在这里手动查。",
                         checked = autoCheck,
                         onCheckedChange = onAutoCheckChange,
+                    )
+                }
+            }
+
+            item { SectionTitle("隐私说明") }
+            item {
+                HintText(
+                    text = "纸盒没有广告或分析 SDK。下面是你需要知道的联网与本地数据行为：",
+                    modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.xs),
+                )
+            }
+            item {
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
+                    SettingRow(
+                        title = "更新检查",
+                        subtitle = "手动检查或开启自动检查时，会向更新站发送 IP、User-Agent、Android ID、包名和版本号。服务端保存设备哈希以及检查/下载统计，用于版本分发。",
+                    )
+                    GroupDivider()
+                    SettingRow(
+                        title = "模型请求",
+                        subtitle = "屏幕控件树、截图和你输入的文字会发送给你选择的模型接口。免费通道是社区非官方网关，首次开启前会单独告知风险。",
+                    )
+                    GroupDivider()
+                    SettingRow(
+                        title = "本地数据",
+                        subtitle = "日志、截图、对话和记忆默认只留在本机；只有你主动导出时才会离开手机。导出前会提示可能包含验证码、聊天、支付页面等敏感内容。",
                     )
                 }
             }

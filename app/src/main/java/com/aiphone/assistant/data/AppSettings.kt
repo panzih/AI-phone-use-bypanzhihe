@@ -347,8 +347,19 @@ data class AppSettings(
      *
      * 不需要填 API Key，模型列表由网关决定（DeepSeek V4 Flash、Kimi 等）。
      * 这是社区白嫖通道，有速率限制，不要拿来跑长任务。
+     *
+     * **默认关闭**：新安装走自定义 Key。免费通道是显式选项，首次开启
+     * 必须看过 [freeLaneNoticeAccepted] 对应的风险说明。
      */
     val useFreeModel: Boolean = false,
+
+    /**
+     * 是否已经确认过免费通道的风险说明。
+     *
+     * 只在**第一次**打开免费通道时弹一次；确认后不再打扰。老版本用户
+     * 如果已经开着免费通道、但没有这个标记，启动时会补一次告知。
+     */
+    val freeLaneNoticeAccepted: Boolean = false,
 
     /** 思考模式。默认「默认」：让服务端自己挑 */
     val thinking: ThinkingMode = ThinkingMode.DEFAULT,
@@ -383,6 +394,15 @@ data class AppSettings(
      * 用户明确要求时才开。
      */
     val tapReview: TapReviewMode = TapReviewMode.OFF,
+
+    /**
+     * 允许 AI 执行高风险操作（支付、转账、删除、发送、授权、验证码等）。
+     *
+     * **默认关**。关着时执行层直接拦截，不靠提示词自觉 —— 屏幕/网页内容
+     * 是不可信输入，模型可能被诱导去点支付按钮。打开后不再逐次让用户确认，
+     * 但每个高风险动作仍要过一次**独立的模型二次确认**，结果写进运行日志。
+     */
+    val allowHighRiskActions: Boolean = false,
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,
@@ -440,11 +460,11 @@ data class AppSettings(
     /**
      * 启动时自动检查更新。
      *
-     * 默认开。更新站是自己搭的，一次检查就一个 GET、几 KB，
-     * 但不更新就收不到修好的 bug，所以默认让它查。
-     * 关掉之后「关于」页仍有手动检查。
+     * **默认关**：检查更新会把 IP（服务器必然能看到）、HTTP User-Agent、
+     * 设备标识（Android ID）、包名和版本号发给更新站。用户没主动要求联网时
+     * 不替他做这个决定；「关于」页仍有手动检查。
      */
-    val autoCheckUpdate: Boolean = true,
+    val autoCheckUpdate: Boolean = false,
 
     /**
      * 用户点过「跳过这个版本」的 versionCode。

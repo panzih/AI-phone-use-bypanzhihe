@@ -201,6 +201,13 @@ fun SettingsScreen(
                         mode = s.tapReview,
                         onChange = { onSettingsChange(s.copy(tapReview = it)) },
                     )
+                    GroupDivider()
+                    SwitchRow(
+                        title = stringResource(R.string.settings_allow_high_risk),
+                        subtitle = stringResource(R.string.settings_allow_high_risk_desc),
+                        checked = s.allowHighRiskActions,
+                        onCheckedChange = { onSettingsChange(s.copy(allowHighRiskActions = it)) },
+                    )
                 }
             }
             item {
@@ -279,6 +286,8 @@ private fun ModelSection(
     var models by remember { mutableStateOf<List<String>?>(null) }
     var fetchError by remember { mutableStateOf<String?>(null) }
     var showFreePicker by remember { mutableStateOf(false) }
+    // 首次切到免费通道时的风险告知。确认之前不落库、不切换。
+    var showFreeNotice by remember { mutableStateOf(false) }
 
     // 免费模型的实时列表：打开选择器时**用接口读**
     // （null 且不在读 = 读失败，退回内置名单；错误原因单独记着）
@@ -309,7 +318,13 @@ private fun ModelSection(
     Column(modifier = Modifier.padding(horizontal = Space.lg)) {
         ChannelToggle(
             useFree = s.useFreeModel,
-            onChange = { onChange(s.copy(useFreeModel = it)) },
+            onChange = { free ->
+                when {
+                    !free -> onChange(s.copy(useFreeModel = false))
+                    s.freeLaneNoticeAccepted -> onChange(s.copy(useFreeModel = true))
+                    else -> showFreeNotice = true
+                }
+            },
         )
 
         Spacer(Modifier.height(Space.md))
@@ -505,6 +520,20 @@ private fun ModelSection(
             onChange = { onChange(s.copy(thinking = it)) },
             onCustomEffortChange = { onChange(s.copy(customEffort = it)) },
         )
+
+        if (showFreeNotice) {
+            AppAlertDialog(
+                title = stringResource(R.string.settings_model_free_notice_title),
+                body = stringResource(R.string.settings_model_free_notice_body),
+                onDismiss = { showFreeNotice = false },
+                confirmText = stringResource(R.string.settings_model_free_notice_accept),
+                onConfirm = {
+                    showFreeNotice = false
+                    onChange(s.copy(useFreeModel = true, freeLaneNoticeAccepted = true))
+                },
+                dismissText = stringResource(R.string.settings_model_free_notice_decline),
+            )
+        }
     }
 }
 

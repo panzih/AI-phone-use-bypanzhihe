@@ -7,8 +7,6 @@ import com.aiphone.assistant.agent.AgentLimits.BROWSER_EVAL_MAX_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_HTML_DEFAULT_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_HTML_MAX_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_LOAD_SETTLE_MS
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_STOP_TOKENS
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_WARN_TOKENS
 import com.aiphone.assistant.agent.AgentLimits.FOREGROUND_YIELD_MS
 import com.aiphone.assistant.agent.AgentLimits.FOREGROUND_YIELD_POLL_MS
 import com.aiphone.assistant.agent.AgentLimits.LOCAL_DISMISS_LIMIT
@@ -157,6 +155,15 @@ internal class AgentSession(
 ) {
 
 
+
+    /**
+     * 当前模型的上下文预算。免费池按目录里的实测窗口算；自定义模型按
+     * 模型名保守推断。主循环和悬浮窗百分比都读这一份，不再用固定 100K/120K。
+     */
+    internal val contextBudget = AgentLimits.contextBudgetFor(
+        useFreeModel = settings.useFreeModel,
+        modelName = settings.modelName,
+    )
 
     /** 用户中途叫停 */
     @Volatile
@@ -499,7 +506,7 @@ internal class AgentSession(
             logger?.line("接着上一段上下文：${seedHistory.size} 条历史已复原", "上下文")
         }
         // 0 = 不限。不设上限不等于失控：模型会主动 finished / failed 收尾，
-        // 而且上下文接近窗口上限时下面会强制停下（见 CONTEXT_STOP_TOKENS）
+        // 而且上下文接近窗口上限时下面会强制停下（见 AgentLimits.ContextBudget）
         val stepLimit = if (maxSteps <= 0) Int.MAX_VALUE else maxSteps
         // 分辨率跨步保留：某一步没读到时沿用上一次的值（和拆分前一致）
         var screenW = screen.first
@@ -765,6 +772,80 @@ internal class AgentSession(
                     "点击前复核返回 ${elapsed}ms：${verdict}" +
                         if (decision.why.isBlank()) "" else " —— ${decision.why}",
                     "复核",
+                )
+                decision
+            }
+        }
+    }
+
+    /**
+     * 高风险动作的模型二次确认（见 [RiskReview]）。
+     *
+     * 用独立的 [reviewLlm] 一问一答，不碰主历史；请求失败或输出无法解析
+     * 都返回"不通过"，绝不因为确认环节坏了就放行高风险动作。
+     */
+    internal suspend fun confirmHighRisk(
+        action: TouchAction,
+        target: UiNode?,
+        step: Int,
+        task: String,
+        risk: String,
+    ): RiskReview.Decision {
+        val targetDesc = if (target != null) {
+            "[${target.index}] ${target.className} " +
+                "\"${target.text.ifBlank { target.contentDesc }.take(40)}\""
+        } else {
+            "模型给的是坐标，没有按元素编号定位"
+        }
+        val request = RiskReview.prompt(
+            task = task,
+            actionDesc = AgentPrompt.describe(action),
+            targetDesc = targetDesc,
+            risk = risk,
+        )
+        logger?.line(
+            "高风险二次确认：第 $step 步 ${AgentPrompt.describe(action)}；" +
+                "目标 $targetDesc；端侧判断：$risk",
+            "风控",
+        )
+
+        val started = System.currentTimeMillis()
+        val result = withContext(Dispatchers.IO) {
+            // 确认也是一次网络请求，急停同样要能掀掉它
+            val watchdog = launch {
+                while (isActive) {
+                    delay(STOP_POLL_MS)
+                    if (isStopped()) {
+                        reviewLlm.abort()
+                        return@launch
+                    }
+                }
+            }
+            try {
+                reviewLlm.chat(
+                    system = RiskReview.SYSTEM,
+                    history = listOf(ChatTurn(ChatTurn.USER, request)),
+                    shouldAbort = { isStopped() },
+                )
+            } finally {
+                watchdog.cancel()
+            }
+        }
+        val elapsed = System.currentTimeMillis() - started
+
+        return when (result) {
+            is LlmResult.Fail ->
+                RiskReview.Decision(false, "二次确认请求失败：${result.message}")
+
+            is LlmResult.Ok -> {
+                promptTokens += result.promptTokens
+                completionTokens += result.completionTokens
+                val decision = RiskReview.parse(result.text)
+                    ?: RiskReview.Decision(false, "二次确认输出无法解析：${result.text.take(80)}")
+                logger?.line(
+                    "高风险二次确认返回 ${elapsed}ms：" +
+                        (if (decision.confirmed) "通过" else "拒绝") + " —— ${decision.why}",
+                    "风控",
                 )
                 decision
             }

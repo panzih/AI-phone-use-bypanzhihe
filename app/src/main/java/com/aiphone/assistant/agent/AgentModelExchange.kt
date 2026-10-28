@@ -1,8 +1,6 @@
 package com.aiphone.assistant.agent
 
 import com.aiphone.assistant.agent.Agent.EventKind
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_STOP_TOKENS
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_WARN_TOKENS
 import com.aiphone.assistant.agent.AgentLimits.MAX_IMAGE_REQUESTS
 import com.aiphone.assistant.agent.AgentLimits.MAX_SKILL_CALLS
 import com.aiphone.assistant.agent.AgentLimits.MAX_TOTAL_IMAGES
@@ -286,7 +284,7 @@ internal suspend fun AgentSession.askModel(
                     // 用真实值而不是本地估算 —— 估算会把图片/系统提示词的
                     // token 数算偏，占用百分比跟着失真。
                     contextPercent = if (result.promptTokens > 0) {
-                        (result.promptTokens * 100 / CONTEXT_STOP_TOKENS).coerceIn(0, 100)
+                        (result.promptTokens * 100 / contextBudget.window).coerceIn(0, 100)
                     } else {
                         null
                     },
@@ -296,16 +294,19 @@ internal suspend fun AgentSession.askModel(
                 // ---- 上下文长度兜底 ----
                 // 上下文不裁剪（缓存按前缀匹配），所以得防着撑爆模型窗口。
                 // 用服务端返回的真实 prompt_tokens，比本地估算准。
-                if (result.promptTokens >= CONTEXT_STOP_TOKENS) {
-                    val msg = "上下文已经 ${result.promptTokens} token，接近模型上限，" +
-                        "为避免请求被拒先停下。开个新任务继续吧。"
+                if (result.promptTokens >= contextBudget.stopTokens) {
+                    val msg = "上下文已经 ${result.promptTokens} token（模型窗口 ${contextBudget.window}），" +
+                        "再发就要顶到上限了，先停下。开个新任务继续吧。"
                     logger?.error(msg, "上下文")
                     listener.onEvent(EventKind.ERROR, msg, "上下文过长")
                     finish(false, msg)
                     return AskResult.Stop
                 }
-                if (result.promptTokens >= CONTEXT_WARN_TOKENS) {
-                    logger?.warn("上下文已到 ${result.promptTokens} token，快满了", "上下文")
+                if (result.promptTokens >= contextBudget.warnTokens) {
+                    logger?.warn(
+                        "上下文已到 ${result.promptTokens} token（窗口 ${contextBudget.window}），快满了",
+                        "上下文",
+                    )
                 }
                 logger?.line(
                     "模型返回 ${elapsed}ms，token：输入 ${result.promptTokens} / " +

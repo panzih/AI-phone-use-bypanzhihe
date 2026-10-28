@@ -1,6 +1,7 @@
 package com.aiphone.assistant.agent
 
 import com.aiphone.assistant.a11y.UiNode
+import com.aiphone.assistant.llm.FreeModelCatalog
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
 
@@ -68,6 +69,101 @@ internal object AgentLimits {
         // 误伤 book/look，让英文界面几乎不重试（功能静默失效）。
         val englishTokens = label.split(Regex("[^a-z]")).toHashSet()
         return SIDE_EFFECT_WORDS.any { word ->
+            if (word.all { it in 'a'..'z' }) word in englishTokens
+            else label.contains(word)
+        }
+    }
+
+    /**
+     * 高风险动作词表。
+     *
+     * 比 [SIDE_EFFECT_WORDS] 窄：只收**不可逆或会造成实际损失**的动作。
+     * 「确定 / 确认 / ok」这类通用词刻意不收 —— 它们出现在几乎每个弹窗里，
+     * 收进来会让闸门变成"什么都拦"，用户只能一直开着开关。
+     *
+     * 屏幕/网页内容是**不可信输入**，所以判据放在执行层，不靠提示词。
+     */
+    val HIGH_RISK_WORDS = listOf(
+        // 钱
+        "支付", "付款", "付账", "转账", "汇款", "购买", "买入", "下单", "订购",
+        "抢购", "结算", "确认支付", "确认转账", "立即支付", "立即购买",
+        // 不可逆
+        "删除", "清空", "注销", "解绑",
+        // 对外发送 / 授权
+        "发送", "发信", "发出", "提交", "授权", "授予",
+        // 敏感信息
+        "验证码", "密码", "银行卡", "信用卡", "身份证",
+        // 英文（整词匹配，避免误伤）
+        "pay", "payment", "transfer", "remit", "purchase", "buy", "checkout",
+        "order", "delete", "remove", "erase", "send", "submit", "authorize",
+        "grant", "verify", "verification", "otp", "password",
+    )
+
+    /** 4~8 位纯数字：最常见的一次性验证码 / 支付密码形态 */
+    private val OTP_LIKE = Regex("^\\d{4,8}$")
+
+    /**
+     * 判断一个动作是不是高风险，返回给用户/日志看的原因；不是则 null。
+     *
+     * @param nodes 当前这一帧的控件树（[hint] 为空时用来按编号/坐标找目标）
+     * @param hint  模型看到的那个控件（按编号操作时由调用方找回）
+     */
+    internal fun highRiskReason(
+        action: TouchAction,
+        nodes: List<UiNode>,
+        hint: UiNode? = null,
+    ): String? {
+        val hit = when (action.kind) {
+            TouchKind.TAP, TouchKind.LONG_PRESS, TouchKind.DOUBLE_TAP -> {
+                when {
+                    hint != null -> listOf(hint)
+                    action.targetIndex > 0 -> nodes.filter { it.index == action.targetIndex }
+                    else -> nodes.filter { it.bounds.contains(action.x, action.y) }
+                }
+            }
+            else -> emptyList()
+        }
+
+        when (action.kind) {
+            TouchKind.TAP, TouchKind.LONG_PRESS, TouchKind.DOUBLE_TAP -> {
+                val label = hit.asSequence()
+                    .map { it.text.ifBlank { it.contentDesc } }
+                    .firstOrNull { it.isNotBlank() }
+                    ?: return null
+                val word = highRiskWord(label) ?: return null
+                return "点击「${label.take(24)}」（命中「$word」）"
+            }
+
+            TouchKind.INPUT_TEXT -> {
+                val targetLabel = hit.asSequence()
+                    .map { it.text.ifBlank { it.contentDesc } }
+                    .firstOrNull { it.isNotBlank() }
+                    .orEmpty()
+                val text = action.text.trim()
+                if (OTP_LIKE.matches(text)) {
+                    return "输入 4~8 位数字（可能是验证码/支付密码）"
+                }
+                if (targetLabel.contains("密码") || targetLabel.contains("验证码") ||
+                    targetLabel.contains("卡号") || targetLabel.contains("身份证")
+                ) {
+                    return "在「${targetLabel.take(24)}」里输入敏感信息"
+                }
+                return null
+            }
+
+            TouchKind.BROWSER_EVAL ->
+                return "在网页里执行脚本（可能触发表单提交/删除等副作用）"
+
+            else -> return null
+        }
+    }
+
+    /** 标签命中的高风险词；`获取验证码` 这类"请求验证码"不算 */
+    private fun highRiskWord(raw: String): String? {
+        val label = raw.lowercase()
+        if (label.contains("获取验证码") || label.contains("发送验证码")) return null
+        val englishTokens = label.split(Regex("[^a-z]")).toHashSet()
+        return HIGH_RISK_WORDS.firstOrNull { word ->
             if (word.all { it in 'a'..'z' }) word in englishTokens
             else label.contains(word)
         }
@@ -301,10 +397,61 @@ internal object AgentLimits {
      * 上下文预算。
      *
      * 上下文**不做裁剪**（缓存按前缀匹配，一裁前缀就断，反而更贵），
-     * 所以这里给个上限兜底，避免请求被服务端直接拒掉。
-     *
-     * 这两个数是保守值，按所用模型的窗口大小调整。
+     * 所以这里按**当前模型的真实窗口**给一个上限兜底，避免请求被服务端
+     * 直接拒掉。以前固定 100K/120K：32K 模型会先撞 API 上限，1M 模型
+     * 在 12% 就被强行停下，悬浮窗百分比也跟着失真。
      */
-    const val CONTEXT_WARN_TOKENS = 100_000
-    const val CONTEXT_STOP_TOKENS = 120_000
+    data class ContextBudget(
+        /** 模型窗口（token） */
+        val window: Int,
+        /** 到这个量就在日志/悬浮窗提醒模型该收尾了 */
+        val warnTokens: Int,
+        /** 到这个量强制停下 */
+        val stopTokens: Int,
+    )
+
+    /** 自定义模型不知道窗口时的保守默认：多数 OpenAI 兼容接口是 128K */
+    const val DEFAULT_CONTEXT_WINDOW = 128_000
+
+    /** 自定义模型不知道输出上限时的保守默认 */
+    const val DEFAULT_MAX_OUTPUT = 8_192
+
+    /**
+     * 按窗口与最大输出算 warn/stop。
+     *
+     * 两条约束同时满足：
+     *   1. 不超过窗口的 90%（给服务端留一点余量）；
+     *   2. 给输出留出 `maxOutput` + 约 5% 窗口的安全垫 —— 输入刚好顶满
+     *      窗口时，模型连一个 token 都吐不出来。
+     * 取两者更小的那个，再让 warn 落在 stop 的 85%。
+     */
+    internal fun contextBudget(window: Int, maxOutput: Int): ContextBudget {
+        val w = window.coerceAtLeast(8_000)
+        val out = maxOutput.coerceIn(1_024, w / 2)
+        val margin = (w * 0.05).toInt()
+        val stop = minOf((w * 0.90).toInt(), w - out - margin)
+            .coerceAtLeast((w * 0.50).toInt())
+        val warn = (stop * 0.85).toInt()
+        return ContextBudget(window = w, warnTokens = warn, stopTokens = stop)
+    }
+
+    /**
+     * 当前设置的预算。免费池用 [FreeModelCatalog] 的实测窗口；
+     * 自定义模型按名字做一个保守推断（认不出来就 128K）。
+     */
+    internal fun contextBudgetFor(useFreeModel: Boolean, modelName: String): ContextBudget {
+        if (useFreeModel) {
+            val spec = FreeModelCatalog.specFor(modelName)
+            return contextBudget(spec.contextWindow, spec.maxOutput)
+        }
+        val name = modelName.lowercase()
+        val window = when {
+            "gemini" in name -> 1_048_576
+            "claude" in name -> 200_000
+            "deepseek" in name -> 128_000
+            "gpt" in name || "o1" in name || "o3" in name || "o4" in name -> 128_000
+            else -> DEFAULT_CONTEXT_WINDOW
+        }
+        return contextBudget(window, DEFAULT_MAX_OUTPUT)
+    }
 }

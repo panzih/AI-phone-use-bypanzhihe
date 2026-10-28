@@ -8,8 +8,6 @@ import com.aiphone.assistant.agent.AgentLimits.BROWSER_EVAL_MAX_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_HTML_DEFAULT_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_HTML_MAX_CHARS
 import com.aiphone.assistant.agent.AgentLimits.BROWSER_LOAD_SETTLE_MS
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_STOP_TOKENS
-import com.aiphone.assistant.agent.AgentLimits.CONTEXT_WARN_TOKENS
 import com.aiphone.assistant.agent.AgentLimits.FOREGROUND_YIELD_MS
 import com.aiphone.assistant.agent.AgentLimits.FOREGROUND_YIELD_POLL_MS
 import com.aiphone.assistant.agent.AgentLimits.LOCAL_DISMISS_LIMIT
@@ -38,6 +36,7 @@ import com.aiphone.assistant.agent.AgentLimits.TAP_HOME
 import com.aiphone.assistant.agent.AgentLimits.UNREADABLE_TREE_LIMIT
 import com.aiphone.assistant.agent.AgentLimits.buildTreeLogLine
 import com.aiphone.assistant.agent.AgentLimits.hasSideEffect
+import com.aiphone.assistant.agent.AgentLimits.highRiskReason
 import com.aiphone.assistant.agent.AgentLimits.switchMustYieldToOpenApp
 import com.aiphone.assistant.a11y.UiNode
 import com.aiphone.assistant.data.AppSettings
@@ -126,6 +125,8 @@ internal suspend fun AgentSession.executeBatch(
     // 本批有没有动作被"点击前复核"叫停。被叫停的批次即使模型说
     // finished，也不能当作完成 —— 那一下根本没点。
     var reviewVetoedThisBatch = false
+    // 本批有没有高风险动作被闸门拦下。和复核叫停同理：这一批不能算完成。
+    var riskBlockedThisBatch = false
     // 本批截了几张图。一批最多一张：模型可能连写几个 capture，
     // 但同一批里画面几乎没变，多截只是多花钱
     var shotsThisBatch = 0
@@ -296,6 +297,31 @@ internal suspend fun AgentSession.executeBatch(
             // 在网页里跑一段 JS 并把结果拿回来
             OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
             logger?.line("  $single", "执行")
+            val risk = highRiskReason(action, treeRead.nodes)
+            if (risk != null) {
+                if (!settings.allowHighRiskActions) {
+                    val why = "高风险操作被端侧拦截：$risk。当前未开启「允许 AI 执行高风险操作」，这一段脚本没有执行。"
+                    logger?.warn(why, "风控")
+                    listener.onEvent(EventKind.ERROR, why, "第 $step 步 · 风控")
+                    results.add("$single → $why")
+                    riskBlockedThisBatch = true
+                    break
+                }
+                val decision = confirmHighRisk(action, null, step, task, risk)
+                if (isStopped()) {
+                    finish(false, "你停止了任务（高风险二次确认时）")
+                    return BatchResult.Stop
+                }
+                if (!decision.confirmed) {
+                    val why = "高风险操作未通过二次确认：${decision.why}（$risk），这一段脚本没有执行。"
+                    logger?.warn(why, "风控")
+                    listener.onEvent(EventKind.ERROR, why, "第 $step 步 · 风控")
+                    results.add("$single → $why")
+                    riskBlockedThisBatch = true
+                    break
+                }
+                logger?.line("高风险操作二次确认通过：$risk —— ${decision.why}", "风控")
+            }
             val out = com.aiphone.assistant.browser.BrowserDriver.eval(action.js)
             if (out == null) {
                 val why = com.aiphone.assistant.browser.BrowserDriver.lastError() ?: "未知原因"
@@ -426,6 +452,35 @@ internal suspend fun AgentSession.executeBatch(
                 withContext(Dispatchers.IO) { controller.parseNodesOrNull() }
             } else {
                 null
+            }
+
+            // ---- 高风险动作闸门（执行层，不靠提示词）----
+            // 屏幕/网页内容是不可信输入，模型可能被诱导去点支付/删除。
+            // 关着时直接拦；开着时也要过一次独立的模型二次确认。
+            val risk = highRiskReason(runAction, beforeNodes ?: treeRead.nodes, hint)
+            if (risk != null) {
+                if (!settings.allowHighRiskActions) {
+                    val why = "高风险操作被端侧拦截：$risk。当前未开启「允许 AI 执行高风险操作」，这一下没有执行。"
+                    logger?.warn(why, "风控")
+                    listener.onEvent(EventKind.ERROR, why, "第 $step 步 · 风控")
+                    results.add("$single → $why")
+                    riskBlockedThisBatch = true
+                    break
+                }
+                val decision = confirmHighRisk(runAction, hint, step, task, risk)
+                if (isStopped()) {
+                    finish(false, "你停止了任务（高风险二次确认时）")
+                    return BatchResult.Stop
+                }
+                if (!decision.confirmed) {
+                    val why = "高风险操作未通过二次确认：${decision.why}（$risk），这一下没有执行。"
+                    logger?.warn(why, "风控")
+                    listener.onEvent(EventKind.ERROR, why, "第 $step 步 · 风控")
+                    results.add("$single → $why")
+                    riskBlockedThisBatch = true
+                    break
+                }
+                logger?.line("高风险操作二次确认通过：$risk —— ${decision.why}", "风控")
             }
 
             // 注入前**只在真会撞上急停按钮时**才藏。
@@ -603,10 +658,14 @@ internal suspend fun AgentSession.executeBatch(
     // ---- 这批动作就是任务收尾（模型给动作的同时说 finished）----
     // 动作已经逐个执行完，这里再正常结束，不再请求下一步。
     if (p.finished) {
-        if (reviewVetoedThisBatch) {
-            // 复核叫停了其中一下，这一批就不能算"做完" —— 即使模型
+        if (reviewVetoedThisBatch || riskBlockedThisBatch) {
+            // 复核叫停/高风险拦截了其中一下，这一批就不能算"做完" —— 即使模型
             // 在同一个输出里写了 finished。把决定交回模型重新看一屏。
-            val why = "这一批里有动作被点击前复核叫停，任务不能算完成"
+            val why = if (riskBlockedThisBatch) {
+                "这一批里有高风险动作被端侧拦截，任务不能算完成"
+            } else {
+                "这一批里有动作被点击前复核叫停，任务不能算完成"
+            }
             logger?.warn(why, "复核")
             lastResult = (lastResult?.let { "$it " } ?: "") +
                 "（$why。请重新看当前界面，确认下一步该怎么做；" +
