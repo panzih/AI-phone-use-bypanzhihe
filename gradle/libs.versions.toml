@@ -5,6 +5,9 @@ coreKtx = "1.15.0"
 lifecycle = "2.8.7"
 activityCompose = "1.9.3"
 composeBom = "2025.01.00"
+# 设备冒烟测试（androidTest）：AndroidJUnit4 + InstrumentationRegistry + ActivityScenario
+androidxTest = "1.6.1"
+androidxTestExtJunit = "1.2.1"
 # Shizuku：借它的特权进程拿到 shell 身份（无 root 时也能开虚拟屏、跑 screencap/input）
 shizuku = "13.1.5"
 
@@ -21,6 +24,11 @@ androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+
+# ---------- 设备测试 ----------
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTest" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTest" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 
 # ---------- Shizuku ----------
 # api      ：申请权限、绑定用户服务

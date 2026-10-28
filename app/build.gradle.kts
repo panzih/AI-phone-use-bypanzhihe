@@ -42,6 +42,8 @@ android {
         targetSdk = 35
         versionCode = 78      // 0.11.2：免费通道按官方客户端实测报文重写
         versionName = "0.11.2"
+        // 设备冒烟测试：androidTest 用 AndroidJUnitRunner 跑
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     /**
@@ -157,4 +159,9 @@ dependencies {
     // 让坐标点击的命中测试 bounds.contains 能在 JVM 上真跑（否则是 stub）
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
+
+    // 设备冒烟测试：需要真机/模拟器，不进入 CI 的 JVM 单测任务
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

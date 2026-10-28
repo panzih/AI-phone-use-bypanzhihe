@@ -309,7 +309,9 @@ class OverlayService : Service() {
         //   3. 我们**拿不到**被模糊的那层图（它是系统合成的），所以没法自己做
         //      "截图 + 高斯模糊"来兜底：那需要每帧截屏，代价远大于收益。
         val blurPx = backgroundBlurRadiusPx()
-        if (blurPx > 0) {
+        // backgroundBlurRadiusPx() 已经保证低于 Android 12 时返回 0；
+        // 这里再显式判一次版本，既让 lint 看得懂，也不依赖“上游不会改”。
+        if (blurPx > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             barParams.flags = barParams.flags or
                 WindowManager.LayoutParams.FLAG_BLUR_BEHIND
             // 公开 API 名字是 setBlurBehindRadius（API 31+）；

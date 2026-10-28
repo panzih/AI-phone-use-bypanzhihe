@@ -4,9 +4,10 @@
 # （见 RunGuards / ActionParser / WaitPolicy 的设计说明）。Tests 目录里已经
 # 攒了十几个测试文件，但此前只能靠人肉跑 —— 这次把它变成 push / PR 的门。
 #
-# 只跑 JVM 单测（testDebugUnitTest）：不需要模拟器、不需要真机，
-# 冷启动 3~5 分钟。instrumentation 测试的缺口（通道/Shizuku/UI）本来就
-# 不是这个 CI 能覆盖的，不在这里假装覆盖。
+# 这个 CI 跑三件事：JVM 单测、lintDebug、assembleDebug。
+# 都不需要模拟器/真机，冷启动 5~8 分钟。
+# instrumentation 测试（androidTest）需要设备，不在这里假装覆盖 ——
+# 运行说明见 docs/testing-device.md。
 name: CI
 
 on:
@@ -41,11 +42,21 @@ jobs:
       - name: 跑单测
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 
+      # lint error 直接挡住合并；warning 留在报告里，不阻塞
+      - name: Lint
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      # 编译不过的代码不应该进 main。release 签名方案确定前只构建 debug
+      - name: 构建 Debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
       # 失败时把报告传上来，省得让人本地复现
       - name: 上传测试报告
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-report
-          path: app/build/reports/tests/testDebugUnitTest
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/reports/lint-results-debug.html
           if-no-files-found: ignore
