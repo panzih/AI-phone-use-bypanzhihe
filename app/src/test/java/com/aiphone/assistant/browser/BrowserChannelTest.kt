@@ -114,4 +114,14 @@ class BrowserChannelTest {
         val nodes = BrowserDom.parseTree(json)
         assertTrue(nodes.all { it.viewId == "web:" + it.index })
     }
+
+    @Test
+    fun `eval 包装不再依赖 JS 桥`() {
+        // 整改清单第 9 项：不再 addJavascriptInterface。结果直接作为
+        // evaluateJavascript 的返回值回去，页面拿不到任何 Android 对象。
+        val js = BrowserJs.wrapEval("document.title")
+        assertFalse("不能再引用 JS 桥", js.contains("__zhHost__"))
+        assertTrue("结果要通过返回值带回来", js.contains("return JSON.stringify"))
+        assertTrue("异常也要包成 JSON 信封", js.contains("ok: false"))
+    }
 }

@@ -2,27 +2,29 @@
 <!--
   网络安全配置。
 
-  ## 为什么允许明文 HTTP
+  ## 为什么平台层仍允许明文 HTTP
 
-  Android 9（API 28）起默认禁止明文 HTTP，这是好事 ——
-  但对我们这个工具是个硬伤：用户很可能把接口地址填成局域网里的
-  本地模型服务（Ollama、vLLM、LM Studio 之类），那些基本都跑在
-  http://192.168.x.x:11434 这种地址上，不带 TLS。
+  Android 9（API 28）起默认禁止明文 HTTP。这个应用有两个**必须**用明文的场景：
 
-  不放宽的话，表现是"点了发送没反应"，日志里只有一句
-  `Cleartext HTTP traffic to ... not permitted` —— 用户很难想到
-  是系统在拦。开发时用 10.0.2.2 连宿主机也一样会被拦。
+    1. 本地模型服务（Ollama / vLLM / LM Studio）通常跑在
+       http://192.168.x.x:11434，没有 TLS；
+    2. 内置浏览器要能打开用户/模型指定的 http 网页（很多国内站点仍有
+       http 入口和子资源）。
 
-  ## 代价（这个必须说清楚）
+  Android 的 domain-config 只支持具体域名/主机，**不支持 IP 段白名单**，
+  所以没法"局域网放行、公网禁止"。这里保留全局明文能力，但把风险控制
+  放到应用层：
 
-  允许明文意味着：如果用户把地址填成 http:// 开头的公网地址，
-  **API Key 会以明文经过网络**。这是用户自己的选择 ——
-  地址是他手填的。LlmClient 里会对公网 HTTP 地址打警告日志，
-  提醒用户这有风险。
+    - LlmClient / ModelListFetcher：公网 http:// 默认**直接拒绝**，
+      只有用户显式打开「允许公网明文 HTTP」才发请求；本机/局域网不受影响。
+      判据见 llm/EndpointSafety.kt，设置页共用同一份规则。
+    - 内置浏览器：只接受 http/https，file://、content://、intent://、
+      自定义 scheme 一律拒绝（见 browser/BrowserUrl.kt）。
+    - WebView 关闭 file/content access，不注入 addJavascriptInterface。
 
-  Android 的 domain-config 不支持 IP 段白名单，所以没法只给
-  局域网开口子、公网强制 HTTPS —— 只能全局允许或全局禁止。
-  选全局允许是因为本地模型服务是这个应用的核心场景之一。
+  改这里之前先想清楚：把 base-config 改成 false 会让本地模型和 http 网页
+  一起失效；只给 localhost 开口子也救不了 192.168.x.x。真正的"公网禁止
+  明文"在 LlmClient 里，不在这个文件里。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">

@@ -28,11 +28,13 @@ class SettingsStore(
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         useFreeModel = sp.getBoolean(KEY_FREE_MODEL, DEFAULT.useFreeModel),
         freeLaneNoticeAccepted = sp.getBoolean(KEY_FREE_NOTICE, DEFAULT.freeLaneNoticeAccepted),
+        allowPublicCleartext = sp.getBoolean(KEY_ALLOW_PUBLIC_CLEARTEXT, DEFAULT.allowPublicCleartext),
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
         customEffort = sp.getString(KEY_CUSTOM_EFFORT, DEFAULT.customEffort) ?: DEFAULT.customEffort,
         overlayBlur = sp.getBoolean(KEY_OVERLAY_BLUR, DEFAULT.overlayBlur),
         tapReview = TapReviewMode.fromId(sp.getString(KEY_TAP_REVIEW, null)),
         allowHighRiskActions = sp.getBoolean(KEY_ALLOW_HIGH_RISK, DEFAULT.allowHighRiskActions),
+        allowBrowserEval = sp.getBoolean(KEY_ALLOW_BROWSER_EVAL, DEFAULT.allowBrowserEval),
         mode = OperationMode.fromId(sp.getString(KEY_MODE, null))
             // 老配置可能存过不可用的 ADB：归一化回无障碍，别把用户卡在灰界面
             .let { if (it.available) it else OperationMode.ACCESSIBILITY },
@@ -53,11 +55,13 @@ class SettingsStore(
             .putString(KEY_MODEL, s.modelName)
             .putBoolean(KEY_FREE_MODEL, s.useFreeModel)
             .putBoolean(KEY_FREE_NOTICE, s.freeLaneNoticeAccepted)
+            .putBoolean(KEY_ALLOW_PUBLIC_CLEARTEXT, s.allowPublicCleartext)
             .putString(KEY_THINKING, s.thinking.id)
             .putString(KEY_CUSTOM_EFFORT, s.customEffort)
             .putBoolean(KEY_OVERLAY_BLUR, s.overlayBlur)
             .putString(KEY_TAP_REVIEW, s.tapReview.id)
             .putBoolean(KEY_ALLOW_HIGH_RISK, s.allowHighRiskActions)
+            .putBoolean(KEY_ALLOW_BROWSER_EVAL, s.allowBrowserEval)
             .putString(KEY_MODE, s.mode.id)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
             .putString(KEY_CONTEXT_POLICY, s.contextPolicy.id)
@@ -98,6 +102,9 @@ class SettingsStore(
 
         /** 免费通道风险说明是否已确认（见 AppSettings.freeLaneNoticeAccepted） */
         const val KEY_FREE_NOTICE = "free_lane_notice_accepted"
+
+        /** 是否允许公网明文 HTTP（默认关，见 AppSettings.allowPublicCleartext） */
+        const val KEY_ALLOW_PUBLIC_CLEARTEXT = "allow_public_cleartext"
         const val KEY_THINKING = "thinking_mode"
 
         /** CUSTOM 档填的 reasoning_effort 原文（留空 = 不发） */
@@ -111,6 +118,9 @@ class SettingsStore(
 
         /** 是否允许高风险操作（默认关，见 AppSettings.allowHighRiskActions） */
         const val KEY_ALLOW_HIGH_RISK = "allow_high_risk_actions"
+
+        /** 是否允许 browser_eval（默认关，见 AppSettings.allowBrowserEval） */
+        const val KEY_ALLOW_BROWSER_EVAL = "allow_browser_eval"
         const val KEY_MODE = "operation_mode"
         // 曾经的全局「在副屏上操作」开关。现在是**逐条定时任务**的选项
         // （见 Schedule.useVirtualDisplay），这里不再读写 —— 老配置文件里

@@ -72,6 +72,12 @@ class BrowserActivity : ComponentActivity() {
         settings.databaseEnabled = true
         settings.allowFileAccess = false
         settings.allowContentAccess = false
+        // file:// 页面不能再读别的 file://，也不能借 file:// 绕过同源策略
+        @Suppress("DEPRECATION")
+        settings.allowFileAccessFromFileURLs = false
+        @Suppress("DEPRECATION")
+        settings.allowUniversalAccessFromFileURLs = false
+        settings.setGeolocationEnabled(false)
         settings.setSupportZoom(false)
         settings.builtInZoomControls = false
         settings.displayZoomControls = false
@@ -80,15 +86,36 @@ class BrowserActivity : ComponentActivity() {
         settings.setSupportMultipleWindows(false)
         settings.defaultTextEncodingName = "utf-8"
 
-        webView.addJavascriptInterface(bridge, BrowserJs.HOST_NAME)
+        // 不注入任何 addJavascriptInterface：页面拿不到 Android 对象。
+        // JS 结果统一走 evaluateJavascript 的 ValueCallback（见 BrowserBridge），
+        // 这比"给桥加来源校验"更彻底 —— 没有桥就没有桥被恶意页面调用的面。
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean = false // 一律在同一个 WebView 里打开，避免跳到系统浏览器
+            ): Boolean {
+                // 只允许 http/https。file:// / intent:// / 自定义 scheme 一律拦下，
+                // 不交给系统浏览器，也不让 WebView 去尝试。
+                val target = request.url?.toString().orEmpty()
+                if (!BrowserUrl.isAllowedPage(target)) {
+                    val why = "已拦截非 http/https 跳转：" + target.take(160)
+                    android.util.Log.w("BrowserActivity", why)
+                    urlText.text = why
+                    return true
+                }
+                return false // 同一个 WebView 里打开，避免跳到系统浏览器
+            }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 android.util.Log.i("BrowserActivity", "onPageStarted: " + url)
+                if (!url.isNullOrBlank() && !BrowserUrl.isAllowedPage(url)) {
+                    val why = "已拦截非 http/https 页面：" + url.take(160)
+                    android.util.Log.w("BrowserActivity", why)
+                    view?.stopLoading()
+                    urlText.text = why
+                    ready?.complete(Unit)
+                    return
+                }
                 // ⚠️ 只有"上一轮已经完成"时才换新的等待器。
                 //
                 // 踩过的坑：原来这里无条件 ready = CompletableDeferred()，而
@@ -135,8 +162,19 @@ class BrowserActivity : ComponentActivity() {
             }
         })
 
-        val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         beginLoad()
+        val raw = intent.getStringExtra(EXTRA_URL).orEmpty()
+        val url = when (val r = BrowserUrl.normalize(raw)) {
+            is BrowserUrl.Result.Ok -> r.url
+            is BrowserUrl.Result.Rejected -> {
+                // 兜底：正常情况下 BrowserDriver 已经拦过，这里再挡一次，
+                // 防止将来有别的入口直接 startActivity 进来。
+                loadError = "已拒绝打开这个地址：${r.reason}"
+                urlText.text = loadError
+                ready?.complete(Unit)
+                return
+            }
+        }
         android.util.Log.i("BrowserActivity", "loadUrl: " + url)
         webView.loadUrl(if (url.isBlank()) "about:blank" else url)
     }

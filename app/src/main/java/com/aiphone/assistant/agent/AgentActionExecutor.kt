@@ -294,9 +294,18 @@ internal suspend fun AgentSession.executeBatch(
             }
             break
         } else if (action.kind == TouchKind.BROWSER_EVAL) {
-            // 在网页里跑一段 JS 并把结果拿回来
+            // 在网页里跑一段 JS 并把结果拿回来。
+            // 默认关闭：这段脚本由模型生成，能读页面、代点、提交表单；
+            // 大多数任务用 browser_html + 编号点击就够了。
             OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
             logger?.line("  $single", "执行")
+            if (!settings.allowBrowserEval) {
+                val why = "「执行JS」默认关闭：到「设置 → 更多设置」打开" +
+                    "「允许 AI 在网页里执行 JavaScript」后再用；本次没有执行。"
+                logger?.warn(why, "风控")
+                results.add("$single → $why")
+                break
+            }
             val risk = highRiskReason(action, treeRead.nodes)
             if (risk != null) {
                 if (!settings.allowHighRiskActions) {

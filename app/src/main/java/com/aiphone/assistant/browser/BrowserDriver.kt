@@ -67,6 +67,12 @@ object BrowserDriver {
     suspend fun open(context: Context, url: String): String? {
         lastErrorText = null
 
+        // 解析层已经校验过一次；这里再校验一次，保证任何调用方都绕不过去。
+        val target = when (val r = BrowserUrl.normalize(url)) {
+            is BrowserUrl.Result.Ok -> r.url
+            is BrowserUrl.Result.Rejected -> return fail("不打开这个地址：${r.reason}")
+        }
+
         // 旧窗口先关掉，避免两个 WebView 同时挂着一份页面
         val old = activity
         if (old != null) {
@@ -76,7 +82,7 @@ object BrowserDriver {
         }
 
         val intent = Intent(context, BrowserActivity::class.java)
-            .putExtra(BrowserActivity.EXTRA_URL, url)
+            .putExtra(BrowserActivity.EXTRA_URL, target)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
             withContext(Dispatchers.Main) { context.startActivity(intent) }

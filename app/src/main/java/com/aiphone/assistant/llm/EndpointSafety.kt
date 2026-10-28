@@ -23,18 +23,29 @@ package com.aiphone.assistant.llm
 object EndpointSafety {
 
     /**
-     * 明文 HTTP 且主机不是本机/局域网 → 返回给用户看的警告文案；否则 null。
+     * 公网明文 HTTP 的主机名；不是公网明文就返回 null。
      *
-     * 只关心 scheme 和 host，不看路径（`http://x/v1` 和 `http://x` 等价）。
+     * 这是**拦截判据**：`LlmClient` 在发送前用它硬失败，设置页用它决定
+     * 要不要显示警告和「允许公网明文 HTTP」开关。只关心 scheme 和 host，
+     * 不看路径（`http://x/v1` 和 `http://x` 等价）。
      */
-    fun cleartextWarning(baseUrl: String): String? {
+    fun publicCleartextHost(baseUrl: String): String? {
         val url = baseUrl.trim().lowercase()
         if (!url.startsWith("http://")) return null
         val host = extractHost(url.removePrefix("http://"))
         if (host.isBlank()) return null
         if (isLocalHost(host)) return null
-        return "这个地址是公网明文 HTTP：API Key 和对话内容会以明文经过网络，" +
-            "同网络下的人可能看到。能换 https:// 就换；换不了就只在自己放心的网络里用。"
+        return host
+    }
+
+    /**
+     * 明文 HTTP 且主机不是本机/局域网 → 返回给用户看的警告文案；否则 null。
+     */
+    fun cleartextWarning(baseUrl: String): String? {
+        val host = publicCleartextHost(baseUrl) ?: return null
+        return "这个地址是公网明文 HTTP（$host）：API Key 和对话内容会以明文经过网络，" +
+            "同网络下的人可能看到。默认会在发送前拦截；能换 https:// 就换，" +
+            "换不了才到设置里显式打开「允许公网明文 HTTP」。"
     }
 
     /** 从 `host[:port][/path]` 里取主机名，兼容 IPv6 字面量 `[::1]:8080` */

@@ -104,9 +104,19 @@ class SettingsStoreTest {
             saveScreenshots = false,
             localDialogDismiss = false,
             tapReview = TapReviewMode.ALL,
+            allowPublicCleartext = true,
+            allowBrowserEval = true,
         )
         store.save(s)
         assertEquals(s, store.load())
+    }
+
+    @Test
+    fun `网络安全开关_默认关闭`() {
+        val s = AppSettings()
+        // 整改清单第 9 项：公网明文默认拒绝；browser_eval 默认关闭
+        assertFalse("公网明文 HTTP 默认必须拒绝", s.allowPublicCleartext)
+        assertFalse("browser_eval 默认必须关闭", s.allowBrowserEval)
     }
 
     @Test

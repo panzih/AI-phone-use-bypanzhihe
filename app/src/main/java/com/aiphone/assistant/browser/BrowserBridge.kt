@@ -1,12 +1,12 @@
 package com.aiphone.assistant.browser
 
-import android.webkit.JavascriptInterface
 import com.aiphone.assistant.a11y.UiNode
 import android.graphics.Rect
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONTokener
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 
 /**
@@ -23,9 +23,6 @@ import kotlin.math.roundToInt
  * 已经存在就立刻返回，避免把页面里的 __zh__ 覆盖成空对象。
  */
 internal object BrowserJs {
-
-    /** JS 桥在页面里的全局名。Android 侧 addJavascriptInterface 用同一个名字。 */
-    const val HOST_NAME = "__zhHost__"
 
     /**
      * 采集 + 操作脚本。
@@ -259,63 +256,77 @@ internal object BrowserJs {
     }
 
     /**
-     * 把一段用户 JS 包进"执行 → 通过 Android 桥回传结果"的壳里。
+     * 把一段用户 JS 包进"执行 → 返回 JSON 信封"的壳里。
      *
-     * 为什么不直接用 evaluateJavascript 的 ValueCallback：
-     * 那个回调对对象只给 "[object Object]" / 空串，且没法带出错信息；
-     * 走桥可以把结果 JSON.stringify 后完整带回来，异常也能说清是哪一句。
+     * 不用 `addJavascriptInterface`：页面里的任何脚本（包括恶意 iframe）
+     * 都能调用注入的 Android 对象，而 `@JavascriptInterface` 拿不到调用方
+     * 来源，做不了可靠的来源校验。改成 `evaluateJavascript` 的
+     * ValueCallback 后，页面拿不到任何 Android 对象，结果和异常都通过
+     * 返回值带回来 —— 没有桥，就没有桥可被滥用。
+     *
+     * 返回值是 `JSON.stringify({ok,out|error})`，Android 侧拿到的是这个
+     * 字符串的 JSON 编码（外面多一层引号），由 [BrowserBridge.decode] 还原。
      */
-    fun wrapEval(id: String, source: String): String =
+    fun wrapEval(source: String): String =
         "(function () {\n" +
-            "  var id = " + jsString(id) + ";\n" +
             "  try {\n" +
             "    var r = eval(" + jsString(source) + ");\n" +
             "    var out;\n" +
             "    if (r === undefined) out = 'undefined';\n" +
             "    else if (typeof r === 'string') out = r;\n" +
             "    else out = JSON.stringify(r);\n" +
-            "    __zhHost__.postResult(id, JSON.stringify({ ok: true, out: out }));\n" +
+            "    return JSON.stringify({ ok: true, out: out });\n" +
             "  } catch (e) {\n" +
-            "    __zhHost__.postResult(id, JSON.stringify({ ok: false, error: String((e && e.message) || e) }));\n" +
+            "    return JSON.stringify({ ok: false, error: String((e && e.message) || e) });\n" +
             "  }\n" +
             "})();\n"
 }
 
 /**
- * JS ↔ Kotlin 的结果回传桥。
+ * JS 执行器：把一段脚本投进 WebView，等它的 JSON 结果回来。
  *
- * 每次 eval 生成一个递增 id，把 CompletableDeferred 放进 map 等 JS 回调；
- * 超时后从 map 里摘掉 —— 页面里的脚本可能再也不会回来（页面被导航走了），
- * 不清就是永久泄漏。
+ * 每个 eval 自己持有一个 [CompletableDeferred]；超时后从集合里摘掉 ——
+ * 页面里的脚本可能再也不会回来（页面被导航走了），不清就是永久泄漏。
+ * 没有 `addJavascriptInterface`，页面无法反向调用 Android。
  */
 class BrowserBridge {
 
-    private val pending = ConcurrentHashMap<String, CompletableDeferred<String>>()
-    private val counter = AtomicLong(0)
-
-    @JavascriptInterface
-    fun postResult(id: String, payload: String) {
-        pending.remove(id)?.complete(payload)
-    }
+    private val pending = Collections.newSetFromMap(
+        ConcurrentHashMap<CompletableDeferred<String>, Boolean>()
+    )
 
     /** 执行一段 JS，返回结果字符串；null = 超时或页面已跳走。必须在主线程调 evaluateJavascript。 */
     suspend fun eval(webView: android.webkit.WebView, source: String, timeoutMs: Long): String? {
-        val id = counter.incrementAndGet().toString()
         val deferred = CompletableDeferred<String>()
-        pending[id] = deferred
+        pending.add(deferred)
         return try {
-            webView.evaluateJavascript(BrowserJs.wrapEval(id, source), null)
+            webView.evaluateJavascript(BrowserJs.wrapEval(source)) { raw ->
+                deferred.complete(decode(raw))
+            }
             withTimeoutOrNull(timeoutMs) { deferred.await() }
         } finally {
-            pending.remove(id)
+            pending.remove(deferred)
         }
+    }
+
+    /**
+     * `evaluateJavascript` 给的是 JS 返回值的 JSON 编码。我们的脚本返回
+     * 一个 JSON 字符串，所以这里先解一层引号，得到 `{ok,...}` 原文。
+     */
+    private fun decode(raw: String?): String {
+        if (raw == null || raw == "null") {
+            return """{"ok":false,"error":"页面没有返回结果"}"""
+        }
+        val value = runCatching { JSONTokener(raw).nextValue() }.getOrNull()
+        return value as? String ?: raw
     }
 
     /** Activity 销毁时把等待中的调用全部唤醒成失败，别让上层永远挂着 */
     fun cancelAll(reason: String) {
-        val keys = pending.keys.toList()
+        val keys = pending.toList()
         for (k in keys) {
-            pending.remove(k)?.completeExceptionally(IllegalStateException(reason))
+            pending.remove(k)
+            k.completeExceptionally(IllegalStateException(reason))
         }
     }
 }

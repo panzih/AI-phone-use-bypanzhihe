@@ -85,6 +85,18 @@ class EndpointSafetyTest {
     }
 
     @Test
+    fun `公网明文主机_返回主机名_本地和https返回null`() {
+        assertEquals(
+            "api.example.com",
+            EndpointSafety.publicCleartextHost("http://api.example.com/v1"),
+        )
+        assertNull(EndpointSafety.publicCleartextHost("http://192.168.1.1:11434"))
+        assertNull(EndpointSafety.publicCleartextHost("http://localhost:11434"))
+        assertNull(EndpointSafety.publicCleartextHost("https://api.example.com"))
+        assertNull(EndpointSafety.publicCleartextHost(""))
+    }
+
+    @Test
     fun `isLocalHost_直接判定`() {
         assertTrue(EndpointSafety.isLocalHost("localhost"))
         assertTrue(EndpointSafety.isLocalHost("192.168.0.1"))

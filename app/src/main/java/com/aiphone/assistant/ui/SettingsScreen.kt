@@ -186,6 +186,13 @@ fun SettingsScreen(
                         subtitle = stringResource(R.string.settings_vd_mirror_sub),
                         onClick = onLookAtVd,
                     )
+                    GroupDivider()
+                    SwitchRow(
+                        title = stringResource(R.string.settings_allow_browser_eval),
+                        subtitle = stringResource(R.string.settings_allow_browser_eval_desc),
+                        checked = s.allowBrowserEval,
+                        onCheckedChange = { onSettingsChange(s.copy(allowBrowserEval = it)) },
+                    )
                 }
             }
             item {
@@ -374,9 +381,13 @@ private fun ModelSection(
             // 判据与 LlmClient 共用 EndpointSafety，不会出现两处说法不一致。
             EndpointSafety.cleartextWarning(s.baseUrl)?.let { warning ->
                 Spacer(Modifier.height(Space.sm))
-                Banner(
-                    text = stringResource(R.string.settings_model_public_http_warning),
-                    tone = Tone.Negative,
+                Banner(text = warning, tone = Tone.Negative)
+                Spacer(Modifier.height(Space.sm))
+                SwitchRow(
+                    title = stringResource(R.string.settings_allow_public_cleartext),
+                    subtitle = stringResource(R.string.settings_allow_public_cleartext_desc),
+                    checked = s.allowPublicCleartext,
+                    onCheckedChange = { onChange(s.copy(allowPublicCleartext = it)) },
                 )
             }
 
@@ -441,7 +452,13 @@ private fun ModelSection(
                     models = null
                     scope.launch {
                         val result = withContext(Dispatchers.IO) {
-                            runCatching { ModelListFetcher.fetch(s.baseUrl, s.apiKey) }
+                            runCatching {
+                                ModelListFetcher.fetch(
+                                    s.baseUrl,
+                                    s.apiKey,
+                                    s.allowPublicCleartext,
+                                )
+                            }
                         }
                         fetching = false
                         result.onSuccess { list -> models = list }

@@ -28,6 +28,13 @@ data class LlmConfig(
      */
     val useFreeModel: Boolean = false,
     /**
+     * 允许向公网明文 HTTP 地址发请求。
+     *
+     * 默认 false：公网 `http://` 会在 [LlmClient.chat] 里直接失败，
+     * 本机/局域网地址不受影响。见 `AppSettings.allowPublicCleartext`。
+     */
+    val allowPublicCleartext: Boolean = false,
+    /**
      * 图片精度。
      *
      *   original 保留原图 —— **手机 UI 文字多，必须用这个**
@@ -357,8 +364,19 @@ class LlmClient(private val cfg: LlmConfig) {
             return LlmResult.Fail("还没填 API Key。到「设置 → 模型」里填一个，或切到「免费」模式。")
         }
 
-        // 公网明文 HTTP 警告：API Key 会明文经过网络。
-        // 哪些算"本地不警告"由 EndpointSafety 统一判定（设置页共用同一份规则）。
+        // 公网明文 HTTP：默认**直接拒绝**，不是只打日志。
+        // 本机/局域网（Ollama、LM Studio、vLLM）不受影响；判据和设置页共用
+        // EndpointSafety，避免"界面警告了、请求照发"。
+        if (!cfg.useFreeModel) {
+            val publicHost = EndpointSafety.publicCleartextHost(cfg.baseUrl)
+            if (publicHost != null && !cfg.allowPublicCleartext) {
+                return LlmResult.Fail(
+                    "公网明文 HTTP 地址（$publicHost）已被默认拦截：API Key 和对话内容" +
+                        "会以明文经过网络。请把地址改成 https://；确实只能这样，到" +
+                        "「设置 → 模型」打开「允许公网明文 HTTP」。"
+                )
+            }
+        }
         warnIfPublicHttp(cfg.baseUrl)
 
         // 上一次调用的中断标记属于上一次，清掉
@@ -687,6 +705,16 @@ class LlmClient(private val cfg: LlmConfig) {
      * 调用方拿 [AudioProbe.describe] 就能说清是"不支持"还是"连不上"。
      */
     fun probeAudio(): AudioProbe.Outcome {
+        if (!cfg.useFreeModel) {
+            val publicHost = EndpointSafety.publicCleartextHost(cfg.baseUrl)
+            if (publicHost != null && !cfg.allowPublicCleartext) {
+                return AudioProbe.Outcome(
+                    false,
+                    0,
+                    "公网明文 HTTP 地址（$publicHost）已被默认拦截，未发送任何音频",
+                )
+            }
+        }
         val wav = AudioProbe.silentWav()
         val b64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
         val body = AudioProbe.buildBody(cfg.model, b64).toByteArray(Charsets.UTF_8)

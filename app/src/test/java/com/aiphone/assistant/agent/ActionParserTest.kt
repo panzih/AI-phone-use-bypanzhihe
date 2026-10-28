@@ -248,4 +248,38 @@ class ActionParserTest {
         assertEquals(1, p.actions.size)
         assertFalse(p.finished)
     }
+
+    // ---- browser_open：只允许 http/https（整改清单第 9 项） ----
+
+    @Test
+    fun browserOpen_omittedScheme_getsHttps() {
+        val p = ActionParser.parse(
+            """{"actions":[{"action":"browser_open","url":"bilibili.com"}]}""",
+            w, h,
+        )
+        assertEquals(1, p.actions.size)
+        assertEquals("https://bilibili.com", p.actions[0].url)
+        assertNull(p.warning)
+    }
+
+    @Test
+    fun browserOpen_dangerousSchemes_areDroppedWithReason() {
+        listOf(
+            "file:///sdcard/secret.txt",
+            "content://com.android.contacts/data/1",
+            "intent://scan/#Intent;scheme=zxing;end",
+            "javascript:alert(1)",
+            "myapp://open",
+        ).forEach { url ->
+            val p = ActionParser.parse(
+                """{"actions":[{"action":"browser_open","url":"$url"}]}""",
+                w, h,
+            )
+            assertTrue("$url 不该被执行", p.actions.isEmpty())
+            assertTrue(
+                "拒绝原因要回灌给模型：${p.warning}",
+                p.warning!!.contains("打开网页") && p.warning!!.contains("只允许 http/https"),
+            )
+        }
+    }
 }

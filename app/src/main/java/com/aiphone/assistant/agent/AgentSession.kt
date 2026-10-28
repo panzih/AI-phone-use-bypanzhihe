@@ -280,6 +280,7 @@ internal class AgentSession(
                 apiKey = settings.apiKey,
                 model = settings.modelName,
                 useFreeModel = settings.useFreeModel,
+                allowPublicCleartext = settings.allowPublicCleartext,
                 thinking = settings.thinking,
                 customEffort = settings.customEffort,
                 timeoutMs = 60_000,

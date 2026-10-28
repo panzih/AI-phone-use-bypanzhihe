@@ -23,9 +23,21 @@ object ModelListFetcher {
      * @throws Exception 网络错误 / 非 2xx / 返回不是合法 JSON 时抛出，
      *         message 是人能看懂的中文原因
      */
-    fun fetch(baseUrl: String, apiKey: String): List<String> {
+    fun fetch(
+        baseUrl: String,
+        apiKey: String,
+        allowPublicCleartext: Boolean = false,
+    ): List<String> {
         if (apiKey.isBlank()) {
             throw IllegalStateException("还没填 API Key")
+        }
+        // 和 LlmClient.chat 同一条规则：公网明文默认不把 Key 发出去。
+        val publicHost = EndpointSafety.publicCleartextHost(baseUrl)
+        if (publicHost != null && !allowPublicCleartext) {
+            throw IllegalStateException(
+                "公网明文 HTTP 地址（$publicHost）已被默认拦截：API Key 会以明文经过网络。" +
+                    "请改用 https://，或到「设置 → 模型」打开「允许公网明文 HTTP」。"
+            )
         }
 
         val url = modelsEndpoint(baseUrl)

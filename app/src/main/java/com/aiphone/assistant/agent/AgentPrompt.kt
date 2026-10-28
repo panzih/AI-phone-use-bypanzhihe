@@ -56,8 +56,10 @@ object AgentPrompt {
      * 6 —— 0.10.1：新增内置浏览器三动作（browser_open / browser_html /
      *      browser_eval）与「三条信息源由模型自己挑」的说明；并把 T42 的权责
      *      写进提示词 —— 端侧只是建议，**最终决定权在云端模型**。
+     * 7 —— 0.11.3：browser_open 只接受 http/https（file/intent/自定义 scheme
+     *      会被拒绝）；browser_eval 默认关闭，需用户在设置里显式开启。
      */
-    const val VERSION = "6"
+    const val VERSION = "7"
 
     /**
      * 系统提示词。
@@ -133,7 +135,7 @@ object AgentPrompt {
 | dismiss_dialog | 让端侧关掉当前弹窗 | 无 |
 | browser_open | 打开**内置浏览器**并加载网址 | url（可省 = 空白页） |
 | browser_html | 读当前网页的 HTML（背后的代码） | selector（可省，省 = 整页）；max_chars |
-| browser_eval | 在网页里执行一段 JS 并拿回结果 | js |
+| browser_eval | 在网页里执行一段 JS 并拿回结果（默认关闭，需用户在设置里开启） | js |
 
 找列表里更靠后的内容用 scroll，不要用 swipe —— scroll 直接滚那个容器，不会滚过头。
 
@@ -198,12 +200,13 @@ App 自带一个 WebView 浏览器，**你能直接读到网页背后的代码**
 | 页面上有哪些可点的东西（默认就有） | 不用动作，每步都发 | 最小 |
 | 页面长什么样（布局、图片、"发送成功"这种视觉结果） | `need_image` 或 `capture` | 一张图 |
 | 页面的真实结构（哪个是搜索框、有没有那条数据） | `browser_html`（尽量给 selector） | 较大，别每步都用 |
-| 精确问页面一个问题（"购物车几件"、滚动到底加载更多） | `browser_eval` | 较小 |
+| 精确问页面一个问题（"购物车几件"、滚动到底加载更多） | `browser_eval`（需用户开启；默认关闭） | 较小 |
 
 规矩：
 - **整页 HTML 只在判断不出来时读一次**，能写 selector 就写。每步都读会打断缓存、烧钱。
 - 三个动作执行完都**立刻把控制权交回你**（它们会改变页面或给你新信息），排在后面的动作本轮不执行。
-- 网址可以不带 https://，系统会补。
+- 网址可以不带 https://，系统会补；但只接受 http/https，file://、content://、
+  intent:// 和自定义 scheme 会被直接拒绝。
 - 浏览器模式下不要用 open_app 去开别的浏览器；要离开网页就 open_app 打开目标应用。
 
 # 端侧只给建议，最终你说了算

@@ -1,5 +1,6 @@
 package com.aiphone.assistant.agent
 
+import com.aiphone.assistant.browser.BrowserUrl
 import com.aiphone.assistant.touch.ScrollDirection
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
@@ -425,6 +426,17 @@ object ActionParser {
             }
         )
 
+        // 打开网页的地址只允许 http/https。file:// / intent:// / 自定义 scheme
+        // 一律在这里拒绝，并给模型一句能看懂的原因（它会换一个地址重试）。
+        val browserUrl = if (kind == TouchKind.BROWSER_OPEN) {
+            BrowserUrl.normalize(url)
+        } else {
+            null
+        }
+        if (browserUrl is BrowserUrl.Result.Rejected) {
+            return "「打开网页」${browserUrl.reason}"
+        }
+
         // ---- 校验：这条动作缺不缺必需参数 ----
         val problem = when (kind) {
             TouchKind.TAP, TouchKind.LONG_PRESS, TouchKind.DOUBLE_TAP ->
@@ -441,8 +453,8 @@ object ActionParser {
             TouchKind.OPEN_APP ->
                 if (pkg.isBlank()) "「打开应用」缺少 package 包名" else null
 
-            // 打开浏览器：网址可以不给（空白页），但给了就必须像个网址 ——
-            // 模型常写 "bilibili.com" 这种没协议头的，这里直接补 https://
+            // 打开浏览器：网址可以不给（空白页）；给了的已经在上面过了
+            // BrowserUrl 白名单（只允许 http/https）
             TouchKind.BROWSER_OPEN -> null
 
             TouchKind.BROWSER_HTML ->
@@ -479,16 +491,7 @@ object ActionParser {
             }
         }
 
-        val normalizedUrl = if (kind == TouchKind.BROWSER_OPEN && url.isNotBlank()) {
-            when {
-                url.startsWith("http://") || url.startsWith("https://") -> url
-                // 只有域名/路径时补 https://（模型几乎总是省掉协议头）
-                url.contains("://") -> url
-                else -> "https://" + url.trimStart('/')
-            }
-        } else {
-            ""
-        }
+        val normalizedUrl = (browserUrl as? BrowserUrl.Result.Ok)?.url.orEmpty()
 
         out.add(
             TouchAction(

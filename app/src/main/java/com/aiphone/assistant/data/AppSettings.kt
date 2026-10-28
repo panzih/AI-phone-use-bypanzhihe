@@ -361,6 +361,17 @@ data class AppSettings(
      */
     val freeLaneNoticeAccepted: Boolean = false,
 
+    /**
+     * 允许向**公网**明文 HTTP 地址发送 API Key。
+     *
+     * **默认关**。关着时，`http://` + 非本机/局域网主机会在 LlmClient 里
+     * 直接失败，而不是"打条日志继续发" —— 日志用户不会看，Key 却已经明文
+     * 过网了。本机 / 局域网（Ollama、LM Studio、vLLM）不受影响。
+     *
+     * 打开后仍会显示警告，并把风险写进运行日志；这是用户明确知情后的选择。
+     */
+    val allowPublicCleartext: Boolean = false,
+
     /** 思考模式。默认「默认」：让服务端自己挑 */
     val thinking: ThinkingMode = ThinkingMode.DEFAULT,
 
@@ -403,6 +414,17 @@ data class AppSettings(
      * 但每个高风险动作仍要过一次**独立的模型二次确认**，结果写进运行日志。
      */
     val allowHighRiskActions: Boolean = false,
+
+    /**
+     * 允许 AI 在网页里执行任意 JavaScript（`browser_eval`）。
+     *
+     * **默认关**。这段脚本由模型生成，能读取页面内容、代替用户点击/提交表单，
+     * 也能绕过 DOM 摘要直接碰页面里的接口。大多数任务用 `browser_html` +
+     * 编号点击就够了；确实需要精确读取/滚动加载时才打开。
+     *
+     * 打开后仍受 [allowHighRiskActions] 闸门约束（browser_eval 本身算高风险）。
+     */
+    val allowBrowserEval: Boolean = false,
 
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,

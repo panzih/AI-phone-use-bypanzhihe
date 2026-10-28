@@ -634,6 +634,7 @@ private fun AppRoot(
                     apiKey = settings.apiKey,
                     model = settings.modelName,
                     useFreeModel = settings.useFreeModel,
+                    allowPublicCleartext = settings.allowPublicCleartext,
                     thinking = settings.thinking,
                     customEffort = settings.customEffort,
                 )
@@ -820,6 +821,7 @@ private fun AppRoot(
                 apiKey = settings.apiKey,
                 model = settings.modelName,
                 useFreeModel = settings.useFreeModel,
+                allowPublicCleartext = settings.allowPublicCleartext,
                 thinking = settings.thinking,
                     customEffort = settings.customEffort,
             )
@@ -1069,6 +1071,7 @@ private fun AppRoot(
                         apiKey = settings.apiKey,
                         model = settings.modelName,
                         useFreeModel = settings.useFreeModel,
+                        allowPublicCleartext = settings.allowPublicCleartext,
                         thinking = settings.thinking,
                     customEffort = settings.customEffort,
                     )

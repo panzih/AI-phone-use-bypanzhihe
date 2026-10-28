@@ -95,6 +95,8 @@
     <string name="settings_tap_review">点击前复核</string>
     <string name="settings_allow_high_risk">允许 AI 执行高风险操作</string>
     <string name="settings_allow_high_risk_desc">默认关闭。关闭时，支付、转账、删除、发送、授权、输入验证码/密码等动作会在执行层被直接拦下；打开后不再逐次让你确认，但每个高风险动作仍要过一次独立的模型二次确认，结果写进运行日志。屏幕和网页内容可能被恶意诱导，非必要不建议打开。</string>
+    <string name="settings_allow_browser_eval">允许 AI 在网页里执行 JavaScript</string>
+    <string name="settings_allow_browser_eval_desc">默认关闭。browser_eval 会运行模型生成的任意脚本，可能读取页面内容、代替你点击或提交表单。大多数任务用「读网页源码」加编号点击就够了；打开后仍受「高风险操作」闸门约束。</string>
     <string name="settings_local_dismiss">端侧提示挡路弹窗</string>
     <string name="settings_local_dismiss_desc">广告、更新提示这类挡路弹窗，端侧会在元素列表里指出「安全关闭按钮是哪个」，关不关由云端模型决定（它可以直接点，也可以让端侧执行）。授权页和支付页端侧一律不碰。</string>
     <string name="settings_vd_mirror">看副屏画面</string>
@@ -137,7 +139,9 @@
     <string name="settings_model_free_notice_decline">暂不开启</string>
     <string name="settings_model_free_pick">选择免费模型</string>
     <string name="settings_model_provider">接口地址</string>
-    <string name="settings_model_public_http_warning">这是公网明文 HTTP 地址：API Key 会以明文经过网络。能换 https:// 就换；换不了就只在放心的网络里用。</string>
+    <string name="settings_model_public_http_warning">这是公网明文 HTTP 地址：API Key 会以明文经过网络。默认会在发送前拦截；确需使用请打开下面的开关。</string>
+    <string name="settings_allow_public_cleartext">允许公网明文 HTTP</string>
+    <string name="settings_allow_public_cleartext_desc">默认关闭。关闭时，公网 http:// 地址会在发送前被直接拒绝（本机和局域网地址不受影响）。打开后 API Key 和对话内容会以明文经过网络，只在你完全信任该网络时使用。</string>
     <string name="settings_model_apikey">API Key</string>
     <string name="settings_model_name">模型</string>
     <string name="settings_model_fetch">获取模型列表</string>
