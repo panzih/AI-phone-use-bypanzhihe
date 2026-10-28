@@ -301,11 +301,11 @@ internal class AgentSession(
     internal var foregroundYielded = false
 
     /**
-     * 这次任务里端侧**主动**关掉弹窗的次数。
+     * 这次任务里端侧**主动发现挡路弹窗并给出建议**的次数。
      *
-     * 只在 [dismissBlockingDialogLocally] 里自增，用来止损：正常任务遇不到
+     * 只在 [localDismissAdvice] 里自增，用来止损：正常任务遇不到
      * 几个弹窗；真碰上"关掉又弹出来"的循环时，靠 [LOCAL_DISMISS_LIMIT] 收手，
-     * 把判断交回模型（那种情况多半该换个做法，而不是继续关）。
+     * 把判断交回模型（那种情况多半该换个做法，而不是继续提醒）。
      */
     internal var localDismissCount = 0
 

@@ -61,7 +61,8 @@ internal suspend fun AgentSession.handleDismissDialog(): String = dismissByLocal
  * 通用关闭词只在稀疏页面才动。端侧**依然不自主推进任务** ——
  * 它只负责把挡路的挪开，做什么仍旧由模型决定。
  *
- * @param source 只用于日志："云端"= 模型要求的，"端侧"= 每步开头主动清场
+ * @param source 只用于日志；目前只有「云端显式下发 dismiss_dialog」这一条路径。
+ *        端侧每步只给建议（[localDismissAdvice]），不会走到这里。
  */
 internal suspend fun AgentSession.dismissByLocalRules(source: String): DismissOutcome {
     OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)

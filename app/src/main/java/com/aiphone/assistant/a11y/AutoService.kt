@@ -132,7 +132,7 @@ class AutoService : AccessibilityService() {
     }.getOrDefault(emptySet())
 
     /**
-     * 跟踪"是否回到桌面"，Agent.interruption() 只读这个内存时间、零额外 binder。
+     * 跟踪"是否回到桌面"，AgentSession.interruption() 只读这个内存时间、零额外 binder。
      *
      * R1：只认 [TYPE_WINDOW_STATE_CHANGED]——其他事件（systemui 状态栏时钟会
      * 周期性发事件、A1 实验统计到 14 个）一律不碰计时，否则在桌面停着也会被

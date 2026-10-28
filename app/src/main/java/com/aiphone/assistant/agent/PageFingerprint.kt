@@ -11,8 +11,8 @@ import java.security.MessageDigest
  * - 坐标统一除以 10 做量化，吸收一两像素的抖动。
  * - 节点按坐标排序，保证同一界面每次算出来都一样。
  *
- * 用来判断“界面是不是已经稳定”（[Agent.awaitStable]），以及动作执行后
- * 验证界面有没有变化（[Agent.verifyAction]）。
+ * 用来判断“界面是不是已经稳定”（[AgentSession.awaitStable]），以及动作执行后
+ * 验证界面有没有变化（[AgentSession.verifyAction]）。
  *
  * 注意：指纹把文字和坐标都算进去了，应用内时钟、秒表、进度条、动画这类
  * 持续变字/位移的界面会让指纹一直变，那种情况靠 awaitStable 的 hardCap
