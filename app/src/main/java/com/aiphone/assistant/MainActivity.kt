@@ -56,6 +56,7 @@ import com.aiphone.assistant.record.MacroLearner
 import com.aiphone.assistant.record.MacroStore
 import com.aiphone.assistant.record.Recorder
 import com.aiphone.assistant.record.RecordingShortcut
+import com.aiphone.assistant.schedule.PendingRunTask
 import com.aiphone.assistant.schedule.ScheduleReceiver
 import com.aiphone.assistant.schedule.Schedule
 import com.aiphone.assistant.schedule.ScheduleStore
@@ -168,16 +169,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun readScheduledIntent(intent: Intent?) {
-        val task = intent?.getStringExtra(EXTRA_RUN_TASK)?.trim().orEmpty()
-        if (task.isBlank()) return
-        val id = intent?.getStringExtra(EXTRA_SCHEDULE_ID)
-        pendingTask.value = task
+        // 任务内容不经过 Intent —— 只认本进程发出的、一次性令牌匹配的交接。
+        // MainActivity 是导出的（桌面启动器要能拉起），如果这里直接读
+        // `run_task`，任何第三方 App 都能伪造一条任务让 AI 执行。
+        val task = PendingRunTask.consume(
+            intent?.getStringExtra(PendingRunTask.EXTRA_HANDOFF_TOKEN)
+        ) ?: return
+        pendingTask.value = task.text
         // 副屏是逐条定时任务的选项；手动输入的任务不会走这里
-        pendingUseVirtualDisplay.value =
-            intent?.getBooleanExtra(EXTRA_SCHEDULE_VIRTUAL_DISPLAY, false) == true
+        pendingUseVirtualDisplay.value = task.useVirtualDisplay
         // 界面已经在用户眼前了，那条提醒就多余了。放在这一层是因为
         // 只有 Activity 拿得到 scheduleId（Compose 那一层只拿到任务文本）
-        id?.let { ScheduleReceiver.cancelNotification(this, it) }
+        task.scheduleId?.let { ScheduleReceiver.cancelNotification(this, it) }
     }
 
     /**
@@ -196,16 +199,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    companion object {
-        /** 定时任务到点时带进来的任务内容 */
-        const val EXTRA_RUN_TASK = "run_task"
-
-        /** 哪条定时任务触发的（用来撤掉它的通知） */
-        const val EXTRA_SCHEDULE_ID = "schedule_id"
-
-        /** 这条定时任务要不要在副屏上跑（见 Schedule.useVirtualDisplay） */
-        const val EXTRA_SCHEDULE_VIRTUAL_DISPLAY = "schedule_virtual_display"
-    }
+    // 定时任务的交接常量在 PendingRunTask / ScheduleReceiver 里。
+    // MainActivity 不再从 Intent 读取任务内容 —— 见 readScheduledIntent()。
 
     private fun appVersion(): String = runCatching {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
