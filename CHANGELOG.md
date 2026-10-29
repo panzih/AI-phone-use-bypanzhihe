@@ -1,5 +1,53 @@
 # 更新日志
 
+## 0.12.0
+
+> **2026-10-27 整改清单第 1–12 项落地。** 这一版几乎没有新功能，
+> 改的是"出错的时候会不会更糟"：默认值收紧、状态不再挂在 Activity 上、
+> 落盘不再怕断电、网页与明文 HTTP 的攻击面收窄。
+> 正式发布签名链与发布工程化（原清单第 1、15 项）仍暂缓，没有更换 release keystore。
+
+### 结构调整
+
+- `Agent` 不再是一个什么都知道的上帝类，拆成 `AgentSession` / `AgentStepObserver` /
+  `AgentModelExchange` / `AgentActionExecutor` / `AgentRuntime`，外加 `ChannelMigration` /
+  `AutoSwitchWatcher` / `ActivityProbe`。`Agent` 只留门面，调用方不用改。
+  主循环的权责边界见 `docs/architecture/agent-loop.md`。
+
+### 安全默认值
+
+- **免费通道默认关闭**：新装默认走自定义 Key；第一次打开免费通道会弹一次风险说明，
+  拒绝就切回自定义。老用户升级后首次启动会补一次告知，不会悄悄沿用。
+- **高风险动作默认拦截**：设置里显式打开「允许 AI 执行高风险操作」后，
+  每个高风险动作仍要过一次独立的模型二次确认；请求失败或输出无法解析一律拒绝（fail closed）。
+- **自动检查更新默认关闭**：关于页明确披露，打开后检查更新会发送 IP、User-Agent、
+  Android ID、包名和版本号。
+- **网页攻击面收窄**：`browser_open` 只放行 http/https（`file://`、`intent://`、自定义 scheme 拒绝）；
+  `browser_eval` 默认关闭，需显式开启；WebView 移除 `addJavascriptInterface`，JS 回传改走
+  `evaluateJavascript` 的 `ValueCallback`。
+- **公网明文 HTTP 默认拒绝**：平台层仍保留 cleartext（WebView 与局域网模型要用），
+  但应用层不再允许向公网地址发明文 API 请求；本机/局域网不受影响。
+
+### 可靠性
+
+- **定时任务不再经过 Activity 注入**：统一走非导出的 `ScheduleReceiver`，
+  任务用进程内 `PendingRunTask` + 一次性随机令牌交接；通知点击改用
+  `PendingIntent.getActivity` 打开 `MainActivity`，外部无法伪造任务入口。
+- **任务状态迁到应用级 `TaskHost`**：Activity 重建、旋转屏幕不再打断任务；
+  进程被杀时用 `task_in_flight.txt` 在下次启动明确报告"上次任务失败"，而不是假装还在跑。
+- **上下文落盘可恢复**：`ContextStore` 改为临时文件 + fsync + 原子替换，并保留 `.bak` 回退；
+  记忆文件加上限、去重与自动压缩，设置里另给手动压缩/清空入口。
+- **上下文预算按模型真实窗口算**：`warn` / `stop` 不再用写死的阈值，
+  按模型真实上下文窗口扣掉 `maxOutput` 与 5% 安全垫；免费池读 `FreeModelCatalog`，
+  自定义模型按名称保守推断。
+
+### 测试与文档
+
+- 新增 3 条 `androidTest` 设备冒烟测试（无障碍服务、悬浮窗前台服务、日志导出）；
+  CI 增加 `lintDebug` 与 `assembleDebug` 门禁，不只跑单测。
+- 修正一批漂移注释；README / ROADMAP 同步新的默认值；
+  新增 `docs/architecture/agent-loop.md` 说明拆解后的主循环。
+
 ## 0.11.2
 
 > **免费通道第二次修复**：0.11.1 那版是照上游插件的**文档**写的，写错了。

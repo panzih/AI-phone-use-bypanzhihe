@@ -56,7 +56,7 @@ object AgentPrompt {
      * 6 —— 0.10.1：新增内置浏览器三动作（browser_open / browser_html /
      *      browser_eval）与「三条信息源由模型自己挑」的说明；并把 T42 的权责
      *      写进提示词 —— 端侧只是建议，**最终决定权在云端模型**。
-     * 7 —— 0.11.2 之后（未发布）：browser_open 只接受 http/https（file/intent/自定义 scheme
+     * 7 —— 0.12.0：browser_open 只接受 http/https（file/intent/自定义 scheme
      *      会被拒绝）；browser_eval 默认关闭，需用户在设置里显式开启。
      */
     const val VERSION = "7"
