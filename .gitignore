@@ -99,6 +99,11 @@ local.properties
 *.zip
 *.tar.gz
 
+# ---------- 发布包：只留本机，不上传 ----------
+# release/ 里是打好的安装包、更新说明和校验记录，属于本地发布物料。
+# 仓库只放源码；需要发布包时在本地构建，或由维护者另行分发。
+release/
+
 # 宣传片：成片两个 mp4 各 55MB（GitHub 单文件上限 100MB，但两个一起 111MB 没必要）；
 # raw/ 是录制原素材。脚本（render/audio/mux.swift）、README、封面图可入库。
 # 物料都在本机 docs/promo/，要发布时从本机取。

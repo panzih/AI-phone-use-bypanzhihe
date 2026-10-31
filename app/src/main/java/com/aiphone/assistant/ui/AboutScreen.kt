@@ -1,6 +1,9 @@
 package com.aiphone.assistant.ui
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,11 +18,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -32,6 +44,7 @@ import com.aiphone.assistant.ui.design.ButtonVariant
 import com.aiphone.assistant.ui.design.GroupCard
 import com.aiphone.assistant.ui.design.GroupDivider
 import com.aiphone.assistant.ui.design.HintText
+import com.aiphone.assistant.ui.design.Radius
 import com.aiphone.assistant.ui.design.SectionTitle
 import com.aiphone.assistant.ui.design.SettingRow
 import com.aiphone.assistant.ui.design.Space
@@ -42,10 +55,10 @@ import com.aiphone.assistant.ui.design.Tone
 /**
  * 关于页。
  *
- * 三段：品牌（我是谁、什么版本）→ 更新（唯一的"做事"区）→ 开源许可（法律事实）。
+ * 三段：品牌（我是谁、什么版本）→ 更新（唯一的「做事」区）→ 隐私与许可。
  *
- * 品牌区做成**居中**的，这是全应用唯一居中排版的页面 —— 它没有任务，
- * 只有陈述，居中读起来像"名片"而不是"表单"。
+ * 品牌区做成一张**带渐变的卡片**，是全应用唯一有"海报感"的地方 ——
+ * 它没有任务，只有陈述，读起来像名片而不是表单。
  */
 @Composable
 fun AboutScreen(
@@ -57,8 +70,11 @@ fun AboutScreen(
     onCheckUpdate: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val uriHandler = LocalUriHandler.current
+
     AppScaffold(
         title = stringResource(R.string.about_title),
+        subtitle = "版本、更新与开源许可",
         onBack = onBack,
         backLabel = stringResource(R.string.settings_back),
     ) { inner ->
@@ -69,9 +85,14 @@ fun AboutScreen(
                 .windowInsetsPadding(WindowInsets.navigationBars),
             contentPadding = PaddingValues(bottom = Space.huge),
         ) {
-            item { AppHeader(appVersion) }
+            item {
+                BrandCard(
+                    appVersion = appVersion,
+                    modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.md),
+                )
+            }
 
-            item { SectionTitle("更新") }
+            item { SectionTitle(text = "更新", icon = Icons.Filled.Download) }
             item {
                 GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
                     SettingRow(
@@ -97,7 +118,7 @@ fun AboutScreen(
                 }
             }
 
-            item { SectionTitle("隐私说明") }
+            item { SectionTitle(text = "隐私说明", icon = Icons.Filled.Lock) }
             item {
                 HintText(
                     text = "纸盒没有广告或分析 SDK。下面是你需要知道的联网与本地数据行为：",
@@ -123,7 +144,27 @@ fun AboutScreen(
                 }
             }
 
-            item { SectionTitle(stringResource(R.string.about_licenses_title)) }
+            item { SectionTitle(text = "作者与仓库", icon = Icons.Filled.Star) }
+            item {
+                GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
+                    InfoRow(stringResource(R.string.settings_about_author), AppInfo.AUTHOR)
+                    GroupDivider()
+                    InfoRow(stringResource(R.string.settings_about_license), AppInfo.LICENSE)
+                    if (AppInfo.REPO_URL.isNotBlank()) {
+                        GroupDivider()
+                        SettingRow(
+                            title = stringResource(R.string.settings_about_repo),
+                            subtitle = AppInfo.REPO_URL,
+                            showChevron = true,
+                            onClick = {
+                                runCatching { uriHandler.openUri(AppInfo.REPO_URL) }
+                            },
+                        )
+                    }
+                }
+            }
+
+            item { SectionTitle(text = stringResource(R.string.about_licenses_title)) }
             item {
                 HintText(
                     text = stringResource(R.string.about_licenses_intro),
@@ -159,22 +200,39 @@ fun AboutScreen(
 /**
  * 品牌头。
  *
- * 版本号做成胶囊挂在名字右边，而不是单独一行"版本：0.10.8" ——
+ * 版本号做成胶囊挂在名字右边，而不是单独一行「版本：0.12.1」 ——
  * 它是**属性**不是**信息**，跟着名字走才不会占掉一整行。
  */
 @Composable
-private fun AppHeader(appVersion: String) {
+private fun BrandCard(appVersion: String, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(Radius.lg)
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = Space.lg, vertical = Space.xxl),
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.primaryContainer,
+                        MaterialTheme.colorScheme.surface,
+                    )
+                ),
+                shape,
+            )
+            .padding(horizontal = Space.xl, vertical = Space.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Image(
-            painter = painterResource(R.drawable.ic_box_logo),
-            contentDescription = null,
-            modifier = Modifier.size(56.dp),
-        )
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .background(MaterialTheme.colorScheme.surface, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(R.drawable.ic_box_logo),
+                contentDescription = null,
+                modifier = Modifier.size(52.dp),
+            )
+        }
         Spacer(Modifier.height(Space.md))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -197,21 +255,9 @@ private fun AppHeader(appVersion: String) {
             textAlign = TextAlign.Center,
         )
     }
-
-    Column(modifier = Modifier.padding(horizontal = Space.lg)) {
-        GroupCard {
-            InfoRow(stringResource(R.string.settings_about_author), AppInfo.AUTHOR)
-            GroupDivider()
-            InfoRow(stringResource(R.string.settings_about_license), AppInfo.LICENSE)
-            if (AppInfo.REPO_URL.isNotBlank()) {
-                GroupDivider()
-                InfoRow(stringResource(R.string.settings_about_repo), AppInfo.REPO_URL)
-            }
-        }
-    }
 }
 
-/** 一行"标签 → 值"。标签定宽 76dp，值可以长（仓库地址那种） */
+/** 一行「标签 → 值」。标签定宽 76dp，值可以长（仓库地址那种） */
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(

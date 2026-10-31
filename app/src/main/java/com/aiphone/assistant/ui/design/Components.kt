@@ -28,31 +28,31 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,16 +75,19 @@ import androidx.compose.ui.unit.dp
 /**
  * 每个二级页共用的骨架。
  *
- * 统一了四件以前各页各写一遍的事：顶栏样式、状态栏/刘海内边距、
- * 画布底色、Snackbar 宿主。少一处不一致，就少一个"这页看着怪怪的"。
+ * 统一了五件以前各页各写一遍的事：顶栏、状态栏/刘海内边距、
+ * 画布底色、Snackbar 宿主、大标题排版。
+ *
+ * 标题不再挤在 56dp 的 AppBar 里，而是单独占一行大字号 ——
+ * 页面一打开先看到"这是什么页"，而不是一行被压缩的小标题。
  *
  * @param onBack null 表示没有返回键（主界面用抽屉，不走这个骨架）
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppScaffold(
     title: String,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
     onBack: (() -> Unit)? = null,
     backLabel: String = "返回",
     actions: @Composable RowScope.() -> Unit = {},
@@ -98,36 +101,60 @@ fun AppScaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { snackbarHostState?.let { SnackbarHost(it) } },
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .windowInsetsPadding(
+                        WindowInsets.displayCutout.union(WindowInsets.statusBars)
                     )
-                },
-                navigationIcon = {
+                    .padding(horizontal = Space.lg),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = backLabel,
-                                tint = MaterialTheme.colorScheme.onSurface,
-                            )
+                        Surface(
+                            onClick = onBack,
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = backLabel,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(Size.iconMd),
+                                )
+                            }
                         }
                     }
-                },
-                actions = actions,
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-                modifier = Modifier.windowInsetsPadding(
-                    WindowInsets.displayCutout.union(WindowInsets.statusBars)
-                ),
-            )
+                    Spacer(Modifier.weight(1f))
+                    Row(verticalAlignment = Alignment.CenterVertically, content = actions)
+                }
+                if (title.isNotBlank()) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = Space.xs),
+                    )
+                }
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = Space.xs),
+                    )
+                }
+                Spacer(Modifier.height(Space.md))
+            }
         },
         bottomBar = bottomBar,
         content = content,
@@ -141,23 +168,39 @@ fun AppScaffold(
 /**
  * 分组小标题。
  *
- * 用主色的 14sp Medium，而不是全大写灰字 —— 中文没有大小写，
- * 靠"颜色+字重"而不是"字形变化"来和正文拉开。上方留 24dp 是刻意的：
+ * 可选的图标 + 主色小字，上方留 28dp、下方留 10dp：
  * 标题离上一组远、离自己这组近，分组关系才看得出来。
  */
 @Composable
-fun SectionTitle(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(
-            start = Space.lg,
-            end = Space.lg,
-            top = Space.xxl,
-            bottom = Space.sm,
-        ),
-    )
+fun SectionTitle(
+    text: String,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = Space.lg, end = Space.lg, top = Space.xxl, bottom = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(Size.iconSm),
+            )
+            Spacer(Modifier.width(Space.sm))
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
+        if (trailing != null) trailing()
+    }
 }
 
 /** 分组说明（跟在 [SectionTitle] 下面的一句灰字） */
@@ -178,11 +221,8 @@ fun SectionNote(text: String, modifier: Modifier = Modifier) {
 /**
  * 把若干行收进一张卡里。
  *
- * 卡片 = 一个"这些行属于同一件事"的视觉承诺。之前所有行都直接摊在画布上，
- * 用户只能靠分割线猜哪几行是一组。
- *
- * 内边距只加垂直方向：水平留白由行自己控制，这样行的点击热区能通到卡片边缘
- * （贴着卡片边点也算点到，而不是点到"卡片的空白"）。
+ * 卡片 = 一个"这些行属于同一件事"的视觉承诺。内边距只加垂直方向：
+ * 水平留白由行自己控制，这样行的点击热区能通到卡片边缘。
  */
 @Composable
 fun GroupCard(
@@ -203,7 +243,7 @@ fun GroupCard(
 
 /** 卡片内部的分隔线，左边缩进，和文字起点对齐 */
 @Composable
-fun GroupDivider(modifier: Modifier = Modifier, indent: Int = 16) {
+fun GroupDivider(modifier: Modifier = Modifier, indent: Int = 20) {
     HorizontalDivider(
         modifier = modifier.padding(start = indent.dp, end = Space.lg),
         color = MaterialTheme.colorScheme.outlineVariant,
@@ -217,10 +257,7 @@ fun GroupDivider(modifier: Modifier = Modifier, indent: Int = 16) {
 /**
  * 可点区域的三态背景。
  *
- * Android 手机上没有鼠标，但平板接键盘、DeX、以及"鼠标模式"下都真的有
- * 悬停和键盘焦点 —— 之前一律不管，表现为"鼠标划过去毫无反应，不知道哪块能点"。
- *
- * 三档透明度是刻意的：按下最重（0.08）、悬停/聚焦次之（0.04）、其余透明。
+ * 按下最重（0.08）、悬停/聚焦次之（0.04）、其余透明。
  * 用 onSurface 加透明度而不是另一个灰，深浅色主题下都不用换色。
  */
 @Composable
@@ -265,10 +302,9 @@ fun Modifier.interactiveSurface(
 /**
  * 通用设置行 —— 全应用所有"一行文字 + 右边一个东西"都由它长出来。
  *
- * @param subtitle 次要说明，可为空。有它的时候行会变高，这是对的：
- *                 两行信息本来就该占两行的高度。
- * @param onClick  null 表示这一行不可点（只显示），此时不加悬停/按下反馈 ——
- *                 不可点的东西给出可点的反馈，等于骗人去点。
+ * @param subtitle 次要说明，可为空。有它的时候行会变高。
+ * @param onClick  null 表示这一行不可点（只显示），此时不加悬停/按下反馈。
+ * @param showChevron 右侧补一个箭头，表示"点了会去别处"。
  */
 @Composable
 fun SettingRow(
@@ -280,6 +316,7 @@ fun SettingRow(
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     trailingGap: androidx.compose.ui.unit.Dp = Space.md,
+    showChevron: Boolean = false,
 ) {
     val titleColor = if (enabled) MaterialTheme.colorScheme.onSurface
     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -290,7 +327,11 @@ fun SettingRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = Size.rowMinHeight)
-            .interactiveSurface(enabled = enabled && onClick != null, shape = RoundedCornerShape(Radius.sm), onClick = onClick)
+            .interactiveSurface(
+                enabled = enabled && onClick != null,
+                shape = RoundedCornerShape(Radius.md),
+                onClick = onClick,
+            )
             .padding(horizontal = Space.lg, vertical = Space.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -305,7 +346,7 @@ fun SettingRow(
                 color = titleColor,
             )
             if (!subtitle.isNullOrBlank()) {
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(Space.xxs))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
@@ -316,6 +357,15 @@ fun SettingRow(
         if (trailing != null) {
             Spacer(Modifier.width(trailingGap))
             trailing()
+        }
+        if (showChevron) {
+            Spacer(Modifier.width(Space.xs))
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                modifier = Modifier.size(Size.iconMd),
+            )
         }
     }
 }
@@ -329,12 +379,14 @@ fun SwitchRow(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     enabled: Boolean = true,
+    leading: (@Composable () -> Unit)? = null,
 ) {
     SettingRow(
         title = title,
         subtitle = subtitle,
         enabled = enabled,
         modifier = modifier,
+        leading = leading,
         onClick = { onCheckedChange(!checked) },
         trailing = {
             Switch(
@@ -354,6 +406,8 @@ fun ActionRow(
     subtitle: String? = null,
     enabled: Boolean = true,
     destructive: Boolean = false,
+    leading: (@Composable () -> Unit)? = null,
+    showChevron: Boolean = false,
     onClick: () -> Unit,
 ) {
     val color = when {
@@ -365,20 +419,37 @@ fun ActionRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = Size.rowMinHeight)
-            .interactiveSurface(enabled = enabled, shape = RoundedCornerShape(Radius.sm), onClick = onClick)
+            .interactiveSurface(
+                enabled = enabled,
+                shape = RoundedCornerShape(Radius.md),
+                onClick = onClick,
+            )
             .padding(horizontal = Space.lg, vertical = Space.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (leading != null) {
+            leading()
+            Spacer(Modifier.width(Space.md))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(text = title, style = MaterialTheme.typography.bodyLarge, color = color)
             if (!subtitle.isNullOrBlank()) {
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(Space.xxs))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        if (showChevron) {
+            Spacer(Modifier.width(Space.sm))
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                modifier = Modifier.size(Size.iconMd),
+            )
         }
     }
 }
@@ -388,7 +459,6 @@ fun ActionRow(
  *
  * 用最朴素的 [DropdownMenu] 而不是 ExposedDropdownMenuBox —— 后者的
  * menuAnchor 签名在几个版本之间改过，而这个场景只需要"点一下弹列表"。
- * 不可用项灰显且点不动，理由见 PermissionsScreen 的注释。
  */
 @Composable
 fun <T> DropdownRow(
@@ -415,21 +485,22 @@ fun <T> DropdownRow(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .interactiveSurface(enabled = enabled, shape = RoundedCornerShape(Radius.sm))
-                        .padding(horizontal = Space.sm, vertical = Space.xs),
+                        .clip(RoundedCornerShape(Radius.pill))
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = Space.md, vertical = Space.xs),
                 ) {
                     Text(
                         text = optionLabel(current),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Spacer(Modifier.width(2.dp))
+                    Spacer(Modifier.width(Space.xxs))
                     Icon(
                         imageVector = Icons.Filled.ArrowDropDown,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(Size.iconMd),
                     )
                 }
@@ -466,6 +537,65 @@ fun <T> DropdownRow(
 }
 
 // ======================================================================
+// 分段控件
+// ======================================================================
+
+/**
+ * 同一件事的多个取值。
+ *
+ * 选中项用卡片色浮起来，而不是变蓝 —— 它读起来是"当前这个"，
+ * 而不是"推荐你点这个"。
+ */
+@Composable
+fun <T> SegmentedControl(
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.md))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(Space.xs),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        options.forEach { option ->
+            val isSelected = option == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.surface
+                        else Color.Transparent
+                    )
+                    .interactiveSurface(
+                        enabled = enabled,
+                        shape = RoundedCornerShape(Radius.sm),
+                        onClick = { if (!isSelected) onSelect(option) },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label(option),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = when {
+                        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        isSelected -> MaterialTheme.colorScheme.onSurface
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        }
+    }
+}
+
+// ======================================================================
 // 按钮
 // ======================================================================
 
@@ -481,8 +611,7 @@ enum class ButtonVariant { Primary, Secondary, Ghost, Danger }
  *   Ghost      行内的小动作、对话框里的"取消"
  *   Danger     不可撤销的破坏性动作
  *
- * [loading] 与 [enabled] 是两件事：加载中不改变视觉层级（还是那个主按钮），
- * 只是换成转圈并把内容替换掉 —— 用户看到的应该是"它正在做"，而不是"它变灰了"。
+ * [loading] 与 [enabled] 是两件事：加载中不改变视觉层级，只是换成转圈。
  */
 @Composable
 fun AppButton(
@@ -562,7 +691,7 @@ fun AppButton(
             shape = shape,
             contentPadding = contentPadding,
             modifier = modifier.heightIn(min = Size.buttonHeight),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = MaterialTheme.colorScheme.error,
                 disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
@@ -579,9 +708,8 @@ fun AppButton(
 /**
  * 统一输入框。
  *
- * 只做三件事：固定圆角、固定错误呈现方式、固定"标签常驻"。
- * 标签常驻很重要 —— 用 placeholder 当标签的话，用户一开始打字标签就没了，
- * 打到一半忘了这一栏要填什么。
+ * 固定圆角、固定错误呈现方式、固定"标签常驻"。
+ * 标签常驻很重要 —— 用 placeholder 当标签的话，用户一开始打字标签就没了。
  */
 @Composable
 fun AppTextField(
@@ -610,13 +738,13 @@ fun AppTextField(
         shape = RoundedCornerShape(Radius.md),
         textStyle = MaterialTheme.typography.bodyLarge,
         // 容器色必须显式给：OutlinedTextField 靠它把边框在标签位置"挖"出一个缺口。
-        // 留透明的话边框线会从浮起来的标签中间穿过去，字看着像被划掉了。
-        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.background,
-            unfocusedContainerColor = MaterialTheme.colorScheme.background,
-            disabledContainerColor = MaterialTheme.colorScheme.background,
+        // 留透明的话边框线会从浮起来的标签中间穿过去。
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surface,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+            disabledContainerColor = MaterialTheme.colorScheme.surface,
         ),
-        label = label?.let { { Text(it, style = MaterialTheme.typography.bodyMedium) } },
+        label = label?.let { { Text(it, style = MaterialTheme.typography.bodySmall) } },
         placeholder = placeholder?.let { {
             Text(it, style = MaterialTheme.typography.bodyMedium)
         } },
@@ -645,33 +773,57 @@ fun EmptyState(
     action: (@Composable () -> Unit)? = null,
 ) {
     Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = Space.xxl, vertical = Space.xxl),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.xxl, vertical = Space.huge),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                modifier = Modifier.size(28.dp),
-            )
-            Spacer(Modifier.height(Space.md))
+            IconBadge(icon = icon, size = 64.dp)
+            Spacer(Modifier.height(Space.lg))
         }
         Text(
             text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
         Spacer(Modifier.height(Space.xs))
         Text(
             text = body,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
         if (action != null) {
             Spacer(Modifier.height(Space.lg))
             action()
         }
+    }
+}
+
+/** 圆形图标底：给行、空状态、权限页一个统一的"图标位" */
+@Composable
+fun IconBadge(
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+    tone: Tone = Tone.Neutral,
+    size: androidx.compose.ui.unit.Dp = Size.badge,
+) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(tone.container())
+            .border(1.dp, tone.color().copy(alpha = 0.12f), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tone.color(),
+            modifier = Modifier.size(if (size >= 56.dp) Size.iconLg else Size.iconMd),
+        )
     }
 }

@@ -1,7 +1,7 @@
 # Agent 主循环
 
 > 对应代码：`app/src/main/java/com/aiphone/assistant/agent/`
-> 最后更新：2026-10-29 / 0.12.0
+> 最后更新：2026-10-31 / 0.12.1
 
 这篇文档只讲**一次任务从开始到收尾**在代码里怎么流动，以及每一步的权责边界。
 提示词协议、动作字段、坐标换算不在这里展开，见 `AgentPrompt` / `ActionParser` 的注释。

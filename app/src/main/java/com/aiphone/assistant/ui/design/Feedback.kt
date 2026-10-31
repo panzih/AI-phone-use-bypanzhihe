@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -37,8 +39,9 @@ import androidx.compose.ui.unit.dp
 
 enum class Tone { Neutral, Positive, Warning, Negative, Info }
 
+/** 语义色的前景色。供 [IconBadge] 等组件复用。 */
 @Composable
-private fun toneColor(tone: Tone): Color = when (tone) {
+internal fun Tone.color(): Color = when (this) {
     Tone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
     Tone.Positive -> AppTheme.accents.success
     Tone.Warning -> AppTheme.accents.warning
@@ -46,8 +49,9 @@ private fun toneColor(tone: Tone): Color = when (tone) {
     Tone.Info -> AppTheme.accents.info
 }
 
+/** 语义色的容器底色。 */
 @Composable
-private fun toneContainer(tone: Tone): Color = when (tone) {
+internal fun Tone.container(): Color = when (this) {
     Tone.Neutral -> AppTheme.accents.sunken
     Tone.Positive -> AppTheme.accents.successContainer
     Tone.Warning -> AppTheme.accents.warningContainer
@@ -56,7 +60,7 @@ private fun toneContainer(tone: Tone): Color = when (tone) {
 }
 
 @Composable
-private fun toneOnContainer(tone: Tone): Color = when (tone) {
+private fun Tone.onContainer(): Color = when (this) {
     Tone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
     Tone.Positive -> AppTheme.accents.onSuccessContainer
     Tone.Warning -> AppTheme.accents.onWarningContainer
@@ -70,6 +74,8 @@ private fun toneOnContainer(tone: Tone): Color = when (tone) {
  * 三个使用场景都是"不做就会出事"的信息：公网明文 HTTP、开发者危险区、
  * 到点不一定能跑。这类信息不能只做成一句灰字（会被扫过去），也不能弹窗
  * （会打断），所以做成**贴在内容旁边、一直看得到**的一条。
+ *
+ * 左边那条 3dp 的竖线是这一版加的：一眼能看出"这是提示，不是正文"。
  */
 @Composable
 fun Banner(
@@ -83,28 +89,40 @@ fun Banner(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(toneContainer(tone), shape)
-            .padding(horizontal = Space.md, vertical = Space.md),
-        verticalAlignment = Alignment.Top,
+            .height(IntrinsicSize.Min)
+            .background(tone.container(), shape),
     ) {
-        if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = toneColor(tone),
-                modifier = Modifier.padding(top = 1.dp).size(Size.iconSm),
-            )
-            Spacer(Modifier.width(Space.sm))
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodySmall,
-                color = toneOnContainer(tone),
-            )
-            if (action != null) {
-                Spacer(Modifier.height(Space.xs))
-                action()
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(tone.color(), shape),
+        )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = Space.md, vertical = Space.md),
+            verticalAlignment = Alignment.Top,
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = tone.color(),
+                    modifier = Modifier.padding(top = 1.dp).size(Size.iconSm),
+                )
+                Spacer(Modifier.width(Space.sm))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tone.onContainer(),
+                )
+                if (action != null) {
+                    Spacer(Modifier.height(Space.xs))
+                    action()
+                }
             }
         }
     }
@@ -114,7 +132,7 @@ fun Banner(
  * 状态胶囊 —— 权限"已授权"、模型"免费通道"、任务"运行中"这类极短状态。
  *
  * 用词固定成三档（已开启 / 待授权 / 不可用），不允许各页自己写"已完成"
- * "已开启""已获得"—— 同一个状态有两种说法，用户会以为是两件事。
+ * "已获得"—— 同一个状态有两种说法，用户会以为是两件事。
  */
 @Composable
 fun StatusPill(
@@ -125,7 +143,7 @@ fun StatusPill(
 ) {
     Row(
         modifier = modifier
-            .background(toneContainer(tone), RoundedCornerShape(Radius.pill))
+            .background(tone.container(), RoundedCornerShape(Radius.pill))
             .padding(horizontal = Space.sm, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -133,44 +151,14 @@ fun StatusPill(
             Box(
                 modifier = Modifier
                     .size(6.dp)
-                    .background(toneColor(tone), CircleShape)
+                    .background(tone.color(), CircleShape)
             )
             Spacer(Modifier.width(5.dp))
         }
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
-            color = toneOnContainer(tone),
-        )
-    }
-}
-
-// ======================================================================
-// 加载 / 进度
-// ======================================================================
-
-/**
- * 行内加载。
- *
- * 尺寸和文字基线对齐（14dp 圈 + 12.5sp 字），出现在哪一行都不顶行高。
- * [text] 必须说"在做什么"（"正在打包日志…"），只转圈不说话等于没交代。
- */
-@Composable
-fun LoadingRow(text: String, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(14.dp),
-            strokeWidth = 2.dp,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.width(Space.sm))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = tone.onContainer(),
         )
     }
 }
@@ -203,6 +191,70 @@ fun StatBlock(
     }
 }
 
+/**
+ * 一格统计：上面是标签、下面是值。
+ *
+ * 用在设置页 / 权限页顶部，让用户先看到"现在是什么状态"，
+ * 再决定要不要往下翻。
+ */
+@Composable
+fun StatTile(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    tone: Tone = Tone.Neutral,
+) {
+    Column(
+        modifier = modifier
+            .background(tone.container(), RoundedCornerShape(Radius.md))
+            .padding(horizontal = Space.md, vertical = Space.sm),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = tone.onContainer().copy(alpha = 0.72f),
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            color = tone.onContainer(),
+            maxLines = 1,
+        )
+    }
+}
+
+// ======================================================================
+// 加载 / 进度
+// ======================================================================
+
+/**
+ * 行内加载。
+ *
+ * 尺寸和文字基线对齐，出现在哪一行都不顶行高。
+ * [text] 必须说"在做什么"，只转圈不说话等于没交代。
+ */
+@Composable
+fun LoadingRow(text: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(Space.sm))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 // ======================================================================
 // 滑块
 // ======================================================================
@@ -210,11 +262,8 @@ fun StatBlock(
 /**
  * 带标题和说明的滑块 —— 设置页里 5 个滑块共用一个实现。
  *
- * 之前每个滑块各写一遍"标题 + 当前值 + 说明"，字号和间距各不相同；
- * 现在标题固定左、当前值固定右（主色），说明固定一行灰字。
- *
- * 说明文字（[note]）和接口事实（[fact]）分开：
- * 前者是"人话"，后者是"这一档到底发什么参数"，两者都不是可选装饰。
+ * 标题固定左、当前值固定右（主色胶囊），说明固定一行灰字。
+ * [note] 是"人话"，[fact] 是"这一档到底发什么参数"，两者都不是可选装饰。
  */
 @Composable
 fun SliderSetting(
@@ -241,8 +290,14 @@ fun SliderSetting(
             Spacer(Modifier.width(Space.sm))
             Text(
                 text = valueLabel,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier
+                    .background(
+                        MaterialTheme.colorScheme.primaryContainer,
+                        RoundedCornerShape(Radius.pill),
+                    )
+                    .padding(horizontal = Space.md, vertical = 3.dp),
             )
         }
 
@@ -269,7 +324,7 @@ fun SliderSetting(
             )
         }
         if (!fact.isNullOrBlank()) {
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(Space.xxs))
             Text(
                 text = fact,
                 style = MaterialTheme.typography.bodySmall,
@@ -287,7 +342,7 @@ fun SliderSetting(
 /**
  * 统一对话框。
  *
- * 三件事固定下来了：圆角 16、标题 16sp Medium、按钮用 Ghost 变体放在右下。
+ * 三件事固定下来了：圆角 28、标题 20sp Medium、按钮用 Ghost 变体放在右下。
  * 危险操作（清空、删除）的确认键用红色 —— 只靠文案说"不可撤销"不够，
  * 颜色是最后一道防线。
  */
@@ -309,11 +364,11 @@ fun AppAlertDialog(
         onDismissRequest = onDismiss,
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(Radius.lg),
+        shape = RoundedCornerShape(Radius.xl),
         title = {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         },

@@ -35,12 +35,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.ui.design.AppButton
 import com.aiphone.assistant.ui.design.AppScaffold
 import com.aiphone.assistant.ui.design.AppTextField
+import com.aiphone.assistant.ui.design.AppTheme
 import com.aiphone.assistant.ui.design.ButtonVariant
 import com.aiphone.assistant.ui.design.EmptyState
 import com.aiphone.assistant.ui.design.GroupCard
@@ -68,13 +70,8 @@ import com.aiphone.assistant.ui.design.Tone
  *   2. 检查   看看录到了什么（这一步是给用户纠错的机会）
  *   3. 学习   交给 AI 起名、写说明、去掉多余的步骤，存成技能
  *
- * 页面刻意保持线性：一次只做一件事，不需要用户在几个入口之间找。
- *
- * ## 视觉上怎么表达"线性"
- *
- * 每个步骤前面有一个**带序号的圆**（1 / 2 / 3），序号的底色跟着状态变：
- * 灰 = 还没到，主色 = 当前这一步，绿 = 已完成。这样用户不读标题也知道
- * 自己走到了哪儿 —— 原来三段之间只靠一条分割线，读起来是三块平行的内容。
+ * 每个步骤前面有一个**带序号的圆**，底色跟着状态变：
+ * 灰 = 还没到，主色 = 当前这一步，绿 = 已完成。
  */
 @Composable
 fun RecordingScreen(
@@ -105,6 +102,7 @@ fun RecordingScreen(
 
     AppScaffold(
         title = stringResource(R.string.recording_title),
+        subtitle = "录一遍，让 AI 学会这套操作",
         onBack = onBack,
         backLabel = stringResource(R.string.settings_back),
         snackbarHostState = snackbar,
@@ -175,7 +173,13 @@ fun RecordingScreen(
 
             // ---------- 2. 录到了什么 ----------
             if (hasSteps) {
-                item { StepTitle(2, stringResource(R.string.recording_steps_title, state.recordedSteps.size), step2State) }
+                item {
+                    StepTitle(
+                        number = 2,
+                        title = stringResource(R.string.recording_steps_title, state.recordedSteps.size),
+                        state = step2State,
+                    )
+                }
                 item {
                     GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
                         Column(modifier = Modifier.padding(Space.lg)) {
@@ -185,10 +189,10 @@ fun RecordingScreen(
                                     verticalAlignment = Alignment.Top,
                                 ) {
                                     Text(
-                                        text = "${i + 1}",
-                                        style = MaterialTheme.typography.bodySmall,
+                                        text = "%02d".format(i + 1),
+                                        style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.width(22.dp),
+                                        modifier = Modifier.width(28.dp),
                                     )
                                     Text(
                                         text = label,
@@ -223,7 +227,13 @@ fun RecordingScreen(
             }
 
             // ---------- 3. 已经学会的技能 ----------
-            item { StepTitle(3, stringResource(R.string.recording_macros_title), step3State) }
+            item {
+                StepTitle(
+                    number = 3,
+                    title = stringResource(R.string.recording_macros_title),
+                    state = step3State,
+                )
+            }
             item {
                 GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
                     if (state.macros.isEmpty()) {
@@ -243,7 +253,7 @@ fun RecordingScreen(
                                         Icon(
                                             imageVector = Icons.Filled.Delete,
                                             contentDescription = stringResource(R.string.recording_macro_delete),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                                             modifier = Modifier.size(Size.iconMd),
                                         )
                                     }
@@ -262,27 +272,27 @@ private enum class StepState { Pending, Current, Done }
 /**
  * 步骤标题：序号圆 + 标题。
  *
- * 圆 20dp、序号 11sp —— 足够被看见，但比标题小，不会抢走阅读顺序。
- * 底色编码状态（灰/主色/绿），这是这一页唯一的"进度"表达。
+ * 圆 24dp、序号 12sp —— 足够被看见，但比标题小，不会抢走阅读顺序。
+ * 底色编码状态（灰/主色/绿），这是这一页唯一的「进度」表达。
  */
 @Composable
 private fun StepTitle(number: Int, title: String, state: StepState) {
     val bg = when (state) {
         StepState.Pending -> MaterialTheme.colorScheme.outlineVariant
         StepState.Current -> MaterialTheme.colorScheme.primary
-        StepState.Done -> com.aiphone.assistant.ui.design.AppTheme.accents.success
+        StepState.Done -> AppTheme.accents.success
     }
     val fg = when (state) {
         StepState.Pending -> MaterialTheme.colorScheme.onSurfaceVariant
         StepState.Current -> MaterialTheme.colorScheme.onPrimary
-        StepState.Done -> androidx.compose.ui.graphics.Color.White
+        StepState.Done -> Color.White
     }
     Row(
         modifier = Modifier.padding(start = Space.lg, end = Space.lg, top = Space.xxl, bottom = Space.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(20.dp).background(bg, CircleShape),
+            modifier = Modifier.size(24.dp).background(bg, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Text(

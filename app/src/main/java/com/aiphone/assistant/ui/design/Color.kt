@@ -9,11 +9,10 @@ import androidx.compose.ui.graphics.Color
 /**
  * 全应用唯一的颜色来源。
  *
- * ## 为什么不再用 dynamicColor
+ * ## 为什么不用 dynamicColor
  *
- * 之前主题直接用系统的动态取色 —— 界面主色跟着壁纸变。看起来"很原生"，
- * 代价是**同一个软件在两台手机上不是同一个软件**：按钮一会儿紫一会儿绿、
- * 语义色（成功/警告/危险）和壁纸撞色之后彻底读不出来。
+ * 界面主色跟着壁纸变，代价是**同一个软件在两台手机上不是同一个软件**：
+ * 按钮一会儿紫一会儿绿、语义色（成功/警告/危险）和壁纸撞色之后彻底读不出来。
  *
  * 这里是「纸盒」自己的配色，跟壁纸无关：
  *
@@ -25,55 +24,53 @@ import androidx.compose.ui.graphics.Color
  * 且卡片和画布会糊在一起），前景色降饱和、提亮度，保证对比度不掉。
  */
 internal object Paper {
-    val canvas = Color(0xFFF5F3EE)
-    val surface = Color(0xFFFCFBF8)
-    val sunken = Color(0xFFEFECE4)
-    val outline = Color(0xFFE1DDD3)
-    val outlineStrong = Color(0xFFCFC9BC)
-    val ink = Color(0xFF1C1B17)
-    val inkSecondary = Color(0xFF5E5A50)
-    val inkTertiary = Color(0xFF8E887B)
-    val accent = Color(0xFF1E6E5A)
-    val accentSoft = Color(0xFFDBEAE2)
-    val accentDeep = Color(0xFF123E32)
-    val danger = Color(0xFFB3372B)
-    val dangerSoft = Color(0xFFF7E3E0)
-    val warning = Color(0xFF9A6210)
-    val warningSoft = Color(0xFFF8EBD3)
-    val success = Color(0xFF2C7A4B)
-    val successSoft = Color(0xFFE2EFE5)
-    val info = Color(0xFF2A6398)
-    val infoSoft = Color(0xFFE3ECF5)
+    val canvas = Color(0xFFF3F1EB)
+    val surface = Color(0xFFFEFDFA)
+    val sunken = Color(0xFFEAE7DE)
+    val outline = Color(0xFFE2DCD0)
+    val outlineStrong = Color(0xFFCBC4B4)
+    val ink = Color(0xFF191813)
+    val inkSecondary = Color(0xFF5A564C)
+    val inkTertiary = Color(0xFF8B8577)
+    val accent = Color(0xFF186A56)
+    val accentSoft = Color(0xFFD8EAE1)
+    val accentDeep = Color(0xFF0D3B2F)
+    val danger = Color(0xFFB23A2E)
+    val dangerSoft = Color(0xFFF6E1DD)
+    val warning = Color(0xFF96600F)
+    val warningSoft = Color(0xFFF7E9CE)
+    val success = Color(0xFF2A7648)
+    val successSoft = Color(0xFFDFEDE3)
+    val info = Color(0xFF2A6094)
+    val infoSoft = Color(0xFFE0EAF4)
 }
 
 internal object Ink {
-    val canvas = Color(0xFF13120E)
-    val surface = Color(0xFF1D1C17)
+    val canvas = Color(0xFF12110D)
+    val surface = Color(0xFF1C1B16)
     /**
      * 深色下"凹陷"要**比画布更暗**。
      *
-     * 这一点和亮色相反，容易写错：亮色里画布最暗、卡片浮起来（更亮）；
+     * 这一点和亮色相反：亮色里画布最暗、卡片浮起来（更亮）；
      * 深色里卡片靠"更亮"浮起来，凹陷块就必须反过来往暗里走。
-     * 之前把它写得比 surface 还亮，结果分段控件的选中项看起来像"被按下去"，
-     * 而不是"被选中"。
      */
-    val sunken = Color(0xFF0D0C08)
-    val outline = Color(0xFF2E2B22)
-    val outlineStrong = Color(0xFF453F33)
-    val ink = Color(0xFFF2EFE7)
-    val inkSecondary = Color(0xFFA9A395)
-    val inkTertiary = Color(0xFF7C7768)
-    val accent = Color(0xFF5BBFA2)
-    val accentSoft = Color(0xFF1B3A31)
+    val sunken = Color(0xFF0C0B08)
+    val outline = Color(0xFF2D2A21)
+    val outlineStrong = Color(0xFF474134)
+    val ink = Color(0xFFF1EEE6)
+    val inkSecondary = Color(0xFFA8A294)
+    val inkTertiary = Color(0xFF7B7667)
+    val accent = Color(0xFF63C7A7)
+    val accentSoft = Color(0xFF193A30)
     val accentDeep = Color(0xFFA9DFCE)
-    val danger = Color(0xFFE8837A)
-    val dangerSoft = Color(0xFF3A201B)
-    val warning = Color(0xFFD9A94F)
-    val warningSoft = Color(0xFF332810)
-    val success = Color(0xFF6FBF8B)
+    val danger = Color(0xFFE9867D)
+    val dangerSoft = Color(0xFF3B201B)
+    val warning = Color(0xFFDBAE57)
+    val warningSoft = Color(0xFF342811)
+    val success = Color(0xFF74C18E)
     val successSoft = Color(0xFF1C3323)
-    val info = Color(0xFF7FB0DA)
-    val infoSoft = Color(0xFF1B2A38)
+    val info = Color(0xFF82B2DB)
+    val infoSoft = Color(0xFF1A2937)
 }
 
 /**
@@ -102,13 +99,13 @@ data class AppAccents(
 internal val LightAccents = AppAccents(
     success = Paper.success,
     successContainer = Paper.successSoft,
-    onSuccessContainer = Color(0xFF17381F),
+    onSuccessContainer = Color(0xFF16361E),
     warning = Paper.warning,
     warningContainer = Paper.warningSoft,
-    onWarningContainer = Color(0xFF3D2708),
+    onWarningContainer = Color(0xFF3B2608),
     info = Paper.info,
     infoContainer = Paper.infoSoft,
-    onInfoContainer = Color(0xFF11293D),
+    onInfoContainer = Color(0xFF10283B),
     canvas = Paper.canvas,
     sunken = Paper.sunken,
     hairline = Paper.outline,
@@ -120,30 +117,21 @@ internal val DarkAccents = AppAccents(
     onSuccessContainer = Color(0xFFC4E9CF),
     warning = Ink.warning,
     warningContainer = Ink.warningSoft,
-    onWarningContainer = Color(0xFFF2DCAF),
+    onWarningContainer = Color(0xFFF0D9AC),
     info = Ink.info,
     infoContainer = Ink.infoSoft,
-    onInfoContainer = Color(0xFFC7DDF0),
+    onInfoContainer = Color(0xFFC9DFF2),
     canvas = Ink.canvas,
     sunken = Ink.sunken,
     hairline = Ink.outline,
 )
 
-/** 语义扩展色的下发通道（由 [com.aiphone.assistant.ui.theme.AiPhoneTheme] 注入） */
-val LocalAppAccents = staticCompositionLocalOf { LightAccents }
+internal val LocalAppAccents = staticCompositionLocalOf { LightAccents }
 
-/**
- * 读配色的快捷入口：
- *
- * ```kotlin
- * AppTheme.accents.warning    // 警告色
- * AppTheme.accents.sunken     // 凹陷块（统计卡片那种底）
- * ```
- *
- * 只放 M3 配色表覆盖不到的语义色；基础的 primary/surface/onSurface 一律
- * 走 `MaterialTheme.colorScheme`，免得同一件事有两个读法。
- */
+/** 语义扩展色的唯一读取入口：`AppTheme.accents.success` */
 object AppTheme {
     val accents: AppAccents
-        @Composable @ReadOnlyComposable get() = LocalAppAccents.current
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalAppAccents.current
 }
