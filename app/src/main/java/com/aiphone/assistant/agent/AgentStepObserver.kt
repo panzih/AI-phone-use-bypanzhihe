@@ -184,8 +184,10 @@ internal suspend fun AgentSession.observeStep(
     // 于是找不到目标就乱点（0.8.5 里"找不到编号 30 的元素"部分来自这里）。
     val tree = treeRead.text?.let { text ->
         if (treeRead.truncated) {
-            "$text\n（以上是前 ${treeRead.nodes.size} 个元素，已达上限：" +
-                "界面上还有更多元素没列出来。要找的目标不在这里就用 scroll 翻，或用 x/y 给坐标。）"
+            val rest = treeRead.remaining
+            "$text\n（已达元素上限：只列出了前 ${treeRead.nodes.size} 个，" +
+                (if (rest > 0) "界面上还有约 $rest 个没列出来。" else "界面上还有更多元素没列出来。") +
+                "要找的目标不在这里就用 scroll 翻，或用 x/y 给坐标。）"
         } else {
             text
         }

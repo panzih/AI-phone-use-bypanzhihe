@@ -170,6 +170,15 @@ internal object AgentLimits {
     }
 
     /**
+     * 控件标签是否命中敏感词表（给控件树渲染的 ⚠ 标记用，ROADMAP §0）。
+     *
+     * 和 [highRiskReason] 的分工：那条管**动作**要不要二次确认，
+     * 这条只管**显示** —— 在元素列表里给这类标签加个警示记号，
+     * 让模型在动手前多看一眼，复盘时也一眼能找到。
+     */
+    internal fun labelSensitive(raw: String): Boolean = highRiskWord(raw) != null
+
+    /**
      * 藏完悬浮窗后等一小会儿再截图/注入。
      *
      * 隐藏是异步的（窗口变更要经过 WindowManager 和 SurfaceFlinger

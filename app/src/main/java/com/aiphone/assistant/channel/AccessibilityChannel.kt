@@ -174,6 +174,9 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
         // 但那样日志里的 rawNodeCount 和实际发给模型的那份就可能不是同一帧
         val root = svc.readTree() ?: return@withContext UiTreeRead.unavailable()
         val parsed = UiTreeParser.parseDetailed(root, w, h, TREE_LIMIT, svc.ownPackageName)
+        // 上一帧 = 模型上一步看到的那份；必须**先**抓出来再覆盖 lastNodes，
+        // 否则 `+`（相对上一帧新增）永远比不出东西
+        val previousFrame = lastNodes
         lastNodes = parsed.nodes
         if (parsed.budgetExceeded) {
             // 抓树时间预算超了：列表是半棵树。必须说出来 —— 否则复盘时
@@ -184,13 +187,19 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
             )
         }
         UiTreeRead(
-            // 没有元素就给 null，让"读不到元素列表"在类型上是个明确分支
-            text = if (parsed.nodes.isEmpty()) null else UiTreeParser.render(parsed.nodes),
+            // 没有元素就给 null，让"读不到元素列表"在类型上是个明确分支。
+            // ROADMAP §0：渲染带分区表头/缩进；`+` 标记相对上一帧新增的元素
+            text = if (parsed.nodes.isEmpty()) {
+                null
+            } else {
+                UiTreeParser.render(parsed.nodes, h, previous = previousFrame)
+            },
             nodes = parsed.nodes,
             rootAvailable = true,
             rawNodeCount = parsed.rawNodeCount,
             truncated = parsed.truncated,
             budgetExceeded = parsed.budgetExceeded,
+            remaining = parsed.remaining,
         )
     }
 

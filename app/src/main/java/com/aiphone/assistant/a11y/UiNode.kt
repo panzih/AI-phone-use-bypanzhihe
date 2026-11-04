@@ -3,6 +3,7 @@ package com.aiphone.assistant.a11y
 import android.graphics.Rect
 import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
+import com.aiphone.assistant.agent.AgentLimits
 
 /**
  * UI 控件树里的一个元素。
@@ -79,14 +80,24 @@ data class UiNode(
     fun labelForLog(): String =
         text.ifBlank { contentDesc }.ifBlank { className }.take(20)
 
-    /** 给模型看的一行描述 */
+    /** 这一行的身份（文字 + 位置）。上下两帧对比"谁是新出现的"用它 */
+    internal fun identityKey(): String =
+        "$text|$contentDesc|${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}"
+
+    /**
+     * 给模型看的一行描述。
+     *
+     * ROADMAP §0 语义结构：中文角色（按钮/输入框/开关…）替代生硬的类名；
+     * 命中敏感词表的标签带 ⚠（让模型在动手前多想一下，也方便复盘）。
+     * 分区表头、缩进、`+`（相对上一帧新增）在 [UiTreeParser.render] 里按行拼。
+     */
     fun describe(): String {
+        val label = text.ifBlank { contentDesc }
         val sb = StringBuilder()
         sb.append('[').append(index).append("] ")
-
-        // 控件类型：把 android.widget.Button 简写成 Button
-        sb.append(className)
-        sb.append(" \"").append(text.ifBlank { contentDesc }.take(40)).append('"')
+        if (label.isNotBlank() && AgentLimits.labelSensitive(label)) sb.append("⚠ ")
+        sb.append(roleOf(className))
+        sb.append(" \"").append(label.take(40)).append('"')
         sb.append(" @(").append(centerX).append(',').append(centerY).append(')')
 
         val flags = buildList {
@@ -106,6 +117,26 @@ data class UiNode(
         if (stateDesc.isNotBlank()) sb.append(" 状态\"").append(stateDesc.take(20)).append('"')
         if (rangeText.isNotBlank()) sb.append(" 当前值 ").append(rangeText)
         return sb.toString()
+    }
+
+    /** 类名 → 中文角色。认不出的控件保留原类名，硬猜更误导 */
+    internal fun roleOf(raw: String): String = when (raw) {
+        "Button", "MaterialButton", "FloatingActionButton", "AppCompatButton" -> "按钮"
+        "ImageButton" -> "图标按钮"
+        "EditText", "TextField" -> "输入框"
+        "TextView" -> "文本"
+        "CheckBox" -> "复选框"
+        "RadioButton" -> "单选"
+        "Switch", "ToggleButton" -> "开关"
+        "SeekBar", "Slider" -> "滑块"
+        "ProgressBar" -> "进度条"
+        "Spinner" -> "下拉框"
+        "ImageView" -> "图标"
+        "VideoView" -> "视频"
+        "WebView" -> "网页容器"
+        "CardView" -> "卡片"
+        "RecyclerView", "ListView", "ScrollView" -> "滚动容器"
+        else -> raw
     }
 }
 
@@ -136,6 +167,15 @@ object UiTreeParser {
     /** 每走多少个节点检查一次时间预算（查时钟也有成本，不能每节点都查） */
     private const val BUDGET_CHECK_EVERY = 32
 
+    /** 原始节点的硬上限：防止极端界面把排序/吸收的内存和耗时撑爆 */
+    private const val MAX_WALK_NODES = 3000
+
+    /** 可点击行最多吸收几个后代的文字 */
+    private const val ABSORB_MAX_TEXTS = 5
+
+    /** 吸收进一行的总字数上限（一行太长也会把提示词撑爆） */
+    private const val ABSORB_MAX_CHARS = 60
+
     /**
      * 控件树**读到了、但一个可交互元素都没有**时，给模型看的那一行。
      *
@@ -161,6 +201,8 @@ object UiTreeParser {
         val truncated: Boolean,
         /** 是否撞到了时间预算（深树没遍历完就被掐了，见 [TREE_BUDGET_MS]） */
         val budgetExceeded: Boolean = false,
+        /** 截断后没列出来的元素个数（0 = 全列出来了） */
+        val remaining: Int = 0,
     )
 
     /**
@@ -196,12 +238,19 @@ object UiTreeParser {
             node.getBoundsInScreen(rect)
             val isPassword = node.isPassword
             val rawText = node.text?.toString().orEmpty().trim()
+            // 可交互行吸收来的后代文字（③）：拼在自己文字后面 ——
+            // "点这一行"点到的信息要一起给模型看。密码行不吸收
+            val absorbed = walk.absorbedText[i]
             UiNode(
                 index = i + 1,
                 className = simplifyClass(node.className?.toString().orEmpty()),
                 // 密码框：文本在解析这一步就换成定长掩码 —— 不进提示词、
                 // 不进日志，也绝不能从任何导出文件里复原
-                text = if (isPassword) UiNode.PASSWORD_MASK else rawText,
+                text = when {
+                    isPassword -> UiNode.PASSWORD_MASK
+                    absorbed.isNotBlank() -> "$rawText · $absorbed"
+                    else -> rawText
+                },
                 contentDesc = node.contentDescription?.toString().orEmpty().trim(),
                 viewId = node.viewIdResourceName.orEmpty(),
                 bounds = Rect(rect),
@@ -228,14 +277,19 @@ object UiTreeParser {
                 canScrollHorizontally = walk.scrollHorizontal[i],
             )
         }
-        return ParseResult(nodes, walk.visited, walk.truncated, walk.budgetExceeded)
+        return ParseResult(
+            nodes,
+            walk.visited,
+            walk.truncated,
+            walk.budgetExceeded,
+            walk.remaining,
+        )
     }
 
     /** RangeInfo → 给模型看的一句当前值（"40%" / "0.5"） */
-    private fun formatRange(r: android.view.accessibility.AccessibilityNodeInfo.RangeInfo): String =
+    private fun formatRange(r: AccessibilityNodeInfo.RangeInfo): String =
         when (r.type) {
-            AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_PERCENT ->
-                "${r.current.toInt()}%"
+            AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_PERCENT -> "${r.current.toInt()}%"
             else -> {
                 val v = r.current
                 if (v == v.toLong().toFloat()) "${v.toLong()}" else "$v"
@@ -250,18 +304,17 @@ object UiTreeParser {
         /** 与 [nodes] 一一对应：这个节点有没有纵向/横向滚动能力（从 action 推出） */
         val scrollVertical: List<Boolean> = List(nodes.size) { false },
         val scrollHorizontal: List<Boolean> = List(nodes.size) { false },
+        /** 与 [nodes] 一一对应：从可交互后代那里吸收来的补充文字（"" = 没有） */
+        val absorbedText: List<String> = List(nodes.size) { "" },
         /** 时间预算超了，树没走完（见 [TREE_BUDGET_MS]） */
         val budgetExceeded: Boolean = false,
+        /** 结构预算截掉、没发给模型的元素个数 */
+        val remaining: Int = 0,
     )
 
     /**
-     * 只做遍历和过滤，返回**原始节点**，顺序和 [parse] 的编号一一对应。
-     *
-     * 为什么必须共用这一份：编号是模型定位的唯一依据，而"按编号点"的时候
-     * 要重新解析一遍树（节点对象不能跨帧复用）。如果两处各写一套过滤规则，
-     * 编号就会错位 —— 模型说点 3 号，实际点到了 5 号，而且完全看不出来。
-     *
-     * @return 保留下来的节点，第 n 个对应编号 n+1
+     * 只做遍历和过滤，返回**原始节点**（不做后代吸收、不给吸收文本），
+     * 顺序和 [parse] 的编号一一对应。按编号找节点（findNodeByIndex）走这里。
      */
     fun keepNodes(
         root: AccessibilityNodeInfo?,
@@ -272,7 +325,26 @@ object UiTreeParser {
     ): List<AccessibilityNodeInfo> =
         keepNodesDetailed(root, screenWidth, screenHeight, limit, excludePackage).nodes
 
-    /** 和 [keepNodes] 一样，额外回报遍历了多少个原始节点、有没有被 limit 截断 */
+    /**
+     * 只做遍历和过滤，返回**原始节点**，顺序和 [parse] 的编号一一对应。
+     *
+     * 为什么必须共用这一份：编号是模型定位的唯一依据，而"按编号点"的时候
+     * 要重新解析一遍树（节点对象不能跨帧复用）。如果两处各写一套过滤规则，
+     * 编号就会错位 —— 模型说点 3 号，实际点到了 5 号，而且完全看不出来。
+     *
+     * ## ROADMAP §0：空间排序 + 结构优先预算 + 后代吸收
+     *
+     *  - **空间排序**：以前是逆序深度优先（`addLast`/`removeLast`），编号顺序
+     *    跟阅读顺序毫无关系，撞上限时先丢的还可能是屏幕顶部。现在全部按
+     *    "从上到下、从左到右"排序后再编号。
+     *  - **结构优先**：可交互元素（可点/可长按/可滚/可输入）**全保留**，
+     *    纯文字元素只填剩余名额；被挤掉的个数如实在 [NodeWalk.remaining] 报告。
+     *  - **后代吸收**：可点击/可输入行把非交互后代的文字并进自己那行
+     *    （TalkBack 的朗读单元，也是模型的语义单元）；被吸收的后代不再单列，
+     *    不然同一句话出现两遍。
+     *
+     * @return 保留下来的节点，第 n 个对应编号 n+1
+     */
     fun keepNodesDetailed(
         root: AccessibilityNodeInfo?,
         screenWidth: Int,
@@ -283,9 +355,13 @@ object UiTreeParser {
     ): NodeWalk {
         if (root == null) return NodeWalk(emptyList(), 0, false)
 
-        val out = ArrayList<AccessibilityNodeInfo>(limit)
-        val scrollV = ArrayList<Boolean>(limit)
-        val scrollH = ArrayList<Boolean>(limit)
+        val kept = ArrayList<AccessibilityNodeInfo>(limit)
+        val scrollBits = java.util.IdentityHashMap<AccessibilityNodeInfo, BooleanArray>()
+        val absorbedText = java.util.IdentityHashMap<AccessibilityNodeInfo, String>()
+        // 被可交互祖先吸收的后代：不再单列（同一句话出现两遍只会浪费 token）
+        val absorbed = java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<AccessibilityNodeInfo, Boolean>()
+        )
         val seen = HashSet<String>()
         val rect = Rect()
         var visited = 0
@@ -296,7 +372,7 @@ object UiTreeParser {
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.addLast(root)
 
-        while (stack.isNotEmpty() && out.size < limit) {
+        while (stack.isNotEmpty() && visited < MAX_WALK_NODES) {
             // 时间预算：深树下遍历是同步阻塞，超了就掐断 —— 拿半棵树
             // 总比整步卡死好（"这一步超时、如实上报"，见常量注释）
             if (visited % BUDGET_CHECK_EVERY == 0 &&
@@ -313,6 +389,8 @@ object UiTreeParser {
             if (excludePackage != null && node.packageName?.toString() == excludePackage) {
                 continue
             }
+            // 已被外层可交互行吸收：跳过（也不再走它的子树 —— 那已经走过了）
+            if (absorbed.contains(node)) continue
 
             if (isWorthKeeping(node, rect, screenWidth, screenHeight)) {
                 val text = node.text?.toString().orEmpty().trim()
@@ -321,28 +399,12 @@ object UiTreeParser {
                 // 同样的位置 + 同样的文字，通常是重复节点，只留一个
                 val key = "${text}|${desc}|${rect.left},${rect.top},${rect.right},${rect.bottom}"
                 if (seen.add(key)) {
-                    out.add(node)
-                    val acts = node.actionList
-                    var v = false
-                    var h = false
-                    for (a in acts) {
-                        when (a.id) {
-                            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id,
-                            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id,
-                            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id,
-                            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id,
-                            -> v = true
-
-                            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id,
-                            AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id,
-                            -> h = true
-                        }
+                    kept.add(node)
+                    scrollBits[node] = scrollFlagsOf(node)
+                    // 吸收非交互后代的文字（③）：可点击/可输入行是语义单元
+                    if (node.isClickable || node.isEditable) {
+                        absorbedText[node] = absorbDescendants(node, absorbed)
                     }
-                    // 老式列表只报 isScrollable、不给方向位：按纵向处理
-                    //（RecyclerView/ListView 的 FORWARD/BACKWARD 都是纵向语义）
-                    if (node.isScrollable && !v && !h) v = true
-                    scrollV.add(v)
-                    scrollH.add(h)
                 }
             }
 
@@ -353,9 +415,118 @@ object UiTreeParser {
             }
         }
 
-        // out.size 撞到 limit 就认为"可能还有没发出去的" —— 保守表述，
-        // 日志里写的是"已达上限"，不断言一定被砍了
-        return NodeWalk(out, visited, out.size >= limit, scrollV, scrollH, budgetExceeded)
+        // ---- 空间排序：从上到下、从左到右（行容差按屏高切 24 行）----
+        val ordered = readingOrder(kept, screenHeight)
+
+        // ---- 结构优先预算：可交互全留，纯文字填空位，最后重新按空间序展示 ----
+        val out: List<AccessibilityNodeInfo> = if (ordered.size <= limit) {
+            ordered
+        } else {
+            val structural = ordered.filter { isStructural(it) }
+            val textual = ordered.filterNot { isStructural(it) }
+            val keepStruct = structural.take(limit)
+            val slotsLeft = limit - keepStruct.size
+            val keepText = if (slotsLeft > 0) textual.take(slotsLeft) else emptyList()
+            readingOrder(keepStruct + keepText, screenHeight)
+        }
+        val remaining = (ordered.size - out.size).coerceAtLeast(0)
+
+        return NodeWalk(
+            nodes = out,
+            visited = visited,
+            truncated = ordered.size > out.size,
+            scrollVertical = out.map { scrollBits[it]?.get(0) ?: false },
+            scrollHorizontal = out.map { scrollBits[it]?.get(1) ?: false },
+            absorbedText = out.map { absorbedText[it].orEmpty() },
+            budgetExceeded = budgetExceeded,
+            remaining = remaining,
+        )
+    }
+
+    /** 结构元素：模型必须能看到的（可点 / 可长按 / 可滚 / 可输入） */
+    private fun isStructural(node: AccessibilityNodeInfo): Boolean =
+        node.isClickable || node.isLongClickable || node.isScrollable || node.isEditable
+
+    /** 从 accessibility action 推滚动方向；老式列表只有 isScrollable 时按纵向 */
+    private fun scrollFlagsOf(node: AccessibilityNodeInfo): BooleanArray {
+        var v = false
+        var h = false
+        for (a in node.actionList) {
+            when (a.id) {
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id,
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id,
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id,
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id,
+                -> v = true
+
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id,
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id,
+                -> h = true
+            }
+        }
+        if (node.isScrollable && !v && !h) v = true
+        return booleanArrayOf(v, h)
+    }
+
+    /**
+     * 把 [parent] 的非交互后代文字吸收进一行；返回拼好的补充文本。
+     *
+     * 吸收走的节点记进 [sink]，调用方保证它们不再单列。上限
+     * [ABSORB_MAX_TEXTS] 条 / [ABSORB_MAX_CHARS] 字：吸收是补语义的，
+     * 不是把整棵子树抄一遍。
+     */
+    private fun absorbDescendants(
+        parent: AccessibilityNodeInfo,
+        sink: MutableSet<AccessibilityNodeInfo>,
+    ): String {
+        val parts = ArrayList<String>(ABSORB_MAX_TEXTS)
+        var chars = 0
+        var depth = 0
+        var level = listOf(parent)
+        while (depth < 3 && parts.size < ABSORB_MAX_TEXTS) {
+            val next = ArrayList<AccessibilityNodeInfo>()
+            for (n in level) {
+                for (i in 0 until n.childCount) {
+                    val c = n.getChild(i) ?: continue
+                    next.add(c)
+                    val interactive = c.isClickable || c.isLongClickable ||
+                        c.isScrollable || c.isEditable
+                    if (interactive || !c.isVisibleToUser) continue
+                    val t = (c.text?.toString()?.trim().orEmpty())
+                        .ifBlank { c.contentDescription?.toString()?.trim().orEmpty() }
+                    if (t.isBlank() || t.length < 2) continue
+                    // 已有文字里就有的不重复吸收
+                    if (parts.any { it.contains(t) }) continue
+                    val take = t.take(30)
+                    if (chars + take.length > ABSORB_MAX_CHARS) continue
+                    parts.add(take)
+                    chars += take.length
+                    sink.add(c)
+                    if (parts.size >= ABSORB_MAX_TEXTS) break
+                }
+                if (parts.size >= ABSORB_MAX_TEXTS) break
+            }
+            level = next
+            depth++
+        }
+        return parts.joinToString(" / ")
+    }
+
+    /** 从上到下、从左到右的阅读顺序；行容差按屏高切 24 行 */
+    private fun readingOrder(
+        nodes: List<AccessibilityNodeInfo>,
+        screenHeight: Int,
+    ): List<AccessibilityNodeInfo> {
+        if (nodes.size <= 1) return nodes
+        val rect = Rect()
+        val centers = nodes.map { n ->
+            n.getBoundsInScreen(rect)
+            rect.centerX() to rect.centerY()
+        }
+        val band = maxOf(64, screenHeight / 24)
+        return nodes.indices
+            .sortedWith(compareBy({ centers[it].second / band }, { centers[it].first }))
+            .map { nodes[it] }
     }
 
     /** 这个节点值不值得留给模型看 */
@@ -415,9 +586,61 @@ object UiTreeParser {
      * 把节点列表渲染成给模型的文本。
      *
      * 这是提示词里最关键的一段 —— 模型靠它决定"点哪个"。
+     *
+     * ## ROADMAP §0 语义结构
+     *
+     *  - **分区**：[screenHeight] > 0 时插入 顶部/中部/底部 表头（0-20% / 20-80% / 80%+），
+     *    模型一眼知道"返回键在顶部"这类空间常识；
+     *  - **缩进**：被更大的可滚容器包住的行缩进两格，列表的归属可见；
+     *  - **`+` 标记**：给了 [previous]（上一帧）时，新出现的元素带 `+` ——
+     *    "点了之后多了什么"是模型确认动作生效最快的线索；
+     *  - 每行的 ⚠ / 中文角色在 [UiNode.describe] 里。
      */
-    fun render(nodes: List<UiNode>): String {
+    fun render(
+        nodes: List<UiNode>,
+        screenHeight: Int = 0,
+        previous: List<UiNode>? = null,
+    ): String {
         if (nodes.isEmpty()) return EMPTY_TEXT
-        return nodes.joinToString("\n") { it.describe() }
+        val prevKeys = previous?.map { it.identityKey() }?.toHashSet()
+        val scrollables = nodes.filter {
+            (it.scrollable || it.canScrollVertically || it.canScrollHorizontally) &&
+                it.bounds.width() * it.bounds.height() > 0
+        }
+        val sb = StringBuilder()
+        var lastZone = -1
+        for (n in nodes) {
+            if (screenHeight > 0) {
+                val zone = zoneOf(n.centerY, screenHeight)
+                if (zone != lastZone) {
+                    if (lastZone != -1) sb.append('\n')
+                    sb.append(zoneHeader(zone)).append('\n')
+                    lastZone = zone
+                }
+            }
+            val insideScroller = scrollables.any {
+                it !== n &&
+                    it.bounds.width() * it.bounds.height() >
+                    n.bounds.width() * n.bounds.height() &&
+                    it.bounds.contains(n.centerX, n.centerY)
+            }
+            if (insideScroller) sb.append("  ")
+            if (prevKeys != null && n.identityKey() !in prevKeys) sb.append('+')
+            sb.append(n.describe()).append('\n')
+        }
+        return sb.toString().trimEnd('\n')
+    }
+
+    /** 0 = 顶部（0-20%），1 = 中部，2 = 底部（80%+） */
+    private fun zoneOf(centerY: Int, screenHeight: Int): Int = when {
+        centerY < screenHeight * 0.2 -> 0
+        centerY > screenHeight * 0.8 -> 2
+        else -> 1
+    }
+
+    private fun zoneHeader(zone: Int): String = when (zone) {
+        0 -> "── 顶部 ──"
+        2 -> "── 底部 ──"
+        else -> "── 中部 ──"
     }
 }

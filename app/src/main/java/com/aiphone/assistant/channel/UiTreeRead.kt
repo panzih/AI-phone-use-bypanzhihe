@@ -35,6 +35,8 @@ data class UiTreeRead(
     val rawNodeCount: Int = 0,
     val truncated: Boolean = false,
     val budgetExceeded: Boolean = false,
+    /** 结构预算截掉、没发给模型的元素个数（0 = 全列出来了） */
+    val remaining: Int = 0,
 ) {
     /** 这一屏有没有真正可用的元素列表 */
     val hasElements: Boolean get() = nodes.isNotEmpty()
