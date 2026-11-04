@@ -51,9 +51,10 @@ class BlackFrameTest {
     }
 
     @Test
-    fun `解码失败的垃圾数据按不是黑帧处理`() {
-        // 解码不出来另有报错路径；这里误判会把真图当黑图丢掉
+    fun `空数据按不是黑帧处理`() {
+        // 解码不出来另有报错路径；这里误判会把真图当黑图丢掉。
+        // （Robolectric 的 shadow Bitmap 对任何字节都解得出图，
+        //  "真解出 null" 这条只能在真机上验证，单测只钉空数据的兜底）
         assertFalse(BlackFrame.isMostlyBlack(ByteArray(0)))
-        assertFalse(BlackFrame.isMostlyBlack("not an image".toByteArray()))
     }
 }
