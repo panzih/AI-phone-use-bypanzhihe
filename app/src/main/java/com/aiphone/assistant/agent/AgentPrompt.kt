@@ -155,6 +155,7 @@ object AgentPrompt {
   "thought": "一句话：看到了什么、为什么这么做",
   "next_hint": "这一批做完之后要做什么（一句话，给用户看）",
   "need_image": false,
+  "view": "",
   "use_skill": "",
   "skill_args": {},
   "actions": [{"action": "tap", "index": 3}],
@@ -176,14 +177,21 @@ object AgentPrompt {
 - fail 时 summary 写清三件事：**卡在哪、试过什么、需要用户做什么**。用户会直接看到，说人话。
 - **fail 是止损，不是失败。** 卡着反复试，用户既等不到结果又要付钱；拿不准再试有没有意义时，选 fail。
 
-# 要看图时（二选一，也可以都不要）
+# 要看图时（三种做法）
 默认没有截图，能靠编号判断的就别要图 —— 每次要图这一轮就慢一倍、贵一倍。
 
 1. `"need_image": true`：这一屏完全看不懂、连动作都给不出（列表空、明显不完整、全是无字元素）。
    系统立刻截图并重新问你，这一轮不算一步。
 2. `{"action":"capture"}`：已经能给动作、只想看一眼结果。图随下一步来，不多一次往返。
+3. `"view"` 字段（JSON 顶层，**一次性生效**，不写 = 下一轮还是控件树）：
+   - `"view":"image"`：下一轮**只给截图 + 控件计数**，不给编号列表。图上没有编号，
+     要点就给 x/y 坐标；要编号列表就再写 `"view":"tree"` 换回来。
+   - `"view":"both"`：下一轮截图和完整编号列表都给。
+   生效时机：本轮**没有动作**、只写了 view → 立刻重新问你，不算一步；
+   有动作 → 这批执行完、下一轮生效。**别连续每轮都要图** —— 历史里的图每轮都重发，
+   token 按步数涨。
 
-两个别同时给（同时给按 need_image 处理）；一批里 capture 最多一张。
+1 和 2 别同时给（同时给按 need_image 处理）；一批里 capture 最多一张。
 
 # 内置浏览器（browser_open / browser_html / browser_eval）
 
@@ -312,6 +320,53 @@ $catalog
     }
 
     /**
+     * 「操作环境卡」（ROADMAP §0 / agent-loop.md 第 5 节设计）。
+     *
+     * 固定四行：模式（哪条通道）/ 屏幕（哪块屏）/ 本轮输入（拿到了什么）/
+     * 下一轮可选（view 字段能换什么）。以前这些信息只在"读不到树"时用
+     * noTreeReason 的常量说一半 —— 正常步骤里模型根本不知道自己在前台还是
+     * 副屏，也不知道换屏后编号会失效。
+     *
+     * 位置钉死在「# 当前状态」之后、「# 界面元素」之前（每轮都出现，
+     * 模型不会漏看）。技能目录**不**重复注入（系统提示词第 0 段已有）。
+     */
+    fun envCard(
+        mode: String,
+        screen: String,
+        input: String,
+        nextOptions: String,
+    ): String = buildString {
+        appendLine("# 操作环境")
+        appendLine("模式：$mode")
+        appendLine("屏幕：$screen")
+        appendLine("本轮输入：$input")
+        append("下一轮可选：$nextOptions")
+    }
+
+    /**
+     * view:image 专用的一屏说明（替代「# 界面元素」的位置）。
+     *
+     * 阈值设计（agent-loop.md 5.3）：≥10 建议换回树（多到值得精确定位）；
+     * <5 明说只能按坐标点（少到不值得要树）；5–10 之间**不提示** ——
+     * 每步都劝模型换视图只会干扰判断。读不到根节点不报数（别把"看不到"
+     * 说成"空页"），照实说读不到。
+     */
+    fun viewImageOnlyReason(count: Int, rootAvailable: Boolean): String {
+        val prefix = "本轮按你的要求只给截图（view:image）。"
+        if (!rootAvailable) {
+            return "$prefix 这一屏读不到控件树（不是空的 —— 是读不到），按图上坐标点。"
+        }
+        return when {
+            count >= 10 ->
+                "$prefix 这一屏能读到 $count 个控件。要精细定位（拿编号列表）" +
+                    "就下一轮写 \"view\":\"tree\"。"
+            count < 5 ->
+                "$prefix 这一屏只有 $count 个控件（自绘/网页残留），只能按图上坐标点。"
+            else -> "$prefix 这一屏能读到 $count 个控件，够用就不必换视图。"
+        }
+    }
+
+    /**
      * 每一轮发给模型的当前状态。
      *
      * ## 分辨率为什么放在这里而不是系统提示词里
@@ -330,6 +385,8 @@ $catalog
      *        Agent 判断后传进来；不传时用 [DEFAULT_NO_TREE_REASON]。
      * @param userNote 用户**在暂停期间**补的话。非空时说明任务被暂停过，
      *        并且用户对做法有新的要求 —— 它的优先级高于原任务里的相同部分。
+     * @param envCard 操作环境卡（[envCard] 的产物）。非空时插在「当前状态」
+     *        之后、「界面元素」之前。
      */
     fun stepMessage(
         step: Int,
@@ -345,6 +402,7 @@ $catalog
         skillNote: String? = null,
         noTreeReason: String? = null,
         userNote: String? = null,
+        envCard: String? = null,
     ): String = buildString {
         appendLine("当前是" + stepsLabel(step, maxSteps) + "。")
         appendLine("用户的任务：$task")
@@ -373,6 +431,10 @@ $catalog
             appendLine("当前前台应用：$foregroundPackage")
         }
         appendLine()
+        if (envCard != null) {
+            appendLine(envCard)
+            appendLine()
+        }
         if (skillNote != null) {
             appendLine("# 技能返回")
             appendLine(skillNote)

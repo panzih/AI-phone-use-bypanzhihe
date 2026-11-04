@@ -197,6 +197,15 @@ internal class AgentSession(
      */
     internal var blindNoFrameSteps = 0
 
+    /**
+     * 模型指定的下一轮视图（ROADMAP §0 / agent-loop.md 5.2）：
+     * "image" = 只截图 + 控件计数；"both" = 截图 + 完整列表。
+     *
+     * **一次性**：observeStep 消费后立刻清空，默认回落到控件树 ——
+     * 历史里的图每轮都重发，常驻会让 token 按步数线性上涨。
+     */
+    internal var pendingView: String? = null
+
     /** 模型连续几次没给出可用动作。 */
     internal var parseFails = 0
 
@@ -417,6 +426,7 @@ internal class AgentSession(
         // 会带着上一趟的步数、图片额度和解析失败次数。
         unreadableTreeSteps = 0
         blindNoFrameSteps = 0
+        pendingView = null
         parseFails = 0
         refusedBlindFinish = false
         finishRefusals = 0
@@ -571,6 +581,8 @@ internal class AgentSession(
                     system = system,
                     treeObservable = treeObservable,
                     initialInterruptions = interruptions,
+                    viewImageOnly = observation.viewImageOnly,
+                    forceImage = observation.forceImage,
                 )
             ) {
                 is AskResult.Ready -> exchange

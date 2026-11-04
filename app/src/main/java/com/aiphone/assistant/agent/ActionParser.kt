@@ -99,6 +99,16 @@ object ActionParser {
         val nextHint: String = "",
 
         /**
+         * 下一轮要什么视图（ROADMAP §0 / agent-loop.md 5.2）：
+         * "image" = 只截图 + 控件计数；"both" = 截图 + 完整列表；null = 控件树（默认）。
+         *
+         * **一次性生效**，不做成常驻状态 —— 历史里的图每次请求都要重发，
+         * 常驻会让 token 按步数线性上涨。有动作时下一步生效；
+         * 无动作时在解析层直接转成 needImage（立刻重问、不计步，复用现成机制）。
+         */
+        val view: String? = null,
+
+        /**
          * 批内某个动作失败时，要不要继续执行后面的动作。
          *
          * 默认 **false（中止本批）**：这是 0.9.22 改的语义。以前第 2 个动作
@@ -291,6 +301,32 @@ object ActionParser {
         if (topAction == "finish" || topAction == "done") finished = true
         if (topAction in FAIL_NAMES) failed = true
 
+        // ---- view 字段（ROADMAP §0 / agent-loop.md 5.2）----
+        // "tree" 是默认（等价不写）；"image"/"both" 在**无动作**时立刻生效
+        //（转成 need_image，复用"重问且不计步"机制）；有动作时留给下一步。
+        var view: String? = when (val req = obj.optString("view").trim().lowercase()) {
+            "" -> null
+            "tree" -> null
+            "image", "both" -> req
+            else -> {
+                notes.add("view 只认 tree / image / both，收到 \"$req\" 已忽略。")
+                null
+            }
+        }
+        if (view != null && (finished || failed)) {
+            // 收尾轮没人消费下一轮的视图
+            view = null
+        }
+        if (view != null && actions.isEmpty() && !needImage && skillId == null) {
+            needImage = true
+            view = null
+        }
+        if (view != null && needImage) {
+            // 同时给了 need_image 和 view：need_image 立即给图更直接，
+            // view（下一轮生效）按没写处理，别让模型一轮里要两次图
+            view = null
+        }
+
         // ---- screenshot_after 归一化 ----
         // 它的语义是"这批动作之后顺手看一眼"，和"在序列末尾放一个 capture"
         // 完全等价。现在统一成后者：提示词里已经不再教这个字段，这里只为兼容
@@ -375,6 +411,7 @@ object ActionParser {
             skillId = skillId,
             skillArgs = skillArgs,
             continueOnError = continueOnError,
+            view = view,
         )
     }
 

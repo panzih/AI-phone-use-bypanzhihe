@@ -81,6 +81,10 @@ internal data class StepObservation(
     val treeRead: UiTreeRead,
     val treeObservable: Boolean,
     val interruptions: String,
+    /** 模型上一步写了 view:image：本轮只发截图 + 控件计数，不发元素列表 */
+    val viewImageOnly: Boolean = false,
+    /** 模型上一步写了 view:both：本轮元素列表照发，另外强制带一张截图 */
+    val forceImage: Boolean = false,
 )
 
 internal suspend fun AgentSession.observeStep(
@@ -278,6 +282,12 @@ internal suspend fun AgentSession.observeStep(
     // （副屏刚建好时还没有任何画面）。这时必须明确让它先 open_app。
     val blindOnVd = controller.isVirtualDisplay && tree == null
 
+    // ---- 消费模型上一步的 view 指定（ROADMAP §0 / agent-loop.md 5.2）----
+    // **一次性**：读完立刻清空，默认回落到控件树。viewImageOnly 只在
+    // "树读得到"的通道才有意义 —— 副屏本来就没有列表可压。
+    val requestedView = pendingView
+    pendingView = null
+
     // 做成 var：ask 循环里"防幻觉完成"被拦下时，要把提醒**当场**
     // 回灌给模型（同一步重新问一次），而不是等到下一步
     var interruptions = buildList {
@@ -297,10 +307,22 @@ internal suspend fun AgentSession.observeStep(
         }
         // 纸盒自己在前台：比"界面没变化"更根本的问题，先说它
         if (foreground != null && foreground == selfPackage) {
-            add(
-                "现在前台是「纸盒」自己，不是用户要操作的应用。先用 open_app 打开目标应用" +
-                    "（包名不确定就先调 list_apps 查真实包名），不要在纸盒的界面上点击。"
-            )
+            // ROADMAP §0 / agent-loop.md 5.4：前台是 BrowserActivity 但通道还是
+            // 「操作软件」—— 读到的是浏览器壳自己的工具条，不是网页。
+            // 必须指路 browser_open，别让模型从"只有三个按钮"里自己猜原因
+            if (com.aiphone.assistant.browser.BrowserDriver.isAlive()) {
+                add(
+                    "现在前台是纸盒自己的**浏览器窗口**，但当前通道还是「操作软件」——" +
+                        "元素列表是浏览器壳的（工具条 + 返回键），不是网页内容。" +
+                        "网页任务请先 browser_open 打开目标网址（会切到内置浏览器，" +
+                        "元素列表变成网页的 DOM 摘要）。"
+                )
+            } else {
+                add(
+                    "现在前台是「纸盒」自己，不是用户要操作的应用。先用 open_app 打开目标应用" +
+                        "（包名不确定就先调 list_apps 查真实包名），不要在纸盒的界面上点击。"
+                )
+            }
         }
         // 读不到控件树：这是**环境**问题，必须说清楚，否则模型会
         // 以为"界面是自绘的"而一直等，或者瞎点坐标
@@ -366,6 +388,8 @@ internal suspend fun AgentSession.observeStep(
             treeRead = treeRead,
             treeObservable = treeObservable,
             interruptions = interruptions,
+            viewImageOnly = requestedView == "image" && tree != null,
+            forceImage = requestedView == "both",
         )
     )
 }

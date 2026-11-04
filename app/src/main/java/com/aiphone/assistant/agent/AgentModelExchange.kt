@@ -47,9 +47,17 @@ internal suspend fun AgentSession.askModel(
     system: String,
     treeObservable: Boolean,
     initialInterruptions: String,
+    /** 模型上一步写了 view:image：本轮只发截图 + 控件计数（ROADMAP §0） */
+    viewImageOnly: Boolean = false,
+    /** 模型上一步写了 view:both：本轮元素列表照发，另带一张截图 */
+    forceImage: Boolean = false,
 ): AskResult {
 
     var interruptions = initialInterruptions
+
+    // view:image：**列表不发**，但树数据保留用于计数与建议（agent-loop.md 5.3）。
+    // 之后 ask 循环里一律用 effectiveTree 判断"有没有列表可发"。
+    val effectiveTree = if (viewImageOnly) null else tree
 
     // ---- 问模型（可能要图、可能要调技能，可能来回几次）----
     var parsed: ActionParser.Parsed? = null
@@ -79,7 +87,11 @@ internal suspend fun AgentSession.askModel(
     // ROADMAP §0：FLAG_SECURE 页面会给一张**全黑图**而不是报错 ——
     // 黑图不能当正常画面发给模型（会被当成"空屏"），按截不到处理
     var secureShotNote: String? = null
-    val autoImage: ByteArray? = if (tree == null && !selfForeground) {
+    // view:image / view:both 也强制带图（agent-loop.md 5.2）；
+    // 但 view:image 且纸盒在前台时照旧不给 —— 那张图只会是纸盒自己
+    val wantShot = (effectiveTree == null && !selfForeground) ||
+        (viewImageOnly || forceImage) && !selfForeground
+    val autoImage: ByteArray? = if (wantShot) {
         withContext(Dispatchers.IO) { controller.captureFrame() }
             ?.takeIf { bytes ->
                 if (com.aiphone.assistant.a11y.BlackFrame.isMostlyBlack(bytes)) {
@@ -97,7 +109,11 @@ internal suspend fun AgentSession.askModel(
     }
     if (autoImage != null) {
         logger?.line(
-            "读不到控件树，本轮自动带上截图（${autoImage.size} 字节）",
+            if (viewImageOnly || forceImage) {
+                "本轮按 view 字段要求带上截图（${autoImage.size} 字节）"
+            } else {
+                "读不到控件树，本轮自动带上截图（${autoImage.size} 字节）"
+            },
             "截图",
         )
     } else if (controller.isVirtualDisplay) {
@@ -120,7 +136,7 @@ internal suspend fun AgentSession.askModel(
         blindNoFrameSteps = 0
     } else if (autoImage != null) {
         blindNoFrameSteps = 0
-    } else if (tree == null && !selfForeground) {
+    } else if (effectiveTree == null && !selfForeground) {
         blindNoFrameSteps++
     }
     if (blindChannel && blindNoFrameSteps >= BLIND_NO_FRAME_STOP_STEPS) {
@@ -140,6 +156,9 @@ internal suspend fun AgentSession.askModel(
     var pendingImage: ByteArray? = autoImage
     var imageNote: String? = null
     var skillNote: String? = null
+    // 近黑帧：autoImage 被当黑图丢掉时必须给模型一句说明，
+    // 不然它看到的还是"这一步没有图"
+    if (secureShotNote != null) imageNote = secureShotNote
 
     // ---- 上一步 capture 截到的图：和这步的界面元素一起发 ----
     if (pendingActionShot != null) {
@@ -147,8 +166,13 @@ internal suspend fun AgentSession.askModel(
         pendingActionShot = null // 无条件清，副屏 / 超限都不残留
         when {
             // 副屏每步自带 autoImage，再附一张没有意义（而且是同一个画面）
-            tree == null ->
-                logger?.line("忽略 capture 的图：这一屏没有控件树，本步已自动带图", "截图")
+            effectiveTree == null ->
+                logger?.line(
+                    "忽略 capture 的图：" +
+                        if (viewImageOnly) "本轮按 view:image 只发一张截图"
+                        else "这一屏没有控件树，本步已自动带图",
+                    "截图",
+                )
             totalImages >= MAX_TOTAL_IMAGES -> {
                 logger?.line(
                     "忽略 capture 的图：已达本次任务图片上限（$MAX_TOTAL_IMAGES 张）",
@@ -184,10 +208,11 @@ internal suspend fun AgentSession.askModel(
         // ⚠️ 必须先判"读不到根节点"：以前这一支永远走不到，因为无障碍
         // 通道在没有元素时返回的是一句占位语而不是 null，`tree == null`
         // 永远不成立 —— 于是"无障碍没工作"被当成了"界面自绘"。
-        val noTreeReason = if (tree != null) {
-            null
-        } else {
-            when {
+        val noTreeReason = when {
+            effectiveTree != null -> null
+            // view:image：说明"为什么没有列表" + 阈值建议（agent-loop.md 5.3）
+            viewImageOnly -> AgentPrompt.viewImageOnlyReason(treeRead.nodes.size, treeRead.rootAvailable)
+            else -> when {
                 // ⚠️ 副屏必须排在"读不到根节点"**前面**：
                 // 副屏本来就拿不到控件树（rootAvailable 恒 false），
                 // 排在后面的话模型会收到"无障碍服务没真正生效"——
@@ -209,6 +234,46 @@ internal suspend fun AgentSession.askModel(
             listener.onEvent(EventKind.THOUGHT, "收到补充指令：$userNote", "暂停")
         }
 
+        // ---- 操作环境卡（ROADMAP §0 / agent-loop.md 5.1）----
+        // 每轮都注入、位置固定：模型必须知道自己在哪条通道、哪块屏、
+        // 本轮拿到的是什么、下一轮还能要什么。放 ask 循环里是因为
+        // "本轮输入"随要不要图/技能变化（重问时内容会变）。
+        val envCard = AgentPrompt.envCard(
+            mode = controller.modeLabel,
+            screen = controller.screenLabel,
+            input = when {
+                viewImageOnly -> {
+                    if (treeRead.rootAvailable) {
+                        "截图 + 控件计数 ${treeRead.nodes.size}"
+                    } else {
+                        "截图（读不到控件树，无法计数）"
+                    }
+                }
+                controller.isBrowser -> {
+                    val dom = if (effectiveTree != null) {
+                        "DOM 摘要 ${treeRead.nodes.size} 项"
+                    } else {
+                        "（这一屏没有 DOM 摘要）"
+                    }
+                    if (pendingImage != null && imageNote != null) "$dom + 截图" else dom
+                }
+                effectiveTree != null ->
+                    if (pendingImage != null && imageNote != null) {
+                        "控件树 ${treeRead.nodes.size} 项 + 截图"
+                    } else {
+                        "控件树 ${treeRead.nodes.size} 项"
+                    }
+                controller.isVirtualDisplay ->
+                    if (pendingImage != null && imageNote != null) "截图" else "（暂无画面）"
+                else -> "（这一屏没有元素列表）"
+            },
+            nextOptions = when {
+                controller.isBrowser -> "DOM 摘要 / 截图（JSON 顶层 \"view\" 字段，不写=DOM 摘要）"
+                controller.isVirtualDisplay -> "截图（副屏读不到控件树）"
+                else -> "控件树 / 截图 / 两者（JSON 顶层 \"view\" 字段，不写=控件树）"
+            },
+        )
+
         val userText = AgentPrompt.stepMessage(
             step = step,
             maxSteps = maxSteps,
@@ -216,13 +281,14 @@ internal suspend fun AgentSession.askModel(
             screenWidth = w,
             screenHeight = h,
             foregroundPackage = foreground,
-            uiTree = tree,
+            uiTree = effectiveTree,
             interruption = interruptions.ifBlank { null },
             lastResult = lastResult,
             imageNote = imageNote,
             skillNote = skillNote,
             noTreeReason = noTreeReason,
             userNote = userNote,
+            envCard = envCard,
         )
 
         // ⚠️ 必须把**实际发出去的这条消息**原样追加进 history ——
@@ -666,5 +732,8 @@ internal suspend fun AgentSession.askModel(
         fail("内部错误：没有拿到可用的模型输出。", "模型")
         return AskResult.Stop
     }
+    // view 字段随**带动作**的输出下发（agent-loop.md 5.2）：这批执行完、
+    // 下一轮生效。无动作的轮次在解析层已经转成 need_image，不会到这里。
+    if (p.view != null) pendingView = p.view
     return AskResult.Ready(p, modelOutput)
 }

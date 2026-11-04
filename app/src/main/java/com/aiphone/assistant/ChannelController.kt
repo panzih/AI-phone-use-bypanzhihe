@@ -83,6 +83,26 @@ class ChannelController(private val context: Context) {
     val isBrowser: Boolean get() = mode == Mode.BROWSER && browser != null
 
     /**
+     * 操作环境卡（ROADMAP §0）用的「模式」一行：如实报当前通道 ——
+     * 环境卡必须让模型知道自己在哪条通道上，"读到的元素很少"多半是通道没切。
+     */
+    val modeLabel: String
+        get() = when {
+            isBrowser -> "内置浏览器"
+            isVirtualDisplay -> "操作软件（shell·副屏 displayId=${display?.displayId ?: "?"}）"
+            preferredAdb -> "操作软件（shell·主屏）"
+            else -> "操作软件（无障碍）"
+        }
+
+    /** 操作环境卡的「屏幕」一行 */
+    val screenLabel: String
+        get() = when {
+            isBrowser -> "纸盒自己的浏览器窗口"
+            isVirtualDisplay -> "副屏（只有截图 + 坐标，没有控件树）"
+            else -> "前台（主屏）"
+        }
+
+    /**
      * 当前通道**能不能读到控件树**。
      *
      * Agent 用它决定"连续读不到树要不要止损"：副屏、以及没开无障碍的 ADB 模式
