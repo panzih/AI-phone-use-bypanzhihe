@@ -175,6 +175,14 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
         val root = svc.readTree() ?: return@withContext UiTreeRead.unavailable()
         val parsed = UiTreeParser.parseDetailed(root, w, h, TREE_LIMIT, svc.ownPackageName)
         lastNodes = parsed.nodes
+        if (parsed.budgetExceeded) {
+            // 抓树时间预算超了：列表是半棵树。必须说出来 —— 否则复盘时
+            // 会把"列表里没有返回键"当成"界面上没有返回键"
+            AppLog.w(
+                "抓树超过 ${UiTreeParser.TREE_BUDGET_MS}ms 预算，已上报前 ${parsed.nodes.size} 项（深树截断）",
+                "观察",
+            )
+        }
         UiTreeRead(
             // 没有元素就给 null，让"读不到元素列表"在类型上是个明确分支
             text = if (parsed.nodes.isEmpty()) null else UiTreeParser.render(parsed.nodes),
@@ -182,6 +190,7 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
             rootAvailable = true,
             rawNodeCount = parsed.rawNodeCount,
             truncated = parsed.truncated,
+            budgetExceeded = parsed.budgetExceeded,
         )
     }
 

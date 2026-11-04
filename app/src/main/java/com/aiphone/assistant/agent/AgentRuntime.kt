@@ -125,6 +125,51 @@ internal suspend fun AgentSession.localDismissAdvice(): String? {
 }
 
 /**
+ * 亮屏 / 解锁闸门（ROADMAP §0，任务开跑前）：null = 可以操作。
+ *
+ * 灭屏、锁屏时无障碍读不到真实界面（锁屏后面什么都没有），Agent 却会
+ * 照常读树、发请求、点空屏 —— 白烧一轮 token，最后表现成"模型乱点"。
+ * 开跑前就拦下，直接告诉用户原因，别让模型对着黑屏猜。
+ */
+internal fun AgentSession.screenUnlockGate(): String? {
+    val ctx = controller.appContext
+    val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+        ?: return null
+    val km = ctx.getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+        ?: return null
+    if (!pm.isInteractive) {
+        return "屏幕已关闭。AI 只在亮屏解锁时操作手机 —— 请先亮屏解锁，再重新发任务。"
+    }
+    if (km.isKeyguardLocked) {
+        return "手机在锁屏状态，无障碍读不到锁屏后面的界面。请解锁后再发任务。"
+    }
+    return null
+}
+
+/**
+ * 任务跑到一半发现灭屏/锁屏时给模型的一句话；null = 屏幕正常。
+ *
+ * 与 [screenUnlockGate] 的分工：那个是给**用户**的开跑闸门，这个是拼进
+ * user 消息的**中文原因** —— 让模型如实收尾，而不是对着锁屏继续点。
+ */
+internal fun AgentSession.screenOffAdvice(): String? {
+    val ctx = controller.appContext
+    val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+        ?: return null
+    if (!pm.isInteractive) {
+        return "⚠️ 屏幕已经关闭。现在读到的不是真实界面，继续操作没有意义。" +
+            "请直接 failed 结束，summary 写明「屏幕已关闭，请亮屏解锁后再试」。"
+    }
+    val km = ctx.getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+        ?: return null
+    if (km.isKeyguardLocked) {
+        return "⚠️ 手机在锁屏状态，无障碍读不到锁屏后面的界面。" +
+            "请直接 failed 结束，summary 写明「手机已锁屏，请解锁后再试」。"
+    }
+    return null
+}
+
+/**
  * 让开前台（lazy）。
  *
  * 用在"模型要截图"以及"执行非 open_app 动作"之前：纸盒自己还在前台，

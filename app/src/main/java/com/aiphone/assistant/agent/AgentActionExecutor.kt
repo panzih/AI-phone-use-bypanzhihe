@@ -222,8 +222,16 @@ internal suspend fun AgentSession.executeBatch(
                     delay(OVERLAY_SETTLE_MS)
                     val shot = withContext(Dispatchers.IO) { controller.captureFrame() }
                     OverlayBus.show()
-                    if (shot == null || shot.isEmpty()) {
-                        val err = controller.lastScreenshotError() ?: "未知原因"
+                    // ROADMAP §0：安全窗口（FLAG_SECURE）不报错、给一张全黑图 ——
+                    // 必须按"截不到"处理，不能把黑图当"空屏"发给模型
+                    val secure = shot != null &&
+                        com.aiphone.assistant.a11y.BlackFrame.isMostlyBlack(shot)
+                    if (shot == null || shot.isEmpty() || secure) {
+                        val err = if (secure) {
+                            "画面全黑（这一屏受系统保护，FLAG_SECURE）"
+                        } else {
+                            controller.lastScreenshotError() ?: "未知原因"
+                        }
                         logger?.error("  $single → 截图失败：$err", "执行")
                         results.add("$single → 截图失败：$err")
                     } else {

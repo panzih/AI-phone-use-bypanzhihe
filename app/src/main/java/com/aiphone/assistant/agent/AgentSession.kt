@@ -428,6 +428,14 @@ internal class AgentSession(
         pendingActionShot = null
         totalImages = 0
 
+        // ---- 0. 亮屏 / 解锁（ROADMAP §0）----
+        // 灭屏、锁屏时读不到真实界面，开跑前就拦下，别让模型对着黑屏白烧一轮
+        val screenGate = screenUnlockGate()
+        if (screenGate != null) {
+            fail(screenGate, "亮屏检查")
+            return
+        }
+
         // ---- 1. 通道就绪？ ----
         val problem = controller.probe()
         if (problem != null) {

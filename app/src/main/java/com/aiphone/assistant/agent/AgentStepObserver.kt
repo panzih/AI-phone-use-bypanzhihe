@@ -326,6 +326,8 @@ internal suspend fun AgentSession.observeStep(
         if (localAdvice != null) {
             add(localAdvice)
         }
+        // 灭屏/锁屏（ROADMAP §0）：跑到一半屏幕被关/被锁，读不到真实界面
+        screenOffAdvice()?.let { add(it) }
         // 端侧认为"可能卡住了"：把事实说清，怎么做由云端决定
         if (stuckAdvice != null) {
             add(

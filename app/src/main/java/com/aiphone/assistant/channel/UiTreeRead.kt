@@ -26,6 +26,7 @@ import com.aiphone.assistant.a11y.UiNode
  * @param text 给模型看的元素列表；null = 这一屏没有元素列表可用
  * @param rawNodeCount 遍历到的原始节点数（含被过滤掉的容器），0 表示根节点都没拿到
  * @param truncated 是否撞到了上限（界面元素比发给模型的更多）
+ * @param budgetExceeded 抓树时间预算超了（深树没遍历完），列表是半棵树
  */
 data class UiTreeRead(
     val text: String?,
@@ -33,6 +34,7 @@ data class UiTreeRead(
     val rootAvailable: Boolean = false,
     val rawNodeCount: Int = 0,
     val truncated: Boolean = false,
+    val budgetExceeded: Boolean = false,
 ) {
     /** 这一屏有没有真正可用的元素列表 */
     val hasElements: Boolean get() = nodes.isNotEmpty()

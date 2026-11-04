@@ -511,12 +511,25 @@ class AutoService : AccessibilityService() {
     fun clickNode(node: AccessibilityNodeInfo): Boolean {
         if (!node.isClickable) {
             // 节点本身不可点，往上找最近的可点父节点
-            // （很多界面把点击事件挂在外层容器上）
+            // （很多界面把点击事件挂在外层容器上）。
+            // ROADMAP §0：祖先必须**真的覆盖落点** —— 整页 RecyclerView 这类
+            // 外层容器也可能 isClickable，但点一个没覆盖住落点的容器，
+            // 不报错、界面不动，正是日志里"已执行但界面没变化"那类难查问题。
+            // 不覆盖的祖先跳过继续往上；全都覆盖不住就如实失败，
+            // 上层会退回坐标手势（至少落点是身份匹配过的那个点）。
+            val selfRect = Rect()
+            node.getBoundsInScreen(selfRect)
+            val cx = selfRect.centerX()
+            val cy = selfRect.centerY()
+            val rect = Rect()
             var parent = node.parent
             var depth = 0
             while (parent != null && depth < 5) {
                 if (parent.isClickable) {
-                    return parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    parent.getBoundsInScreen(rect)
+                    if (rect.contains(cx, cy)) {
+                        return parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    }
                 }
                 parent = parent.parent
                 depth++

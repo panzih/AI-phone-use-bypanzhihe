@@ -76,8 +76,22 @@ internal suspend fun AgentSession.askModel(
      * 自己的截图纯属浪费（每个任务的第一步都会白花一张全分辨率图）。
      */
     val selfForeground = foreground != null && foreground == selfPackage
+    // ROADMAP §0：FLAG_SECURE 页面会给一张**全黑图**而不是报错 ——
+    // 黑图不能当正常画面发给模型（会被当成"空屏"），按截不到处理
+    var secureShotNote: String? = null
     val autoImage: ByteArray? = if (tree == null && !selfForeground) {
         withContext(Dispatchers.IO) { controller.captureFrame() }
+            ?.takeIf { bytes ->
+                if (com.aiphone.assistant.a11y.BlackFrame.isMostlyBlack(bytes)) {
+                    logger?.warn("截图全黑：这一屏多半受系统保护（FLAG_SECURE），截不到真实画面", "截图")
+                    secureShotNote =
+                        "这一屏受系统保护（支付、银行类页面常见），系统不给截图，画面全黑。" +
+                            "这不是界面是空的 —— 请改用界面元素判断；元素也没有就如实说做不了。"
+                    false
+                } else {
+                    true
+                }
+            }
     } else {
         null
     }
@@ -514,8 +528,15 @@ internal suspend fun AgentSession.askModel(
                     val shot = withContext(Dispatchers.IO) { controller.captureFrame() }
                     OverlayBus.show()
 
-                    if (shot == null || shot.isEmpty()) {
-                        val err = controller.lastScreenshotError() ?: "未知原因"
+                    // 近黑帧：FLAG_SECURE 给全黑图不报错，按截不到处理（ROADMAP §0）
+                    val secure = shot != null &&
+                        com.aiphone.assistant.a11y.BlackFrame.isMostlyBlack(shot)
+                    if (shot == null || shot.isEmpty() || secure) {
+                        val err = if (secure) {
+                            "画面全黑（这一屏受系统保护，FLAG_SECURE）"
+                        } else {
+                            controller.lastScreenshotError() ?: "未知原因"
+                        }
                         logger?.error("截图失败：$err", "截图")
                         imageNote = "截图失败（$err）。只能靠界面元素判断。"
                         // 截图失败时清空 pendingImage，防止旧图污染
