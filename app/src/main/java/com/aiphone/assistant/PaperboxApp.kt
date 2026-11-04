@@ -40,6 +40,9 @@ class PaperboxApp : Application() {
         // 顺序不能反：CrashGuard 写报告时要用 AppLog 的目录和内存日志
         AppLog.attach(this)
         CrashGuard.install(this)
+        // 免费通道的 session 要跨重启复用（上游按 session 记账，换 id 会被当成刷额度）。
+        // 目录给 filesDir，写不进就算了 —— FreeLaneWire 自己会退回进程内单例。
+        com.aiphone.assistant.llm.FreeLaneWire.installStore(filesDir)
         AppLog.boot()
     }
 }

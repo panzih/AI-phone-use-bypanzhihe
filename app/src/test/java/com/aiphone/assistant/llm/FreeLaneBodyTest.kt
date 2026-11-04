@@ -116,21 +116,86 @@ class FreeLaneBodyTest {
     }
 
     @Test
-    fun `免费通道_照官方客户端发流式且不要工具`() {
-        // 逐字节抄的是官方 2.2.0 客户端抓下来的包：stream + stream_options.include_usage，
-        // 既不声明 tools 也不带 tool_choice（那套老闸门已经不用了）
+    fun `免费通道_按插件源码声明read与shell`() {
+        // 依据是 src/upstream.js 的 applyFingerprint / FINGERPRINT_TOOL_DEFINITIONS。
+        // 上游比对 description 全文与 parameters JSON：少声明、改措辞、properties:{}、
+        // 改名都是 403 FreeTierError。
         val b = body(useFree = true, thinking = ThinkingMode.OFF)
         assertTrue("免费通道必须流式", b.getBoolean("stream"))
-        assertTrue(
-            "官方客户端带 stream_options.include_usage：$b",
-            b.getJSONObject("stream_options").getBoolean("include_usage"),
-        )
-        assertFalse("免费通道不该带 tools：$b", b.has("tools"))
-        assertFalse("绝不能下发 tool_choice：$b", b.has("tool_choice"))
+        assertFalse("绝不能下发 tool_choice（v2 见到 none 就 403）：$b", b.has("tool_choice"))
 
-        // 系统提示不要被"占位工具"的说明污染
+        val tools = b.getJSONArray("tools")
+        assertEquals(2, tools.length())
+        val read = tools.getJSONObject(0).getJSONObject("function")
+        val shell = tools.getJSONObject(1).getJSONObject("function")
+        assertEquals("read", read.getString("name"))
+        assertEquals("shell", shell.getString("name"))
+
+        assertTrue(
+            "read 的描述必须是官方原文",
+            read.getString("description").startsWith(
+                "Read the contents of a file or directory. Supports text files, images, and PDFs.",
+            ),
+        )
+        assertEquals(
+            "read 的 path 参数不能省",
+            "File or directory to read",
+            read.getJSONObject("parameters").getJSONObject("properties")
+                .getJSONObject("path").getString("description"),
+        )
+        assertTrue(
+            "shell 的描述必须是官方原文",
+            shell.getString("description").startsWith(
+                "Execute a shell command and return its output. Commands run on Linux using bash.",
+            ),
+        )
+        assertTrue(
+            "shell 必须带 command 参数",
+            shell.getJSONObject("parameters").getJSONObject("properties").has("command"),
+        )
+        assertEquals(
+            "additionalProperties 必须是 false（官方 schema 就是这样）",
+            false,
+            read.getJSONObject("parameters").getBoolean("additionalProperties"),
+        )
+    }
+
+    @Test
+    fun `免费通道_system必须带env块`() {
+        // ensureFreeLaneEnvironment 的注释原话：
+        // "Reversible live controls (2026-10-28) returned 429 without it and PONG with it."
+        // —— 缺这个块不是"少点上下文"，是直接 429。
+        val b = body(useFree = true, thinking = ThinkingMode.OFF)
         val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
-        assertEquals("系统提示必须原样", "你是一个助手", system)
+        assertTrue("必须有 <env>：$system", system.contains("<env>"))
+        assertTrue("必须有工作目录：$system", system.contains("Working directory:"))
+        assertTrue("必须有平台：$system", system.contains("Platform: android"))
+        // 注入的是真工具，必须同时告诉模型别调
+        assertTrue("必须带上占位说明：$system", system.contains(FreeLaneWire.PLACEHOLDER_NOTE))
+        assertTrue("原有系统提示不能丢：$system", system.startsWith("你是一个助手"))
+    }
+
+    @Test
+    fun `免费通道_已有env块就不重复追加`() {
+        val cfg = LlmConfig(
+            baseUrl = "https://api.example.com/v1",
+            apiKey = "k",
+            model = "deepseek-v4.1-flash-free",
+            useFreeModel = true,
+            thinking = ThinkingMode.OFF,
+        )
+        val withEnv = "你是助手\n\n<env>\n  Working directory: /x\n  Platform: android\n</env>"
+        val b = LlmClient(cfg).buildBody(withEnv, listOf(ChatTurn(ChatTurn.USER, "hi")))
+        val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertEquals("<env> 只能出现一次：$system", 1, Regex("<env>").findAll(system).count())
+    }
+
+    @Test
+    fun `自定义通道不掺env块`() {
+        val b = body(useFree = false, thinking = ThinkingMode.OFF)
+        val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertEquals("自定义通道的 system 必须原样", "你是一个助手", system)
+        assertFalse("自定义通道不该有 tools", b.has("tools"))
     }
 
     @Test

@@ -26,6 +26,9 @@ object AudioProbe {
             "这个通道不收音频（HTTP ${o.code}）：${o.detail.take(160)}"
         o.code == 401 || o.code == 403 ->
             "通道拒绝了这次请求（HTTP ${o.code}），先确认 Key / 免费通道状态"
+        // 免费池的额度窗口：跟语音能力无关，别让人以为语音坏了
+        o.detail.contains("FreeUsageLimitError") ->
+            "免费通道的额度用完了（HTTP ${o.code}）：这不是语音的问题，等额度重置后再试"
         o.code == 0 -> "没连上：${o.detail.take(160)}"
         else -> "HTTP ${o.code}：${o.detail.take(160)}"
     }

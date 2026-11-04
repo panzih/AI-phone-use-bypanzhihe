@@ -1,60 +1,69 @@
 package com.aiphone.assistant.llm
 
 import java.net.HttpURLConnection
-import java.security.MessageDigest
 import java.security.SecureRandom
 
 /**
  * 免密免费通道（opencode.ai 公开池）的报文契约。
  *
- * ## 这份契约是怎么来的（别再靠文档猜）
+ * ## 这份契约的唯一依据
  *
- * 前面两版都是照着上游插件 `dsh-our-free-model` 的**文档**写的，两版都错。
- * 现在这一版是**抓的官方客户端实包**：把 `OpenCode.app` 自带的 CLI 的
- * provider baseURL 指到一个本地代理上，让它自己发一次请求，逐字节抄下来。
+ * **不是文档，是插件源码。** 上游 `dsh-our-free-model` 的 README / `docs/`
+ * 里的对照表和它自己的 `src/upstream.js` 有几处不一致（文档停在 10-16，
+ * 代码往前走到了 10-29），照文档写两次都错。这里逐项抄 `src/upstream.js`：
  *
- * 对照表（第三列是实测）：
- *
- * | 项 | 上游文档写的 v2 | **实测的官方 2.2.0 客户端** |
+ * | 项 | 抄自哪里 | 值 |
  * |---|---|---|
- * | 对话端点 | `/inference/v1/chat/completions` | **`/inference/openai/v1/chat/completions`** |
- * | User-Agent | `opencode/latest/2.0.26/cli` | `opencode/latest/2.2.0/cli`（跟着客户端版本走） |
- * | Authorization | `Bearer public` | **整个头都不发** |
- * | project | 固定字符串 `global` | 40 位 hex（sha1 形状，本机稳定不变） |
- * | 追踪头 | 没有 | **`b3` + `traceparent`** 都带 |
- * | accept | `text/event-stream` | 通配符（不是 SSE） |
- * | 工具闸门 | 必须注入逐字的 `read`/`shell` | **不需要**（客户端发的是自己那套工具） |
- * | body | `stream:true` | `stream:true` + **`stream_options.include_usage`** |
+ * | 端点 | `endpointFor()` | `/inference/v1/chat/completions` |
+ * | 鉴权 | `gatewayHeaders()` | **`authorization: Bearer public`**（不是"不发"） |
+ * | UA | `CLIENT_UA` | `opencode/latest/2.0.26/cli` |
+ * | project | `gatewayHeaders()` | 固定字符串 `global` |
+ * | 会话头 | `gatewayHeaders()` | 四个同名同值 |
+ * | 工具闸门 | `FINGERPRINT_TOOL_DEFINITIONS` | `read` + `shell`，描述与 schema **逐字** |
+ * | `tool_choice` | `applyFingerprint()` | **绝不下发**（`none` 即 403） |
+ * | env 块 | `ensureFreeLaneEnvironment()` | system 末尾追加 `<env>`，**缺了就是 429** |
+ * | 追踪头 | `gatewayHeaders()` 里没有 | 不发 `b3` / `traceparent` |
  *
- * ⚠️ **模型目录还在 `/inference/v1/models`** —— `/inference/openai/v1/models`
- * 是 404：官方客户端的模型表来自 models.dev，不走网关目录。
+ * ## `<env>` 块是硬要求，不是装饰
  *
- * ## 还有一条不是报文的问题：出口
+ * `ensureFreeLaneEnvironment()` 的注释原话：
+ * *"Reversible live controls (2026-10-28) returned 429 without it and PONG with it."*
+ * —— 同样的报文，去掉 `<env>` 就是 `429 FreeUsageLimitError`，加上就 200。
+ * 这是本项目最容易漏、也最难从错误信息里看出来的一条。
  *
- * 免费池"按出口 IP 计量"，上游插件为此专门写了 `src/egress.js`（Clash/mihomo
- * 换节点）。同一条报文，从干净的出口发就是 200，从被限流的出口发就是
- * `429 FreeUsageLimitError`，报文本身没区别。所以**本机/代理环境测出来的 429
- * 不代表代码有问题**，换网络再测。
+ * ## 怎么区分"报文错"和"额度用完"（实测有效）
+ *
+ * - `403 FreeTierError` → 客户端身份不对，报文还得改
+ * - `429 FreeUsageLimitError` → **报文已经过了闸门**，是这个池子的额度用完了
+ * - `403 RegionError` → 报文过了，是模型在本地域不可用（如 `beam-free`）
+ *
+ * 这条判据很重要：429 不等于代码错。同机官方 CLI 在额度耗尽时也是 429。
  */
 object FreeLaneWire {
 
     const val BASE_URL = "https://opencode.ai"
 
-    /** 对话端点。⚠️ 是 `/inference/openai/v1`，少一层 `openai` 就不是同一条路。 */
-    const val CHAT_PATH = "/inference/openai/v1/chat/completions"
+    /** 对话端点（`endpointFor()`：muse-spark 走 /responses、union-alpha 走 /messages，其余都是这条）。 */
+    const val CHAT_PATH = "/inference/v1/chat/completions"
 
-    /** 模型目录。只有这个路径有列表（openai/v1 那个 404）。 */
+    /** 模型目录。官方客户端不用它（它读 models.dev），但我们要用它列免费模型。 */
     const val MODELS_PATH = "/inference/v1/models"
 
-    /** 客户端指纹：整串匹配，且要跟官方最新客户端一致。 */
-    const val CLIENT_UA = "opencode/latest/2.2.0/cli"
+    /** `CLIENT_UA` 原样。⚠️ 整串匹配，前后缀任何字符都会让它不再算 v2 客户端。 */
+    const val CLIENT_UA = "opencode/latest/2.0.26/cli"
+
+    /** 公开池的唯一凭据（`gatewayHeaders()` 写死的）。 */
+    const val PUBLIC_CREDENTIAL = "Bearer public"
+
+    /** 网关用来分桶的 project（`gatewayHeaders()` 写死的字符串）。 */
+    const val PROJECT = "global"
 
     fun chatUrl(): String = BASE_URL + CHAT_PATH
 
     fun modelsUrl(): String = BASE_URL + MODELS_PATH
 
     // ------------------------------------------------------------------
-    // 身份
+    // 会话身份
     // ------------------------------------------------------------------
 
     private val rnd = SecureRandom()
@@ -66,8 +75,11 @@ object FreeLaneWire {
     /**
      * session id：`ses_` + 12 位降序时间戳 hex + 14 位 base62。
      *
-     * 那 12 位必须是 `~(ts_ms << 12 | counter)` 的低 48 位，counter 落在 1–63
-     * （低 12 位 0xfc0–0xfff）。升序写法、随机 hex、摘要都会被拒。
+     * 12 位必须是 `~(ts_ms * 0x1000 + seq)` 的低 48 位（`mintSessionId()` 原样）。
+     * 低 12 位落 0xfc0–0xfff —— 解码出来是 `seq`，上游要求它很小（实测 0–16 通过、
+     * ≥100 拒绝），所以每毫秒归零重计。
+     *
+     * 摘要派生、随机 hex、升序时间戳都会被拒。
      */
     fun newSessionId(): String {
         val now = System.currentTimeMillis()
@@ -76,71 +88,293 @@ object FreeLaneWire {
                 lastStamp = now
                 seq = 0
             }
-            seq = (seq % 63) + 1
+            seq += 1
             seq
         }
         val value = ((now shl 12) or counter.toLong()).inv() and 0xFFFFFFFFFFFFL
-        val timeHex = value.toString(16).padStart(12, '0')
-        return "ses_$timeHex" + (0 until 14).map { BASE62[rnd.nextInt(62)] }.joinToString("")
+        return "ses_" + value.toString(16).padStart(12, '0') +
+            (0 until 14).map { BASE62[rnd.nextInt(62)] }.joinToString("")
     }
 
     /**
-     * project id：40 位 hex。官方客户端发的是 sha1 形状的稳定值。
-     *
-     * 这边用一个固定种子算 sha1 —— 只要不变，每次启动都是同一个 project，
-     * 别用随机值（网关按 project 记账，随机等于每轮都换个新桶）。
+     * session 的落盘目录，由 [com.aiphone.assistant.PaperboxApp] 在启动时装上。
+     * 单测里不装 —— 那时退回"进程内一个"，不影响断言。
      */
-    val projectId: String by lazy {
-        val digest = MessageDigest.getInstance("SHA-1").digest("paperbox:default-project".toByteArray())
-        digest.joinToString("") { "%02x".format(it) }
+    @Volatile private var storeDir: java.io.File? = null
+
+    /** 安装持久化目录（应用 filesDir）。只应在 Application.onCreate 调一次。 */
+    fun installStore(dir: java.io.File?) {
+        storeDir = dir
     }
+
+    @Volatile private var persisted: String? = null
+
+    /**
+     * 这个安装的 session id：**铸造一次，之后一直用它**。
+     *
+     * 上游插件的原话是 "mints once with `mintSessionId()` and persists it"，
+     * 并且 "No error or retry rotates the session"。每请求换新 id 会被当成
+     * 刷额度：实测同一个 id 连发两次能过，而每次都换 id 的那组全是 429。
+     *
+     * 也不能每次冷启动都换 —— 落盘到 `filesDir/free-lane-session`。
+     */
+    fun session(): String {
+        persisted?.let { return it }
+        synchronized(this) {
+            persisted?.let { return it }
+            val file = storeDir?.let { java.io.File(it, "free-lane-session") }
+            val fromDisk = runCatching {
+                file?.takeIf { it.isFile }?.readText()?.trim()?.takeIf { SESSION_RE.matches(it) }
+            }.getOrNull()
+            if (fromDisk != null) {
+                persisted = fromDisk
+                return fromDisk
+            }
+            val minted = newSessionId()
+            persisted = minted
+            runCatching {
+                file?.parentFile?.mkdirs()
+                file?.writeText(minted)
+            }
+            return minted
+        }
+    }
+
+    /** 与上游 `SESSION_RE` 同一条：`ses_` + 12 位小写 hex + 14 位 base62。 */
+    private val SESSION_RE = Regex("^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$")
 
     // ------------------------------------------------------------------
-    // 请求头
+    // 请求头（gatewayHeaders() 逐项）
     // ------------------------------------------------------------------
 
     /**
-     * 一次请求的追踪头。官方客户端每次都新生成一对，网关侧用来串请求。
-     * 我们的用途只是"看起来一样"，值本身没有语义。
-     */
-    private fun traceHeaders(): Pair<String, String> {
-        // traceId = 16 字节（32 hex），spanId = 8 字节（16 hex），和官方客户端一致
-        val trace = randomHex(32)
-        val span = randomHex(16)
-        return "$trace-$span-1-$span" to "00-$trace-$span-01"
-    }
-
-    private fun randomHex(len: Int): String {
-        val sb = StringBuilder(len)
-        repeat(len) { sb.append("0123456789abcdef"[rnd.nextInt(16)]) }
-        return sb.toString()
-    }
-
-    /**
-     * 免费通道的完整请求头。
+     * 一次请求的头，**纯数据**（`gatewayHeaders()` 逐项）。
      *
-     * ⚠️ **不发 `Authorization`**：免费池靠客户端身份识别，加了 `Bearer public`
-     * 反而会被当成"非官方客户端"的调用方（实测直接 429）。
-     * ⚠️ 也不发 `x-opencode-request` —— 那是 v1 专用头。
+     * 为什么不直接写在 [applyHeaders] 里：`HttpURLConnection` 会把
+     * `Authorization` 从 `requestProperties` 里藏起来，断言看不见它。
+     * 拆出一个 map 之后，测试断言的就是**真正要发出去的东西**。
+     *
+     * ⚠️ 三条容易搞错的：
+     * - **`Authorization: Bearer public` 必须发**。不发不是"更干净"，是过不了鉴权；
+     * - **不发 `x-opencode-request`** —— v1 专用头，v2 收到就 403；
+     * - **不发 `b3` / `traceparent`** —— 官方客户端会带，但这个插件不带，不需要。
      */
+    fun headersFor(
+        session: String,
+        stream: Boolean,
+        accept: String? = null,
+    ): LinkedHashMap<String, String> = linkedMapOf(
+        "Content-Type" to "application/json",
+        "Authorization" to PUBLIC_CREDENTIAL,
+        "User-Agent" to CLIENT_UA,
+        "x-opencode-client" to "cli",
+        "x-opencode-session" to session,
+        "x-opencode-session-id" to session,
+        "x-session-affinity" to session,
+        "x-session-id" to session,
+        "x-opencode-project" to PROJECT,
+        "Accept" to (accept ?: if (stream) "text/event-stream" else "*/*"),
+    )
+
+    /** 把 [headersFor] 挂到连接上。 */
     fun applyHeaders(
         conn: HttpURLConnection,
         session: String,
         stream: Boolean,
         accept: String? = null,
     ) {
-        val (b3, traceparent) = traceHeaders()
-        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-        conn.setRequestProperty("Accept", accept ?: "*/*")
-        conn.setRequestProperty("User-Agent", CLIENT_UA)
-        conn.setRequestProperty("x-opencode-client", "cli")
-        conn.setRequestProperty("x-opencode-project", projectId)
-        conn.setRequestProperty("x-opencode-session", session)
-        conn.setRequestProperty("x-opencode-session-id", session)
-        conn.setRequestProperty("x-session-affinity", session)
-        conn.setRequestProperty("x-session-id", session)
-        conn.setRequestProperty("b3", b3)
-        conn.setRequestProperty("traceparent", traceparent)
+        headersFor(session, stream, accept).forEach { (name, value) ->
+            conn.setRequestProperty(name, value)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 工具闸门（FINGERPRINT_TOOL_DEFINITIONS 逐字）
+    // ------------------------------------------------------------------
+
+    /** 闸门要求的两个工具名（`FINGERPRINT_TOOLS`）。 */
+    val FINGERPRINT_TOOLS = listOf("read", "shell")
+
+    private const val READ_DESCRIPTION =
+        "Read the contents of a file or directory. Supports text files, images, and PDFs. " +
+            "Images and PDFs are presented directly to the model. Each text line is prefixed by " +
+            "its 1-based line number as <line>: <content>. The prefix is for reference and is " +
+            "not part of the file content. Directory entries are returned one per line. Use " +
+            "offset and limit to read large files or directories in sections. Prefer one larger " +
+            "read over many small slices, and use grep to find specific content in large files."
+
+    private const val SHELL_DESCRIPTION =
+        "Execute a shell command and return its output. Commands run on Linux using bash. " +
+            "Quote file paths containing spaces or special characters. Prefer dedicated tools " +
+            "over shell commands when possible. When output is large, the full result is saved " +
+            "to a file and a truncated preview is returned. Rely on automatic truncation unless " +
+            "filtering the output is more useful. Commands accept an optional timeout, background " +
+            "commands have no timeout by default. Background commands return immediately, and " +
+            "you will be notified when they complete."
+
+    /**
+     * 注入给网关看的两个工具定义。
+     *
+     * ⚠️ **一个字都不要改**。上游比对的是 `description` 全文与 `parameters` 的 JSON：
+     * 改措辞、精简 schema、`properties:{}`、改名，都是 403 FreeTierError。
+     * 这两段是从 `src/upstream.js` 里原样复制的。
+     */
+    fun toolsJson(): org.json.JSONArray {
+        val tools = org.json.JSONArray()
+
+        tools.put(
+            org.json.JSONObject().apply {
+                put("type", "function")
+                put(
+                    "function",
+                    org.json.JSONObject().apply {
+                        put("name", "read")
+                        put("description", READ_DESCRIPTION)
+                        put(
+                            "parameters",
+                            org.json.JSONObject().apply {
+                                put("type", "object")
+                                put(
+                                    "properties",
+                                    org.json.JSONObject().apply {
+                                        put(
+                                            "path",
+                                            org.json.JSONObject().apply {
+                                                put("type", "string")
+                                                put("description", "File or directory to read")
+                                            },
+                                        )
+                                        put(
+                                            "offset",
+                                            org.json.JSONObject().apply {
+                                                put("type", "integer")
+                                                put("minimum", 0)
+                                                put(
+                                                    "description",
+                                                    "The line or directory entry to start reading from (1-based)",
+                                                )
+                                            },
+                                        )
+                                        put(
+                                            "limit",
+                                            org.json.JSONObject().apply {
+                                                put("type", "integer")
+                                                put("minimum", 0)
+                                                put(
+                                                    "description",
+                                                    "The maximum number of lines or directory entries to read " +
+                                                        "(defaults to and capped at 2000)",
+                                                )
+                                            },
+                                        )
+                                    },
+                                )
+                                put("required", org.json.JSONArray().put("path"))
+                                put("additionalProperties", false)
+                            },
+                        )
+                    },
+                )
+            },
+        )
+
+        tools.put(
+            org.json.JSONObject().apply {
+                put("type", "function")
+                put(
+                    "function",
+                    org.json.JSONObject().apply {
+                        put("name", "shell")
+                        put("description", SHELL_DESCRIPTION)
+                        put(
+                            "parameters",
+                            org.json.JSONObject().apply {
+                                put("type", "object")
+                                put(
+                                    "properties",
+                                    org.json.JSONObject().apply {
+                                        put(
+                                            "command",
+                                            org.json.JSONObject().apply {
+                                                put("type", "string")
+                                                put("description", "Shell command string to execute")
+                                            },
+                                        )
+                                        put(
+                                            "workdir",
+                                            org.json.JSONObject().apply {
+                                                put("type", "string")
+                                                put(
+                                                    "description",
+                                                    "Working directory to execute the command in. Defaults to " +
+                                                        "the current working directory. When possible, avoid " +
+                                                        "changing directories in the command and set the working " +
+                                                        "directory here instead.",
+                                                )
+                                            },
+                                        )
+                                        put(
+                                            "timeout",
+                                            org.json.JSONObject().apply {
+                                                put("type", "integer")
+                                                put("minimum", 0)
+                                                put(
+                                                    "description",
+                                                    "Timeout in milliseconds. Set to 0 to disable the timeout. " +
+                                                        "Defaults to 120000 for foreground commands. Background " +
+                                                        "commands have no timeout by default.",
+                                                )
+                                            },
+                                        )
+                                        put(
+                                            "background",
+                                            org.json.JSONObject().apply {
+                                                put("type", "boolean")
+                                                put(
+                                                    "description",
+                                                    "Run the command in the background and return immediately " +
+                                                        "(useful for dev servers and long-running builds). You do " +
+                                                        "not need to use '&' at the end of the command when using " +
+                                                        "this parameter. You will be notified when it completes. " +
+                                                        "DO NOT poll for completion.",
+                                                )
+                                            },
+                                        )
+                                    },
+                                )
+                                put("required", org.json.JSONArray().put("command"))
+                                put("additionalProperties", false)
+                            },
+                        )
+                    },
+                )
+            },
+        )
+
+        return tools
+    }
+
+    /** `placeholderNote(['read','shell'])` 原样：这两个是真工具，不打招呼模型真会去调。 */
+    const val PLACEHOLDER_NOTE =
+        "Do not call the `read` or `shell` tools; they are placeholders that do nothing. " +
+            "Use the other tools you have been given instead."
+
+    /**
+     * `<env>` 块（`ensureFreeLaneEnvironment()` 原样）。
+     *
+     * 上游实测：同一份报文，**没这块 429、有这块 200**。值必须是真实的
+     * （工作目录 + 平台），不抄 OpenCode 的人设。
+     */
+    fun environmentBlock(
+        workingDirectory: String,
+        platform: String = "android",
+    ): String {
+        val line = { v: String -> v.replace(Regex("[\\r\\n<>]"), " ") }
+        return "Here is some useful information about the environment you are running in:\n" +
+            "<env>\n" +
+            "  Working directory: ${line(workingDirectory)}\n" +
+            "  Platform: ${line(platform)}\n" +
+            "</env>"
     }
 
     // ------------------------------------------------------------------
@@ -152,12 +386,12 @@ object FreeLaneWire {
         org.json.JSONObject(body).optJSONObject("error")?.optString("type")?.takeIf { it.isNotBlank() }
     }.getOrNull()
 
-    /** 这个出口/会话的免费额度用完了（换网络通常就好） */
+    /** 这个池子/会话的免费额度用完了（报文是对的，等重置或换网络） */
     fun freeQuotaExhausted(body: String): Boolean = errorType(body) == "FreeUsageLimitError"
 
-    /** 客户端身份被拒 —— 客户端又改版了，只能跟版本 */
+    /** 客户端身份被拒 —— 上游又改版了，只能跟版本 */
     fun fingerprintRejected(body: String): Boolean = errorType(body) == "FreeTierError"
 
-    /** 这个模型在当前地区不可用 */
+    /** 这个模型在当前地区不可用（如 beam-free 对国内出口） */
     fun regionBlocked(body: String): Boolean = errorType(body) == "RegionError"
 }

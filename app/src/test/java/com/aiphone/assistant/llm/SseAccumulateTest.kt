@@ -2,6 +2,7 @@ package com.aiphone.assistant.llm
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -79,5 +80,40 @@ class SseAccumulateTest {
             "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n" +
             "data: [DONE]\n"
         assertEquals("A", contentOf(raw))
+    }
+
+    @Test
+    fun `content 为 JSON null 的 delta 不产生字面 null`() {
+        // 网关从 Anthropic/Gemini 归一成 OpenAI 流时，推理段常带 "content": null。
+        // Android org.json 的 optString 对 JSON null 返回字符串 "null"（不是空串），
+        // 不拦的话回答就是 "nullnull…"，ActionParser 永远解析不出 JSON ——
+        // 表现成"免费模型在 App 里完全不能用"，而模型本身是好的。
+        val raw = sse(
+            """{"content":null,"reasoning_content":"先想"}""",
+            """{"content":null,"reasoning_content":"再想"}""",
+            """{"content":"答案"}""",
+        )
+        assertEquals("回答非空时以回答为准", "答案", contentOf(raw))
+    }
+
+    @Test
+    fun `content 全为 null 且只有思维链时兜底`() {
+        val raw = sse(
+            """{"content":null,"reasoning_content":"想"}""",
+            """{"content":null,"reasoning_content":"还想"}""",
+        )
+        assertEquals("想还想", contentOf(raw))
+    }
+
+    @Test
+    fun `模型只调占位工具时回灌提示而不是空响应`() {
+        // read/shell 是网关门禁逼着声明的真工具；模型不理会占位说明直接去调时，
+        // 老逻辑攒出空内容 → 三连重发 → 任务失败。现在必须回一句提示让它自纠。
+        val raw = sse(
+            """{"tool_calls":[{"index":0,"id":"call_1","type":"function",""" +
+                """"function":{"name":"read","arguments":"{\"path\":\"/sdcard\"}"}}]}""",
+        )
+        val text = contentOf(raw)
+        assertTrue("必须提示占位工具不可调：$text", text.contains("占位工具"))
     }
 }

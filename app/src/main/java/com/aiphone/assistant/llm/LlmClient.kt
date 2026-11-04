@@ -233,13 +233,14 @@ class LlmClient(private val cfg: LlmConfig) {
     private val activeConn = AtomicReference<HttpURLConnection?>(null)
 
     /**
-     * 免费通道的 session id：整个 App 进程复用一个。
+     * 免费通道的 session id：**铸造一次、落盘、之后一直用它**。
      *
-     * 免费池的额度是**按 session 记账**的，每个请求换一个新 id 会把额度打散成
-     * 一堆"新会话"，反而更快撞 429。id 的编码规则（反相时间戳 + counter 1–63）
-     * 在 [FreeLaneWire.newSessionId]。
+     * 上游插件的做法（`sessionForConversation()`）：`mintSessionId()` 铸一次写进
+     * `session-map.json`，此后跨重启复用；"No error or retry rotates the session"。
+     * 每请求换新 id 会被当成刷额度 —— 实测同一 id 连发两次能过，每次换 id 的那组全 429。
+     * 铸造规则（反相时间戳 + counter 递增）在 [FreeLaneWire.newSessionId]。
      */
-    private val freeSessionId = FreeLaneWire.newSessionId()
+    private val freeSessionId = FreeLaneWire.session()
 
     /** 外部叫停（急停按钮 / 任务被停止）。置上之后不再重发 */
     private val abortFlag = AtomicBoolean(false)
@@ -560,6 +561,10 @@ class LlmClient(private val cfg: LlmConfig) {
     internal fun accumulateSse(raw: String): String {
         val content = StringBuilder()
         val reasoning = StringBuilder()
+        // 网关门禁逼着声明的 read/shell 是**真工具**：模型不理会占位说明时，
+        // 会输出 tool_calls 而不是文字。全 tool_calls 的回复按老逻辑会攒成
+        // 空内容 → 三连重发 → "模型连续 N 次没有正常响应"，任务直接死。
+        var sawToolCall = false
         raw.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (!trimmed.startsWith("data:")) return@forEach
@@ -573,14 +578,46 @@ class LlmClient(private val cfg: LlmConfig) {
             val choices = json.optJSONArray("choices") ?: return@forEach
             if (choices.length() == 0) return@forEach
             val delta = choices.optJSONObject(0)?.optJSONObject("delta") ?: return@forEach
-            delta.optString("content")?.takeIf { it.isNotEmpty() }?.let { content.append(it) }
-            delta.optString("reasoning_content")?.takeIf { it.isNotEmpty() }?.let { reasoning.append(it) }
+            val toolCalls = delta.optJSONArray("tool_calls")
+            if (toolCalls != null && toolCalls.length() > 0) sawToolCall = true
+            // ⚠️ 必须先 isNull 再取：Android org.json 对值为 JSON null 的字段
+            // optString 返回的是字符串 "null"（不是空串），直接拼会把字面
+            // "nullnull…" 混进回答里 —— 推理模型的 delta 常带 "content": null。
+            // UpdateChecker.parseInfo 对 downloadUrl 记过同一个坑。
+            if (!delta.isNull("content")) {
+                delta.optString("content").takeIf { it.isNotEmpty() }?.let { content.append(it) }
+            }
+            if (!delta.isNull("reasoning_content")) {
+                delta.optString("reasoning_content").takeIf { it.isNotEmpty() }?.let { reasoning.append(it) }
+            }
         }
         val answer = content.toString().ifBlank { reasoning.toString() }
         if (content.isBlank() && reasoning.isNotBlank()) {
             Log.i(TAG, "免费通道：模型只回了思维链（${reasoning.length} 字），用它兜底当回答")
         } else if (reasoning.isNotBlank()) {
             Log.i(TAG, "免费通道：模型输出含思维链 ${reasoning.length} 字（未进入动作解析）")
+        }
+        if (answer.isBlank() && sawToolCall) {
+            // 与其当"空响应"烧光重发次数，不如把话说回来：占位工具什么都不会做，
+            // 让模型直接输出本轮的 JSON。这句话会作为 assistant 回合进历史并回灌，
+            // 模型下一轮就能自纠（ActionParser 解析失败的那条路也兜得住它）。
+            Log.w(TAG, "免费通道：模型没有输出文字，直接调了 read/shell 占位工具，交回提示让它继续")
+            return JSONObject()
+                .put(
+                    "choices",
+                    JSONArray().put(
+                        JSONObject().put(
+                            "message",
+                            JSONObject().put(
+                                "content",
+                                "（你没有输出任何文字，而是调用了 read / shell —— 它们是网关门禁的" +
+                                    "占位工具，什么都不会做，也拿不到任何结果。请直接输出本轮的 JSON：" +
+                                    "在 actions 里给出要执行的动作，或用 finished / failed 收尾。）",
+                            ),
+                        ),
+                    ),
+                )
+                .toString()
         }
         return JSONObject()
             .put(
@@ -717,7 +754,30 @@ class LlmClient(private val cfg: LlmConfig) {
         }
         val wav = AudioProbe.silentWav()
         val b64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
-        val body = AudioProbe.buildBody(cfg.model, b64).toByteArray(Charsets.UTF_8)
+        val body: ByteArray = if (cfg.useFreeModel) {
+            // 免费通道的探针报文必须过同一道 v2 闸门：逐字 tools（read/shell）与
+            // system 里的 <env> 块缺一个都是 403 FreeTierError。不补齐的话探针
+            // 永远报"通道拒绝"，看起来像"不收音频"，其实是报文没进门。
+            val obj = JSONObject(AudioProbe.buildBody(cfg.model, b64))
+            val userMessages = obj.optJSONArray("messages") ?: JSONArray()
+            val messages = JSONArray().put(
+                JSONObject()
+                    .put("role", "system")
+                    .put(
+                        "content",
+                        FreeLaneWire.environmentBlock(workingDirectory = "/sdcard", platform = "android") +
+                            "\n\n" + FreeLaneWire.PLACEHOLDER_NOTE,
+                    ),
+            )
+            for (i in 0 until userMessages.length()) messages.put(userMessages.get(i))
+            obj.put("messages", messages)
+            obj.put("tools", FreeLaneWire.toolsJson())
+            // 探针只看状态码；非流式同样过闸（docs/oc-free-transport.md 2026-10-29 实测 200）
+            obj.put("stream", false)
+            obj.toString().toByteArray(Charsets.UTF_8)
+        } else {
+            AudioProbe.buildBody(cfg.model, b64).toByteArray(Charsets.UTF_8)
+        }
         return try {
             val conn = (java.net.URL(endpoint()).openConnection() as java.net.HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -801,10 +861,26 @@ class LlmClient(private val cfg: LlmConfig) {
     ): JSONObject {
         val messages = JSONArray()
 
+        // 免费通道要在 system 里补两段（都是上游插件实测的硬要求，见 FreeLaneWire）：
+        //   1. `<env>` 块 —— ensureFreeLaneEnvironment 的注释原话是
+        //      "returned 429 without it and PONG with it"，缺了就是额度错误的样子；
+        //   2. 占位说明 —— read/shell 是网关门禁逼着声明的**真工具**，
+        //      不打招呼模型真的会去调 shell 跑命令。
+        val systemContent = if (cfg.useFreeModel) {
+            val withEnv = if (Regex("<env>[\\s\\S]*?</env>", RegexOption.IGNORE_CASE).containsMatchIn(system)) {
+                system
+            } else {
+                system + "\n\n" + FreeLaneWire.environmentBlock(workingDirectory = "/sdcard", platform = "android")
+            }
+            "$withEnv\n\n${FreeLaneWire.PLACEHOLDER_NOTE}"
+        } else {
+            system
+        }
+
         messages.put(
             JSONObject().apply {
                 put("role", "system")
-                put("content", system)
+                put("content", systemContent)
             }
         )
 
@@ -909,15 +985,18 @@ class LlmClient(private val cfg: LlmConfig) {
             } else {
                 effort?.let { put("reasoning_effort", it) }
             }
-            // 免费通道（opencode.ai 免费池）的报文，逐字节照官方客户端（详见 FreeLaneWire）：
-            //   1. 端点 /inference/openai/v1/chat/completions
-            //   2. 必须 stream:true，并带 stream_options.include_usage（官方就是这么发的）
-            //   3. **不发 tools**：客户端那道老闸门已经不用了，凭空塞工具反而多一份风险
-            //   4. 请求头里没有 Authorization（由 FreeLaneWire.applyHeaders 负责）
+            // 免费通道（opencode.ai 免费池）的报文，**逐项抄上游插件 src/upstream.js**：
+            //   1. 端点 /inference/v1/chat/completions（endpointFor）
+            //   2. 必须 stream:true（插件全线强制流式）
+            //   3. tools 必须声明逐字的 read + shell（applyFingerprint / FINGERPRINT_TOOL_DEFINITIONS）
+            //      —— 少了、改了措辞、properties:{} 都是 403 FreeTierError
+            //   4. **绝不下发 tool_choice**（v2 见到 "none" 直接 403）
+            //   5. system 里必须有 <env> 块（ensureFreeLaneEnvironment，缺它就是 429）
+            //   6. 请求头由 FreeLaneWire.applyHeaders 负责（含 Bearer public）
             // 断言在 FreeLaneBodyTest 里钉着，改这条链路先跑它。
             if (cfg.useFreeModel) {
                 put("stream", true)
-                put("stream_options", JSONObject().put("include_usage", true))
+                put("tools", FreeLaneWire.toolsJson())
             } else {
                 // 自定义通道保持非流式，响应是单个 JSON
                 put("stream", false)
@@ -1007,10 +1086,13 @@ class LlmClient(private val cfg: LlmConfig) {
 
         // 有些模型（尤其是带推理的）会把内容放在 reasoning_content，
         // content 为空。两个都看看，别直接判失败。
-        val content = message.optString("content", "").ifBlank {
-            message.optString("reasoning_content", "")
-        }
-        if (content.isBlank()) {
+        // ⚠️ 先 isNull 再取（同 accumulateSse）：JSON null 经 optString 会
+        // 变成字符串 "null"，不拦的话整条回复就是字面 "null"，既不走
+        // reasoning 兜底也不判空，最后只会报"解析失败"。
+        val content = if (message.isNull("content")) "" else message.optString("content", "")
+        val reasoning = if (message.isNull("reasoning_content")) "" else message.optString("reasoning_content", "")
+        val text = content.ifBlank { reasoning }
+        if (text.isBlank()) {
             Log.w(TAG, "模型返回了空内容：${raw.take(300)}")
             // 温度默认 1.0，重发一次拿到不同结果的概率不低 —— 值得再试
             return Try.Retry("模型返回了空内容")
@@ -1019,7 +1101,7 @@ class LlmClient(private val cfg: LlmConfig) {
         val usage = root.optJSONObject("usage")
         return Try.Ok(
             LlmResult.Ok(
-                text = content,
+                text = text,
                 promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
                 completionTokens = usage?.optInt("completion_tokens", 0) ?: 0,
                 cacheHitTokens = usage?.optInt("prompt_cache_hit_tokens", 0) ?: 0,
