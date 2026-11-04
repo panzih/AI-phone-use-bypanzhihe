@@ -426,6 +426,25 @@ data class AppSettings(
      */
     val allowBrowserEval: Boolean = false,
 
+    /**
+     * 「操作记录」（录制 → 学成技能）的入口开关。
+     *
+     * 0.9.23 下架时承诺"设置里留一个实验功能开关"，实际只有硬编码常量，
+     * 开关一直没做（ROADMAP §3）。现在补上：默认关（入口不露出），
+     * 想试的用户到「更多设置」里打开 —— 功能本身（RecordingScreen /
+     * MacroStore / 已录技能）一直都在。
+     */
+    val recordingEntry: Boolean = false,
+
+    /**
+     * 首次安装的权限引导看过了没有（ROADMAP §3）。
+     *
+     * README 写"按引导开无障碍"，实际应用里从来没有这个引导 —— 权限入口
+     * 藏在侧边抽屉里，新用户对着主界面不知道下一步该干什么。现在首启
+     * 弹一次欢迎引导，确认或关掉都算看过（不反复打扰）。
+     */
+    val onboardingDone: Boolean = false,
+
     // ---------- 操作授权 ----------
     val mode: OperationMode = OperationMode.ACCESSIBILITY,
 

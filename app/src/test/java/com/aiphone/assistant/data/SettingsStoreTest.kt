@@ -4,6 +4,8 @@ import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -135,5 +137,57 @@ class SettingsStoreTest {
         // 改别的字段不能把「已跳过」抹掉 —— 否则用户每次改设置都会被重新提示同一版
         store.save(store.load().copy(maxSteps = 10))
         assertEquals(74, store.load().skippedUpdateCode)
+    }
+
+    // ---------------------------------------------------------------
+    // ROADMAP §2：Key 加密失败不再静默存明文
+    // ---------------------------------------------------------------
+
+    /** 加密必坏的假加密器（模拟 Keystore 挂掉） */
+    private class BrokenCipher : ByteCipher {
+        override fun encrypt(plain: ByteArray): ByteArray = throw IllegalStateException("Keystore 坏了")
+        override fun decrypt(blob: ByteArray): ByteArray = throw IllegalStateException("Keystore 坏了")
+    }
+
+    @Test
+    fun `加密失败_不把明文写进盘_并返回警告`() {
+        val brokenStore = SettingsStore(context, SecretCrypto(BrokenCipher()))
+        val warning = brokenStore.save(AppSettings(apiKey = "sk-plain-on-disk"))
+
+        assertNotNull("必须返回警告", warning)
+        val raw = rawStored()
+        assertTrue(
+            "盘上绝不能出现明文：$raw",
+            raw == null || raw.isEmpty() || raw.startsWith(SecretCrypto.PREFIX),
+        )
+    }
+
+    @Test
+    fun `加密失败_之前存过的密文保持原样`() {
+        // 先用正常加密存一次
+        store.save(AppSettings(apiKey = "sk-good-key"))
+        val before = rawStored()
+        assertTrue(before!!.startsWith(SecretCrypto.PREFIX))
+
+        // 换成坏加密器再保存别的字段：旧 Key 必须原样保留
+        val brokenStore = SettingsStore(context, SecretCrypto(BrokenCipher()))
+        val warning = brokenStore.save(AppSettings(apiKey = "sk-new-key-cannot-seal"))
+        assertNotNull(warning)
+        assertEquals("之前的密文不能被动过", before, rawStored())
+    }
+
+    @Test
+    fun `加密失败_其他字段照常保存`() {
+        val brokenStore = SettingsStore(context, SecretCrypto(BrokenCipher()))
+        brokenStore.save(AppSettings(apiKey = "sk-x", modelName = "qwen2.5", maxSteps = 9))
+        val reloaded = brokenStore.load()
+        assertEquals("qwen2.5", reloaded.modelName)
+        assertEquals(9, reloaded.maxSteps)
+    }
+
+    @Test
+    fun `空Key_加密失败也不告警`() {
+        val brokenStore = SettingsStore(context, SecretCrypto(BrokenCipher()))
+        assertNull("没填 Key 的保存不该有警告", brokenStore.save(AppSettings(apiKey = "")))
     }
 }

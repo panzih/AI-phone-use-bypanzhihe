@@ -159,6 +159,30 @@ object OverlayBus {
         _supplementSignal.value = 0L
     }
 
+    // ------------------------------------------------------------------
+    // 输入法高度转发（ROADMAP §3：悬浮条跟随键盘上移）
+    // ------------------------------------------------------------------
+
+    /**
+     * 主界面观察到的输入法高度（px）。
+     *
+     * 悬浮窗窗口**拿不到 IME insets**：系统只把键盘 insets 发给当前获得
+     * 输入焦点的窗口，overlay 窗口永远读到 0。所以由主界面从自己窗口的
+     * insets 里读出真实键盘高度，经 [reportImeInset] 转发给服务。
+     * Android 10 及以下系统不报键盘 insets，这里保持 0，
+     * 悬浮条维持原位（平台限制，不是没做）。
+     */
+    @Volatile
+    var imeInsetPx: Int = 0
+        private set
+
+    /** 主界面把最新键盘高度交上来；[OverlayService.onImeInset] 会跟着被调 */
+    fun reportImeInset(px: Int) {
+        if (imeInsetPx == px) return
+        imeInsetPx = px
+        service?.onImeInset(px)
+    }
+
     /**
      * 「接管」按钮按了 —— = 原来的「急停」。
      *

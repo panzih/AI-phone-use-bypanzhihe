@@ -1,6 +1,7 @@
 package com.aiphone.assistant.agent
 
 import com.aiphone.assistant.agent.Agent.EventKind
+import com.aiphone.assistant.agent.AgentLimits.BLIND_NO_FRAME_STOP_STEPS
 import com.aiphone.assistant.agent.AgentLimits.MAX_IMAGE_REQUESTS
 import com.aiphone.assistant.agent.AgentLimits.MAX_SKILL_CALLS
 import com.aiphone.assistant.agent.AgentLimits.MAX_TOTAL_IMAGES
@@ -90,6 +91,32 @@ internal suspend fun AgentSession.askModel(
             "副屏现在没有画面（连截图都抓不到）：多半是还没有应用切到副屏上",
             "副屏",
         )
+    }
+
+    // ---- 盲通道连续没画面就止损（ROADMAP §3）----
+    //
+    // 副屏上截图是模型唯一的信息来源：连着几步既没有树也没有图，
+    // 它只能拿历史里的旧布局瞎点 —— 以前这里只提示不计数，会一直盲点
+    // 到模型自己宣布完成。留 3 步余量是给"第一步 open_app 把应用切到
+    // 副屏"的正常流程（那几步本来就没有画面）；开完应用还连续没有，
+    // 就是渲染/通道真的坏了。有树的通道不受影响：截图失败对它只是
+    // 少一张参考图，imageNote 就够。
+    val blindChannel = !controller.canDumpUiTree
+    if (!blindChannel) {
+        blindNoFrameSteps = 0
+    } else if (autoImage != null) {
+        blindNoFrameSteps = 0
+    } else if (tree == null && !selfForeground) {
+        blindNoFrameSteps++
+    }
+    if (blindChannel && blindNoFrameSteps >= BLIND_NO_FRAME_STOP_STEPS) {
+        val msg = "连续 $blindNoFrameSteps 步抓不到画面（副屏上一直没有可截取的内容）。" +
+            "AI 在完全看不到界面的情况下继续只会瞎点。先确认副屏上有应用在跑、" +
+            "副屏画面正常，再重新发任务。"
+        logger?.error(msg, "副屏")
+        listener.onEvent(EventKind.ERROR, msg, "副屏无画面")
+        finish(false, msg)
+        return AskResult.Stop
     }
     // 副屏 + 这一屏没有控件树 = 模型手里可能**一点信息都没有**
     // （若连截图也抓不到）。这种情况必须告诉它"先开应用"，
@@ -493,7 +520,20 @@ internal suspend fun AgentSession.askModel(
                         imageNote = "截图失败（$err）。只能靠界面元素判断。"
                         // 截图失败时清空 pendingImage，防止旧图污染
                         pendingImage = null
+                        // 盲通道里"模型要的图也没了"同样计入连续没画面（ROADMAP §3）
+                        if (blindChannel) {
+                            blindNoFrameSteps++
+                            if (blindNoFrameSteps >= BLIND_NO_FRAME_STOP_STEPS) {
+                                val msg = "连续 $blindNoFrameSteps 步抓不到画面（$err）。" +
+                                    "AI 在完全看不到界面的情况下继续只会瞎点。" +
+                                    "先确认屏幕上有内容可截，再重新发任务。"
+                                listener.onEvent(EventKind.ERROR, msg, "无画面")
+                                finish(false, msg)
+                                return AskResult.Stop
+                            }
+                        }
                     } else {
+                        if (blindChannel) blindNoFrameSteps = 0
                         pendingImage = shot
                         totalImages++
                         logger?.line("截图：${w}x$h，${shot.size} 字节（本次发送）", "截图")

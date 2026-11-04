@@ -2,6 +2,7 @@ package com.aiphone.assistant.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,8 +29,12 @@ class SecretCryptoTest {
      * 校验，被改坏的数据照样能"解"出一段乱码 —— 不模拟这一点，
      * 测到的就是假行为（真机走抛异常分支，测试里却走乱码分支）。
      */
-    private class FakeCipher(private val broken: Boolean = false) : ByteCipher {
+    private class FakeCipher(
+        private val broken: Boolean = false,
+        private val brokenEncrypt: Boolean = false,
+    ) : ByteCipher {
         override fun encrypt(plain: ByteArray): ByteArray {
+            if (brokenEncrypt) throw IllegalStateException("Keystore 坏了")
             val body = ByteArray(plain.size) { (plain[it].toInt() xor 0x5A).toByte() }
             return ByteArray(12) { 7 } + tag(body) + body
         }
@@ -55,14 +60,14 @@ class SecretCryptoTest {
     @Test
     fun `密文往返_原样解回`() {
         val key = "sk-1234567890abcdef"
-        val sealed = crypto.seal(key)
+        val sealed = crypto.seal(key)!!
         assertEquals(key, crypto.unseal(sealed))
     }
 
     @Test
     fun `密文带前缀_且不包含明文`() {
         val key = "sk-super-secret-value"
-        val sealed = crypto.seal(key)
+        val sealed = crypto.seal(key)!!
         assertTrue(sealed, sealed.startsWith(SecretCrypto.PREFIX))
         assertFalse("密文里不能出现明文", sealed.contains(key))
         assertTrue(crypto.isSealed(sealed))
@@ -70,7 +75,7 @@ class SecretCryptoTest {
 
     @Test
     fun `中文和空串都能往返`() {
-        assertEquals("中文-密钥-🔑", crypto.unseal(crypto.seal("中文-密钥-🔑")))
+        assertEquals("中文-密钥-🔑", crypto.unseal(crypto.seal("中文-密钥-🔑")!!))
         assertEquals("", crypto.seal(""))
         assertEquals("", crypto.unseal(""))
     }
@@ -84,7 +89,7 @@ class SecretCryptoTest {
 
     @Test
     fun `解不开的密文_按未填写处理_绝不返回密文`() {
-        val sealed = crypto.seal("sk-1234")
+        val sealed = crypto.seal("sk-1234")!!
         // 换了个"密钥丢了"的环境
         val lost = SecretCrypto(FakeCipher(broken = true))
         assertEquals("", lost.unseal(sealed))
@@ -92,9 +97,17 @@ class SecretCryptoTest {
 
     @Test
     fun `密文被改坏_按未填写处理`() {
-        val sealed = crypto.seal("sk-1234")
+        val sealed = crypto.seal("sk-1234")!!
         val corrupted = sealed.dropLast(4) + "!!!!"
         assertEquals("", crypto.unseal(corrupted))
+    }
+
+    @Test
+    fun `加密失败_返回null_绝不返回明文`() {
+        // ROADMAP §2：加密失败不再静默降级为明文 —— 返回 null，
+        // 由调用方保留旧值并明示用户
+        val broken = SecretCrypto(FakeCipher(brokenEncrypt = true))
+        assertNull(broken.seal("sk-1234"))
     }
 
     @Test
@@ -102,6 +115,6 @@ class SecretCryptoTest {
         val none = SecretCrypto(null)
         assertEquals("sk-abc", none.seal("sk-abc"))
         // 密文交给没有密钥的环境 → 只能按"未填写"，而非瞎猜
-        assertEquals("", none.unseal(crypto.seal("sk-abc")))
+        assertEquals("", none.unseal(crypto.seal("sk-abc")!!))
     }
 }

@@ -27,6 +27,8 @@ class SettingsStore(
         apiKey = loadApiKey(),
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         useFreeModel = sp.getBoolean(KEY_FREE_MODEL, DEFAULT.useFreeModel),
+        recordingEntry = sp.getBoolean(KEY_RECORDING_ENTRY, DEFAULT.recordingEntry),
+        onboardingDone = sp.getBoolean(KEY_ONBOARDING_DONE, DEFAULT.onboardingDone),
         freeLaneNoticeAccepted = sp.getBoolean(KEY_FREE_NOTICE, DEFAULT.freeLaneNoticeAccepted),
         allowPublicCleartext = sp.getBoolean(KEY_ALLOW_PUBLIC_CLEARTEXT, DEFAULT.allowPublicCleartext),
         thinking = ThinkingMode.fromId(sp.getString(KEY_THINKING, null)),
@@ -48,10 +50,27 @@ class SettingsStore(
         skippedUpdateCode = sp.getInt(KEY_SKIP_VERSION, DEFAULT.skippedUpdateCode),
     )
 
-    fun save(s: AppSettings) {
+    /**
+     * 保存设置。
+     *
+     * @return 给用户看的警告；null = 一切正常。目前只有一种：
+     *         API Key 加密失败 —— 此时**不把明文写进盘**（ROADMAP §2），
+     *         之前存过的值保持原样，并把这件事明示给用户
+     */
+    fun save(s: AppSettings): String? {
+        val sealedKey = crypto.seal(s.apiKey)
+        val warning = if (s.apiKey.isNotEmpty() && sealedKey == null) {
+            android.util.Log.w(TAG, "API Key 加密失败，本次保存不写 Key（不静默存明文）")
+            "API Key 加密失败：本次保存没有写入 Key，之前存过的值保持不变。请重启应用后重试。"
+        } else null
         sp.edit()
             .putString(KEY_BASE_URL, s.baseUrl)
-            .putString(KEY_API_KEY, crypto.seal(s.apiKey))
+            .putString(
+                KEY_API_KEY,
+                // 加密失败时保住之前存过的值（含老明文，等下次启动迁移重试）；
+                // 从没存过就写空串 —— 输入框里的 Key 不上盘
+                sealedKey ?: sp.getString(KEY_API_KEY, null) ?: "",
+            )
             .putString(KEY_MODEL, s.modelName)
             .putBoolean(KEY_FREE_MODEL, s.useFreeModel)
             .putBoolean(KEY_FREE_NOTICE, s.freeLaneNoticeAccepted)
@@ -62,6 +81,8 @@ class SettingsStore(
             .putString(KEY_TAP_REVIEW, s.tapReview.id)
             .putBoolean(KEY_ALLOW_HIGH_RISK, s.allowHighRiskActions)
             .putBoolean(KEY_ALLOW_BROWSER_EVAL, s.allowBrowserEval)
+            .putBoolean(KEY_RECORDING_ENTRY, s.recordingEntry)
+            .putBoolean(KEY_ONBOARDING_DONE, s.onboardingDone)
             .putString(KEY_MODE, s.mode.id)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
             .putString(KEY_CONTEXT_POLICY, s.contextPolicy.id)
@@ -72,16 +93,18 @@ class SettingsStore(
             .putBoolean(KEY_AUTO_UPDATE, s.autoCheckUpdate)
             .putInt(KEY_SKIP_VERSION, s.skippedUpdateCode)
             .apply()
+        return warning
     }
 
     /**
      * 读 API Key。顺手把老版本遗留的明文**就地加密写回**——
      * 迁移不需要用户做任何事，也不需要版本判断：没有前缀的就是明文。
+     * 加密失败就等下次启动再试，不动盘。
      */
     private fun loadApiKey(): String {
         val raw = sp.getString(KEY_API_KEY, null) ?: return DEFAULT.apiKey
         if (raw.isEmpty() || crypto.isSealed(raw)) return crypto.unseal(raw)
-        val sealed = crypto.seal(raw)
+        val sealed = crypto.seal(raw) ?: return raw
         if (sealed != raw) {
             sp.edit().putString(KEY_API_KEY, sealed).apply()
         }
@@ -95,6 +118,7 @@ class SettingsStore(
     private companion object {
         val DEFAULT = AppSettings()
 
+        const val TAG = "SettingsStore"
         const val KEY_BASE_URL = "base_url"
         const val KEY_API_KEY = "api_key"
         const val KEY_MODEL = "model_name"
@@ -121,6 +145,12 @@ class SettingsStore(
 
         /** 是否允许 browser_eval（默认关，见 AppSettings.allowBrowserEval） */
         const val KEY_ALLOW_BROWSER_EVAL = "allow_browser_eval"
+
+        /** 「操作记录」入口开关（默认关，见 AppSettings.recordingEntry） */
+        const val KEY_RECORDING_ENTRY = "recording_entry"
+
+        /** 首次安装的权限引导是否看过（见 AppSettings.onboardingDone） */
+        const val KEY_ONBOARDING_DONE = "onboarding_done"
         const val KEY_MODE = "operation_mode"
         // 曾经的全局「在副屏上操作」开关。现在是**逐条定时任务**的选项
         // （见 Schedule.useVirtualDisplay），这里不再读写 —— 老配置文件里

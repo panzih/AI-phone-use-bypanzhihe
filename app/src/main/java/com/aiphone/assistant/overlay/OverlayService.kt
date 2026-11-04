@@ -97,6 +97,28 @@ class OverlayService : Service() {
      */
     private var cardParams: WindowManager.LayoutParams? = null
 
+    /** 悬浮条的基准 y（不含键盘）：导航条高度 + 12dp，showOverlay 时记一次 */
+    private var baseBarY = 0
+
+    /**
+     * 键盘高度变了（主界面转发过来，见 [OverlayBus.reportImeInset]）。
+     *
+     * 悬浮条跟着抬起来，别被键盘压住 —— 用户在输入框打字时，
+     * 底部的急停按钮必须仍然可见、可按。Android 10 及以下拿不到键盘
+     * insets，这个方法永远不会被调，悬浮条维持原位。
+     */
+    fun onImeInset(px: Int) {
+        main.post {
+            val view = statusView ?: return@post
+            val params = cardParams ?: return@post
+            val target = baseBarY + px
+            if (params.y == target) return@post
+            params.y = target
+            runCatching { wm.updateViewLayout(view, params) }
+                .onFailure { android.util.Log.w(TAG, "跟随输入法移动悬浮条失败：$it") }
+        }
+    }
+
     private lateinit var phaseDot: View
     private lateinit var phaseText: TextView
     private lateinit var stepText: TextView
@@ -275,11 +297,13 @@ class OverlayService : Service() {
         // 算一次尺寸，而且这里量出来的宽度退化成了"只剩内边距"——
         // 卡片缩成一条竖着的灰条，文字全被压没了。
         // 固定尺寸一次到位，顺带还有个好处：面板不会随文字长短忽大忽小。
+        // 基准 y 记下来，键盘弹出时 [onImeInset] 在它之上再抬（ROADMAP §3）
+        baseBarY = dp(12) + navBarHeight()
         val barParams = baseParams(
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
             x = 0,
             // 抬高一点，别压在系统导航条（手势条 / 虚拟按键）上
-            y = dp(12) + navBarHeight(),
+            y = baseBarY + OverlayBus.imeInsetPx,
             flags = FLAGS_BUTTON,
         ).also {
             // 横向条：铺满"屏幕宽 - 两边各 12dp"，高度固定

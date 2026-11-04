@@ -21,15 +21,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import android.widget.Toast
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
@@ -47,6 +53,7 @@ import com.aiphone.assistant.ui.design.HintText
 import com.aiphone.assistant.ui.design.Radius
 import com.aiphone.assistant.ui.design.SectionTitle
 import com.aiphone.assistant.ui.design.SettingRow
+import com.aiphone.assistant.ui.design.Size
 import com.aiphone.assistant.ui.design.Space
 import com.aiphone.assistant.ui.design.StatusPill
 import com.aiphone.assistant.ui.design.SwitchRow
@@ -71,6 +78,8 @@ fun AboutScreen(
     onBack: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
 
     AppScaffold(
         title = stringResource(R.string.about_title),
@@ -158,6 +167,23 @@ fun AboutScreen(
                             showChevron = true,
                             onClick = {
                                 runCatching { uriHandler.openUri(AppInfo.REPO_URL) }
+                            },
+                            trailing = {
+                                // ROADMAP §3：地址要能复制 —— 点整行打开浏览器，
+                                // 右边的复制按钮进剪贴板
+                                IconButton(
+                                    onClick = {
+                                        clipboard.setText(AnnotatedString(AppInfo.REPO_URL))
+                                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                                    },
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.ContentCopy,
+                                        contentDescription = "复制项目地址",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(Size.iconMd),
+                                    )
+                                }
                             },
                         )
                     }

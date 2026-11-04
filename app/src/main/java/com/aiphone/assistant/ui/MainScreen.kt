@@ -154,6 +154,7 @@ fun MainScreen(
         drawerContent = {
             AppDrawer(
                 useFreeModel = state.settings.useFreeModel,
+                recordingEntry = state.settings.recordingEntry,
                 onControlPhone = { closeDrawerThen(onControlPhone) },
                 onRecording = { closeDrawerThen(onRecording) },
                 onSchedules = { closeDrawerThen(onSchedules) },
@@ -452,6 +453,7 @@ private fun SuggestionCard(text: String, onClick: () -> Unit) {
 @Composable
 private fun AppDrawer(
     useFreeModel: Boolean,
+    recordingEntry: Boolean,
     onControlPhone: () -> Unit,
     onRecording: () -> Unit,
     onSchedules: () -> Unit,
@@ -508,7 +510,7 @@ private fun AppDrawer(
                 title = stringResource(R.string.drawer_control_phone),
                 onClick = onControlPhone,
             )
-            if (RECORDING_ENTRY_ENABLED) {
+            if (recordingEntry) {
                 DrawerItem(
                     icon = Icons.Filled.FiberManualRecord,
                     title = stringResource(R.string.drawer_recording),

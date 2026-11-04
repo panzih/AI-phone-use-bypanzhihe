@@ -71,10 +71,17 @@ object LogExporter {
      * 都被吃掉，报错只说 "Unclosed comment"。这段注释本身就是踩过之后的说明。
      *
      * @param summary 设备/设置概览的文本，由调用方拼（它才拿得到 AppSettings）
+     * @param onProgress 打包进度回调（主界面把它显示出来）。打包是分钟级的活，
+     *        没有进度的话用户连点几下都只看到"没反应"
      * @return 成功是打包好的 zip；失败带**原始异常** —— 调用方要把原因显示给用户，
      *         不能再退化成一句"没有日志可导出"
      */
-    fun exportEverything(context: Context, summary: String): Result<File> {
+    fun exportEverything(
+        context: Context,
+        summary: String,
+        onProgress: ((String) -> Unit)? = null,
+    ): Result<File> {
+        fun report(msg: String) { onProgress?.invoke(msg) }
         val runs = AppLog.listRuns(context)
         val diagDir = File(AppLog.logRoot(context), "diag")
         val crashes = CrashGuard.listAll(context)
@@ -101,7 +108,8 @@ object LogExporter {
                 addText(zos, "index.csv", index.csv)
 
                 // 运行日志（含每步的 ui/step_NN.txt —— 模型当时看到的元素列表）
-                runs.forEach { run ->
+                runs.forEachIndexed { i, run ->
+                    report("正在打包运行 ${i + 1}/${runs.size}…")
                     run.walkTopDown()
                         .filter { it.isFile && isExportable(it) }
                         .forEach { f ->
@@ -119,10 +127,14 @@ object LogExporter {
                     ?.filter { it.isFile && (it.name == "app.log" || it.name == "app.log.1") }
                     ?.forEach { f -> addEntry(zos, f, "logs/${f.name}") }
                 // 自动截图
-                autocap.listFiles()?.filter { it.isFile && isExportable(it) }
-                    ?.sortedBy { it.name }?.forEach { f ->
+                val autoShots = autocap.listFiles()?.filter { it.isFile && isExportable(it) }
+                    ?.sortedBy { it.name }.orEmpty()
+                if (autoShots.isNotEmpty()) {
+                    report("正在打包 ${autoShots.size} 张自动截图…")
+                    autoShots.forEach { f ->
                         addEntry(zos, f, "autocap/${f.name}")
                     }
+                }
                 // 记忆 / 对话 / 技能 / 定时任务
                 if (memory.exists()) addEntry(zos, memory, "memory.md")
                 if (conversation.exists()) addEntry(zos, conversation, "conversation.json")
@@ -144,6 +156,7 @@ object LogExporter {
                 )
             }
             pruneOldExports(context)
+            report("打包完成")
             out
         }.onFailure {
             // 打包失败必须留痕。以前这里直接返回 null、原因被吞掉，
@@ -366,5 +379,35 @@ object LogExporter {
         // 用户点完只看到按钮没反应，无从判断是哪个环节的问题
         android.util.Log.w("LogExporter", "拉起分享面板失败：$it", it)
         it.message ?: it.javaClass.simpleName
+    }
+
+    /**
+     * 分享面板走不通时的兜底：把 zip 复制进系统「下载」（MediaStore，
+     * API 29+ 不需要任何存储权限）。手机上没有能接收 zip 的应用
+     * （新机器只装了微信之类）时，用户至少还能用文件管理器拿到它。
+     *
+     * @return 给用户看的位置描述；失败带原始异常
+     */
+    fun saveToDownloads(context: Context, file: File): Result<String> = runCatching {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            error("这个系统版本没有「下载」集合，请用能接收文件的应用分享")
+        }
+        val resolver = context.contentResolver
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Downloads.DISPLAY_NAME, file.name)
+            put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/zip")
+            put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: error("系统拒绝了写入「下载」的请求")
+        resolver.openOutputStream(uri)!!.use { out ->
+            file.inputStream().use { it.copyTo(out) }
+        }
+        values.clear()
+        values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        "系统「下载」文件夹里的 ${file.name}"
+    }.onFailure {
+        android.util.Log.w("LogExporter", "复制到「下载」失败：$it", it)
     }
 }

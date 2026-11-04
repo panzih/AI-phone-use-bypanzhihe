@@ -286,6 +286,15 @@ fun SettingsScreen(
                         checked = s.allowBrowserEval,
                         onCheckedChange = { onSettingsChange(s.copy(allowBrowserEval = it)) },
                     )
+                    GroupDivider()
+                    // ROADMAP §3：0.9.23 下架「操作记录」时承诺的实验开关，
+                    // 现在补上 —— 打开后抽屉里出现入口，输入框说「操作记录」也进得去
+                    SwitchRow(
+                        title = "操作记录（实验）",
+                        subtitle = "录制操作并让 AI 学成可复用的技能。功能还在打磨，默认关闭。",
+                        checked = s.recordingEntry,
+                        onCheckedChange = { onSettingsChange(s.copy(recordingEntry = it)) },
+                    )
                 }
             }
 
@@ -938,7 +947,12 @@ private fun LogSection(
 
         if (state.exporting) {
             Spacer(Modifier.height(Space.sm))
-            LoadingRow(stringResource(R.string.settings_export_working))
+            // 有实时进度就显示进度（"正在打包运行 3/12…"），没有再退回通用文案
+            LoadingRow(
+                state.exportProgress.ifBlank {
+                    stringResource(R.string.settings_export_working)
+                }
+            )
         }
 
         Spacer(Modifier.height(Space.lg))

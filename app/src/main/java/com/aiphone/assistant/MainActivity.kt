@@ -15,6 +15,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -22,11 +24,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.aiphone.assistant.agent.Agent
 import com.aiphone.assistant.agent.AgentPrompt
+import com.aiphone.assistant.agent.EntryGuard
 import com.aiphone.assistant.agent.ReviewShortcut
 import com.aiphone.assistant.a11y.AutoService
 import com.aiphone.assistant.data.AppSettings
@@ -71,7 +76,7 @@ import com.aiphone.assistant.skill.SkillRegistry
 import com.aiphone.assistant.ui.AboutScreen
 import com.aiphone.assistant.ui.AutoReturnOnForegroundEffect
 import com.aiphone.assistant.ui.LABEL_COMMAND
-import com.aiphone.assistant.ui.RECORDING_ENTRY_ENABLED
+import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.LABEL_SCHEDULE
 import com.aiphone.assistant.ui.LogEntry
 import com.aiphone.assistant.ui.LogKind
@@ -81,7 +86,6 @@ import com.aiphone.assistant.ui.MainUiState
 import com.aiphone.assistant.ui.PermissionsScreen
 import com.aiphone.assistant.ui.RecordingScreen
 import com.aiphone.assistant.ui.ScheduleScreen
-import com.aiphone.assistant.ui.Screen
 import com.aiphone.assistant.ui.SettingsScreen
 import com.aiphone.assistant.ui.UpdateDialog
 import com.aiphone.assistant.ui.design.AppAlertDialog
@@ -284,6 +288,41 @@ private fun AppRoot(
     // 不用本地开关的原因很简单 —— 点了暂停到它真停下之间有几十毫秒，
     // 那段时间界面已经说"已暂停"、而 AI 还在动，是最让人心慌的错位。
     val isPaused by OverlayBus.paused.collectAsState()
+    val focusManager = LocalFocusManager.current
+
+    // ROADMAP §3：悬浮条跟随输入法。悬浮窗自己拿不到键盘 insets（系统只发给
+    // 获得焦点的窗口），由这里从主界面的窗口 insets 读出真实高度转发给服务。
+    // Android 10 及以下 WindowInsets.ime 恒为 0，悬浮条维持原位（平台限制）。
+    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+    LaunchedEffect(imeBottomPx) { OverlayBus.reportImeInset(imeBottomPx) }
+
+    // ---- 首次安装的权限引导（ROADMAP §3）----
+    // README 写"按引导开无障碍"，实际从来没有引导 —— 权限入口藏在侧边抽屉里，
+    // 新用户对着主界面不知道下一步干什么。首启弹一次；确认/关掉都算看过，
+    // 不反复打扰。
+    var showOnboarding by remember { mutableStateOf(!settings.onboardingDone) }
+    if (showOnboarding) {
+        AppAlertDialog(
+            title = "欢迎使用纸盒",
+            body = "开始之前需要开两项权限：\n\n" +
+                "1. 无障碍 —— 读界面元素、代你点击，这是 AI 操作手机的基础；\n" +
+                "2. 悬浮窗 —— 任务进行中显示进度，急停按钮也在这里。\n\n" +
+                "下一页会逐项带你开启，也可以先跳过。",
+            confirmText = "去开启权限",
+            onConfirm = {
+                showOnboarding = false
+                settings = settings.copy(onboardingDone = true)
+                store.save(settings)
+                screen = Screen.PERMISSIONS
+            },
+            dismissText = "稍后再说",
+            onDismiss = {
+                showOnboarding = false
+                settings = settings.copy(onboardingDone = true)
+                store.save(settings)
+            },
+        )
+    }
     // 悬浮窗上按了「补充」→ 把纸盒拉到前台并把输入框亮起来，等用户打字。
     // 没有这个的话，按了「补充」用户还得自己切回纸盒找输入框 ——
     // 「补充」这个按钮就白按了。
@@ -291,6 +330,9 @@ private fun AppRoot(
     // 正在打包日志。日志大的时候打包是分钟级的活，界面必须有个交代，
     // 否则用户连点几下都只看到"没反应"，只能认为按钮坏了
     var exporting by remember { mutableStateOf(false) }
+
+    /** 导出进度的一行字（ROADMAP §3：打包是分钟级的活，得有个交代） */
+    var exportProgress by remember { mutableStateOf("") }
     var deletingLogs by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(AutoService.isConnected) }
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
@@ -1004,11 +1046,18 @@ private fun AppRoot(
         // 独立于 submit 的主流程：那边一进来就会清输入框、判权限、起悬浮窗，
         // 全部是为"开一趟新任务"准备的，对一句话来说全是副作用。
         if (isRunning) {
-            if (isPaused) {
-                OverlayBus.pushUserNote(task)
-                input = ""
-                addLog(LogKind.ACTION, task, LABEL_COMMAND)
-                toast = "已并进下一轮"
+            when (EntryGuard.busyInput(isRunning = true, isPaused = isPaused)) {
+                EntryGuard.BusyInput.MERGE_AS_NOTE -> {
+                    OverlayBus.pushUserNote(task)
+                    input = ""
+                    addLog(LogKind.ACTION, task, LABEL_COMMAND)
+                    toast = "已并进下一轮"
+                }
+                // ROADMAP §3：运行中发消息不再被静默吞掉 —— 至少要告诉用户
+                // 为什么"什么都没发生"。输入框保持原样，想补充就先按暂停
+                EntryGuard.BusyInput.PROMPT_BUSY ->
+                    toast = "任务正在跑：先按「暂停」再发就能并进下一轮，新任务等当前结束"
+                null -> return
             }
             return
         }
@@ -1074,6 +1123,9 @@ private fun AppRoot(
         }
 
         input = ""
+        // ROADMAP §3：发送后收起键盘 —— 否则键盘继续压着悬浮条，
+        // 急停按钮看不见也点不着
+        focusManager.clearFocus()
         stopRequested = false
         OverlayBus.clearStop()
         // 批 3：上一轮任务留下的「自动回迁冷却」会压住这一轮，开新任务时清掉。
@@ -1121,8 +1173,9 @@ private fun AppRoot(
         }
 
         // 本地快捷指令：在发送框直接说「操作记录 / 开始录制」等，进录制页，不发给模型。
-        // 录制入口已下架，这条短路也要一起关 —— 否则从输入框还能绕进那个页面
-        if (RECORDING_ENTRY_ENABLED && RecordingShortcut.matches(task)) {
+        // 录制入口默认关（实验开关，见 AppSettings.recordingEntry）；
+        // 打开时这条短路才生效 —— 否则从输入框还能绕进那个页面
+        if (settings.recordingEntry && RecordingShortcut.matches(task)) {
             screen = Screen.RECORDING
             toast = context.getString(R.string.recording_shortcut_opened)
             return
@@ -1434,11 +1487,15 @@ private fun AppRoot(
             return
         }
         exporting = true
+        exportProgress = ""
 
         scope.launch {
             try {
                 val r = withContext(Dispatchers.IO) {
-                    LogExporter.exportEverything(context, buildDeviceSummary(context, settings))
+                    LogExporter.exportEverything(
+                        context,
+                        buildDeviceSummary(context, settings),
+                    ) { line -> exportProgress = line }
                 }
                 r.onSuccess { f ->
                     // 打包成功**不弹提示**：系统分享面板本身就是反馈，
@@ -1447,7 +1504,18 @@ private fun AppRoot(
                     // 只有"面板没拉起来"才需要说话。
                     val why = LogExporter.share(context, f, "纸盒日志")
                     if (why != null) {
-                        toast = context.getString(R.string.settings_export_share_failed, why)
+                        // ROADMAP §3 兜底：手机上没有能接收 zip 的应用时，
+                        // 把包复制进系统「下载」，文件管理器里也拿得到 ——
+                        // 不然这个包就死在 cacheDir 里了
+                        val saved = withContext(Dispatchers.IO) {
+                            LogExporter.saveToDownloads(context, f)
+                        }
+                        toast = saved.fold(
+                            onSuccess = { "已把日志包存到$it" },
+                            onFailure = {
+                                context.getString(R.string.settings_export_share_failed, why)
+                            },
+                        )
                     }
                 }.onFailure { t ->
                     // 失败说清楚是哪一步、为什么。原来这里只会显示
@@ -1460,6 +1528,7 @@ private fun AppRoot(
                 }
             } finally {
                 exporting = false
+                exportProgress = ""
             }
         }
     }
@@ -1729,7 +1798,11 @@ private fun AppRoot(
                 toast = toast,
             ),
             onBack = { screen = Screen.CONTROL; toast = null },
-            onSettingsChange = { next -> settings = next; store.save(next) },
+            onSettingsChange = { next ->
+                settings = next
+                // 加密失败等保存警告要露出来，不能只写日志（ROADMAP §2）
+                store.save(next)?.let { toast = it }
+            },
             onGotoAccessibility = onOpenAccessibilitySettings,
             onOpenOverlaySettings = onOpenOverlaySettings,
             onRequestNotification = {
@@ -1782,6 +1855,7 @@ private fun AppRoot(
                 appVersion = appVersion,
                 shizukuState = shizukuState,
                 exporting = exporting,
+                exportProgress = exportProgress,
                 toast = toast,
             ),
             onSettingsChange = { next ->

@@ -117,22 +117,29 @@ object AndroidKeystoreCipher : ByteCipher {
  *   - 读到有前缀但**解不开**的值（换过手机、系统密钥被清、文件被改坏）
  *     → 记日志、按"未填写"处理。**绝不把密文当明文用** ——
  *     那会把一段乱码当 API Key 发出去，用户看到的是莫名其妙的 401；
- *   - 加密失败（极罕见）→ 降级为明文保存 + 日志。宁可回到原来的安全水平，
- *     也不能让用户"填了 Key 存不上"。
+ *   - 加密失败（极罕见）→ [seal] 返回 null，**调用方不得把明文写进盘**
+ *     （ROADMAP §2，2026-11：不再静默降级为明文），应保留之前存过的值
+ *     并向用户明示。以前是"降级为明文保存 + 日志"—— 日志用户不会看，
+ *     等于把安全底线悄悄扔了。
  *
  * @param cipher null = 不做加密（只在测试里出现）
  */
 class SecretCrypto(private val cipher: ByteCipher?) {
 
-    /** 明文 → 可安全落盘的文本。空串原样返回（没填就是没填） */
-    fun seal(plain: String): String {
+    /**
+     * 明文 → 可安全落盘的文本。
+     *
+     * @return null = 加密失败。调用方必须保留之前存过的值并向用户明示，
+     *         **绝不能把明文原样落盘**。空串原样返回（没填就是没填）
+     */
+    fun seal(plain: String): String? {
         if (plain.isEmpty()) return plain
         val c = cipher ?: return plain
         return runCatching {
             PREFIX + Base64.encodeToString(c.encrypt(plain.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
         }.getOrElse {
-            Log.w(TAG, "加密失败，本次按明文保存（下次保存会重试）", it)
-            plain
+            Log.w(TAG, "API Key 加密失败，本次不落盘（不静默降级为明文）", it)
+            null
         }
     }
 

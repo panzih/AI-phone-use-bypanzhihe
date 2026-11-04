@@ -188,6 +188,15 @@ internal class AgentSession(
     /** 连续几步"根节点都读不到"（无障碍没真正生效）。 */
     internal var unreadableTreeSteps = 0
 
+    /**
+     * 盲通道（副屏）连续几步**连截图都抓不到**（ROADMAP §3）。
+     *
+     * 只在本该读不到树的通道上计数：那种通道里截图是模型唯一的信息来源，
+     * 连着几步没有画面就意味着它在完全瞎猜 —— 到 [AgentLimits.BLIND_NO_FRAME_STOP_STEPS]
+     * 就止损，不能一直盲点到模型自己宣布完成。
+     */
+    internal var blindNoFrameSteps = 0
+
     /** 模型连续几次没给出可用动作。 */
     internal var parseFails = 0
 
@@ -407,6 +416,7 @@ internal class AgentSession(
         // 拆成 session 字段后必须在这里显式清零，否则同一个 Agent 跑第二趟
         // 会带着上一趟的步数、图片额度和解析失败次数。
         unreadableTreeSteps = 0
+        blindNoFrameSteps = 0
         parseFails = 0
         refusedBlindFinish = false
         finishRefusals = 0

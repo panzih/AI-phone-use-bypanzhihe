@@ -29,7 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimeInput
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
@@ -97,6 +98,12 @@ fun ScheduleScreen(
     var hour by remember { mutableIntStateOf(9) }
     var minute by remember { mutableIntStateOf(0) }
     val timeState = rememberTimePickerState(initialHour = 9, initialMinute = 0, is24Hour = true)
+    val focus = LocalFocusManager.current
+
+    // 选的时间今天是不是已经过了（和 Scheduler 的顺延口径一致：<= 现在就顺延）
+    val nowCal = remember { java.util.Calendar.getInstance() }
+    val pastToday = hour * 60 + minute <= nowCal.get(java.util.Calendar.HOUR_OF_DAY) * 60 +
+        nowCal.get(java.util.Calendar.MINUTE)
 
     LaunchedEffect(state.toast) {
         state.toast?.let { snackbar.showSnackbar(it) }
@@ -105,15 +112,19 @@ fun ScheduleScreen(
     if (pickerOpen) {
         AppAlertDialog(
             title = stringResource(R.string.schedule_pick_time),
-            onDismiss = { pickerOpen = false },
+            onDismiss = { pickerOpen = false; focus.clearFocus() },
             dismissText = stringResource(R.string.schedule_cancel),
             confirmText = "确定",
             onConfirm = {
                 pickerOpen = false
+                focus.clearFocus()
                 hour = timeState.hour
                 minute = timeState.minute
             },
-            content = { TimePicker(state = timeState) },
+            // ROADMAP §3：表盘在 24 小时制下是 12/24 两套数字，Dialog 一挤就
+            // 重叠；点分钟还得先点一下切档。换成直接输入 HH:MM 的 TimeInput，
+            // 两个问题都不存在，键盘党也顺手
+            content = { TimeInput(state = timeState) },
         )
     }
 
@@ -167,6 +178,15 @@ fun ScheduleScreen(
                             minute = minute,
                             onClick = { pickerOpen = true },
                         )
+                        // ROADMAP §3：选了过去的时间会被顺延到次日 ——
+                        // 这件事必须明说，不能让用户以为"设了 9 点怎么没跑"
+                        if (pastToday) {
+                            Spacer(Modifier.height(Space.sm))
+                            HintText(
+                                "这个时间今天已经过了：第一次会在明天 " +
+                                    "%02d:%02d 执行。".format(hour, minute)
+                            )
+                        }
                     }
                     GroupDivider()
                     SwitchRow(
@@ -188,6 +208,8 @@ fun ScheduleScreen(
                         onClick = {
                             onAdd(task.trim(), hour, minute, daily, onVirtualDisplay)
                             task = ""
+                            // ROADMAP §3：保存后键盘不能再常驻压住下面的任务列表
+                            focus.clearFocus()
                         },
                         enabled = task.isNotBlank(),
                         icon = Icons.Filled.Add,
