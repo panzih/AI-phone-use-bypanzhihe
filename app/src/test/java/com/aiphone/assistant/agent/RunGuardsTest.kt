@@ -268,6 +268,48 @@ class RunGuardsTest {
     }
 
     // ---------------------------------------------------------------
+    // 5.5 open_app 后补按 HOME 的判据（逐行审查 #1，2026-11-04）
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `副屏模式不补按 HOME`() {
+        // 副屏上 currentPackage 恒为 null，老代码会把"读不到"当"没切走"，
+        // 对副屏发 HOME 把刚打开的应用顶回副屏桌面
+        assertFalse(
+            RunGuards.pressHomeAfterOpenApp(
+                virtualDisplay = true, currentPkg = null, selfPackage = "com.aiphone.paperbox",
+            )
+        )
+    }
+
+    @Test
+    fun `读不到前台时不能当成没切走`() {
+        // ADB 模式 + 无障碍未连接：currentPackage 恒 null，
+        // 补按 HOME 会把启动成功的应用也顶掉
+        assertFalse(
+            RunGuards.pressHomeAfterOpenApp(
+                virtualDisplay = false, currentPkg = null, selfPackage = "com.aiphone.paperbox",
+            )
+        )
+    }
+
+    @Test
+    fun `前台还是纸盒自己才补按 HOME`() {
+        assertTrue(
+            RunGuards.pressHomeAfterOpenApp(
+                virtualDisplay = false, currentPkg = "com.aiphone.paperbox",
+                selfPackage = "com.aiphone.paperbox",
+            )
+        )
+        assertFalse(
+            RunGuards.pressHomeAfterOpenApp(
+                virtualDisplay = false, currentPkg = "com.example.target",
+                selfPackage = "com.aiphone.paperbox",
+            )
+        )
+    }
+
+    // ---------------------------------------------------------------
     // 6. 端侧只提醒、云端做决定（0.10.1 T42）
     // ---------------------------------------------------------------
 

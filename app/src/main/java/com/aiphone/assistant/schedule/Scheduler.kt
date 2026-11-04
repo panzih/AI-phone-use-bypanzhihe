@@ -90,6 +90,7 @@ object Scheduler {
     fun cancel(context: Context, id: String) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         am.cancel(pendingIntent(context, id))
+        am.cancel(legacyPendingIntent(context, id))
         Log.i(TAG, "已取消 $id")
     }
 
@@ -100,17 +101,34 @@ object Scheduler {
             .forEach { schedule(context, it) }
     }
 
-    private fun pendingIntent(context: Context, id: String): PendingIntent {
-        val intent = Intent(context, ScheduleReceiver::class.java)
+    private fun fireIntent(context: Context, id: String): Intent =
+        Intent(context, ScheduleReceiver::class.java)
             .setAction(ScheduleReceiver.ACTION_FIRE)
             .putExtra(ScheduleReceiver.EXTRA_ID, id)
+
+    private fun pendingIntent(context: Context, id: String): PendingIntent {
+        // 逐行审查 #12：id 放进 data。PendingIntent 按 (Intent.filterEquals,
+        // requestCode) 配对，requestCode 只有一个 int —— 原来 id.hashCode()
+        // 碰撞时两条任务共用同一个 PendingIntent，FLAG_UPDATE_CURRENT 让
+        // 后者的 EXTRA_ID 覆盖前者，到点触发的是另一条任务。data 参与
+        // filterEquals 之后不同任务天然不同 Intent，这一类问题整体消失
+        //（requestCode 保留原值，只为兼容旧路径的取消匹配）。
         return PendingIntent.getBroadcast(
             context,
             id.hashCode(),
-            intent,
+            fireIntent(context, id).setData(android.net.Uri.parse("paperbox://schedule/" + android.net.Uri.encode(id))),
             // FLAG_IMMUTABLE：Android 12+ 强制要求指明可变性。
             // 这里不需要系统往里塞东西，所以用不可变
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
     }
+
+    /** 升级前注册的闹钟（Intent 不带 data）。重新登记时顺手清掉，避免新旧双响 */
+    private fun legacyPendingIntent(context: Context, id: String): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            id.hashCode(),
+            fireIntent(context, id),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 }

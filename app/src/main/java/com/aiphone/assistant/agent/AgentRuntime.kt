@@ -155,8 +155,18 @@ internal suspend fun AgentSession.yieldForegroundIfNeeded() {
 internal suspend fun AgentSession.verifyLeftAfterOpenApp() {
     if (foregroundYielded) return
     val pkg = withContext(Dispatchers.IO) { controller.currentPackage() }
-    if (pkg != null && pkg != selfPackage) {
-        foregroundYielded = true
+    // 逐行审查 #1：副屏模式下 currentPackage 恒为 null，老代码会把"读不到"
+    // 当成"没切走"，对副屏补按 HOME 把刚打开的应用顶掉；ADB + 无障碍未连接
+    // 同理（在主屏上补按，把启动成功的应用也顶掉）。判据见
+    // [RunGuards.pressHomeAfterOpenApp]：只有"确实读得到、且还是纸盒自己"
+    // 才补按 HOME。
+    if (!RunGuards.pressHomeAfterOpenApp(controller.isVirtualDisplay, pkg, selfPackage)) {
+        if (pkg == null && !controller.isVirtualDisplay) {
+            // 读不到前台的通道按"已切走"处理，把让位标记置上 —— 否则下一步
+            // yieldForegroundIfNeeded 又会因为读不到前台补按一次 HOME，
+            // 那一下同样会把刚打开的应用顶掉。
+            foregroundYielded = true
+        }
         return
     }
     logger?.warn("open_app 似乎没切到目标应用，补按 HOME 让开", "通道")

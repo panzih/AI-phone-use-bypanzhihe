@@ -68,9 +68,16 @@ object EndpointSafety {
     internal fun isLocalHost(host: String): Boolean {
         if (host == "localhost") return true
         if (host == "::1") return true
-        // IPv6 唯一本地地址 fc00::/7 与链路本地 fe80::/10
-        if (host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) {
-            if (host.contains(':')) return true
+        // IPv6 唯一本地地址 fc00::/7 与链路本地 fe80::/10。
+        // 判据用第一个 hextet 的数值区间而不是字符串前缀：
+        // 只认 "fe80" 前缀会把 fe81:–febf:（fe80::/10 的其余部分）当成
+        // 公网明文拦掉（逐行审查 #11）；数值比较顺带兼容大写写法
+        if (host.contains(':')) {
+            val first = host.substringBefore(':').toIntOrNull(16)
+            if (first != null) {
+                if (first in 0xfc00..0xfdff) return true // fc00::/7 唯一本地
+                if (first in 0xfe80..0xfebf) return true // fe80::/10 链路本地
+            }
         }
         if (host.endsWith(".local") || host.endsWith(".lan") || host.endsWith(".home")) return true
         // 不带点的单标签主机名：公网 DNS 解析不出这种名字（RFC 882 时代就废弃了），

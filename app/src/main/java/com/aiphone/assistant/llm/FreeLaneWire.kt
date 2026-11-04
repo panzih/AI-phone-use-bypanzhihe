@@ -88,7 +88,10 @@ object FreeLaneWire {
                 lastStamp = now
                 seq = 0
             }
-            seq += 1
+            // 逐行审查 #9：计数必须回绕收敛在 1–63。同一毫秒铸超过 63 个时
+            // （理论场景：批量探针/测试），无界递增会让低 12 位落出
+            // 0xfc0–0xfff 契约区，上游直接拒绝。
+            seq = (seq % 63) + 1
             seq
         }
         val value = ((now shl 12) or counter.toLong()).inv() and 0xFFFFFFFFFFFFL

@@ -134,6 +134,31 @@ internal object RunGuards {
         stuckAdvice(sameTree, repeatAction, limit)
 
     /**
+     * open_app 之后要不要补按 HOME 让位（逐行审查 #1，2026-11-04）。
+     *
+     * 三种情况**都不许按**，前两种正是误按的来源：
+     *  - 副屏模式：操作与目标应用都在副屏，主屏让位没有意义；而且此时
+     *    [currentPkg] 恒为 null，老代码会把"读不到"误判成"没切走"，
+     *    经 DisplayChannel 对**副屏**发 HOME —— 刚在副屏上打开的应用
+     *    被顶回副屏桌面，且每次通道迁移后的第一个 open_app 必中。
+     *  - 读不到前台（currentPkg == null，如 ADB 模式 + 无障碍未连接）：
+     *    "读不到"不是"没切走"的证据，此时补按 HOME 只会把启动成功的
+     *    应用顶掉。宁可假设已切走，下一步的截图自己会说话。
+     *  - 前台已经是别的应用：已经切走了，不用让。
+     *
+     * 只剩"前台还是纸盒自己"这一种情况要补按 HOME。
+     */
+    fun pressHomeAfterOpenApp(
+        virtualDisplay: Boolean,
+        currentPkg: String?,
+        selfPackage: String,
+    ): Boolean {
+        if (virtualDisplay) return false
+        if (currentPkg == null) return false
+        return currentPkg == selfPackage
+    }
+
+    /**
      * 连续读不到控件树要不要止损；返回给用户的原因，null = 继续。
      *
      * 这类失败**不是模型的错**：无障碍服务被系统停用了（有些 ROM 会在后台

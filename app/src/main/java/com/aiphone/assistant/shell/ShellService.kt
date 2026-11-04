@@ -368,7 +368,7 @@ class ShellService : IShellService.Stub() {
         val h = img.height
         var bmp: Bitmap? = null
         var fixed: Bitmap? = null
-        var small: Bitmap? = null
+        var scaled: Bitmap? = null
         try {
             bmp = Bitmap.createBitmap(paddedW, h, Bitmap.Config.ARGB_8888)
             bmp.copyPixelsFromBuffer(buf)
@@ -387,7 +387,6 @@ class ShellService : IShellService.Stub() {
             out.reset()
             var side = MAX_FRAME_SIDE
             var quality = 70
-            var scaled: Bitmap? = null
             while (true) {
                 scaled?.let { runCatching { it.recycle() } }
                 scaled = null
@@ -422,10 +421,12 @@ class ShellService : IShellService.Stub() {
             return out.toByteArray()
         } finally {
             // 每帧两张整屏 Bitmap（1080p ≈ 10MB/张）以前是直接漏掉的：
-            // 抓帧是 1 帧/秒的常态调用，几秒钟就能把 shell 进程撑爆
-            if (small != null) runCatching { small.recycle() }
-            if (fixed != null && fixed !== bmp) runCatching { fixed.recycle() }
-            if (bmp != null) runCatching { bmp.recycle() }
+            // 抓帧是 1 帧/秒的常态调用，几秒钟就能把 shell 进程撑爆。
+            // 逐行审查 #16：降质循环最后创建的那张 `scaled` 也一样 ——
+            // break 之后没人管它，只有触发降质路径时每次漏一张
+            if (scaled != null) runCatching { scaled!!.recycle() }
+            if (fixed != null && fixed !== bmp) runCatching { fixed!!.recycle() }
+            if (bmp != null) runCatching { bmp!!.recycle() }
         }
     }
 

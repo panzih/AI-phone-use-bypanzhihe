@@ -337,10 +337,13 @@ object ActionParser {
         if (finished) {
             // 同批可能还带着动作（语义"做完这批就完成"）：动作必须保留，
             // 由 Agent 先执行、再收尾，不能在这里清空成 emptyList()。
+            // （逐行审查 #13：continueOnError 原来没带 —— "finished +
+            //  on_error:continue" 被静默重置成"失败即中止"。）
             return Parsed(
                 thought, actions, needImage = false, finished = true,
                 summary = summary, raw = raw, nextHint = nextHint,
                 warning = notes.takeIf { it.isNotEmpty() }?.joinToString("；"),
+                continueOnError = continueOnError,
             )
         }
 

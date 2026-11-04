@@ -55,6 +55,9 @@ object ShizukuBridge {
     }
 
     private var service: IShellService? = null
+
+    /** 连接回调在主线程、ensureBound 在协程里跑，跨线程读写要保证可见 */
+    @Volatile
     private var binding = false
     private var boundVersion = 0
 
@@ -187,6 +190,11 @@ object ShizukuBridge {
             service?.let { if (it.asBinder().isBinderAlive) return null }
             delay(100)
         }
+        // 逐行审查 #10：onServiceConnected 永不回调（也无 disconnected）时，
+        // binding 会一直是 true，后续所有 ensureBound 不再重绑，每次干等
+        // 8 秒超时。超时就把标记放掉，下一次调用重新走一遍绑定 ——
+        // Shizuku 迟到的回调 / 用户重启 Shizuku 之后都还有救。
+        binding = false
         return lastError ?: "等 shell 服务连接超时（${BIND_TIMEOUT_MS / 1000} 秒）。" +
             "Shizuku 是否还在运行？"
     }

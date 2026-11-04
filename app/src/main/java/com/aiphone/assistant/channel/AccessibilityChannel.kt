@@ -46,9 +46,6 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
     override val displayName: String = "无障碍"
     override val capability: ChannelCapability = ChannelCapability.ACCESSIBILITY
 
-    @Volatile
-    private var cachedSize: Pair<Int, Int>? = null
-
     /** 上一帧解析出来的节点，供"按编号操作"用 */
     @Volatile
     private var lastNodes: List<UiNode> = emptyList()
@@ -74,9 +71,16 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
     // 屏幕
     // ------------------------------------------------------------------
 
+    /**
+     * 屏幕真实尺寸。**每次重读，不缓存**（逐行审查 #7）：
+     *
+     * 以前缓存只在 [release] 里清，而它全工程没有调用方 —— 分辨率实际上
+     * 被缓存了进程生命周期那么久。横竖屏切换 / 折叠屏展开后，控件树屏外
+     * 过滤、坐标夹紧（ActionParser.clamp）、TapReview 裁剪全都按旧尺寸算，
+     * 表现为"旋转后点不准"。读一次只是几毫秒的 binder 调用，
+     * 相比每步上百毫秒的读树可以忽略，不值得为它引入缓存失效的复杂度。
+     */
     override suspend fun screenSize(): Pair<Int, Int>? {
-        cachedSize?.let { return it }
-
         return withContext(Dispatchers.IO) {
             val wm = context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager
                 ?: return@withContext null
@@ -91,7 +95,7 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 p.x to p.y
             }
 
-            size.takeIf { it.first > 0 && it.second > 0 }?.also { cachedSize = it }
+            size.takeIf { it.first > 0 && it.second > 0 }
         }
     }
 
@@ -321,17 +325,21 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
             return@withContext null
         }
 
-        // 节点点不动就退回坐标手势（有些自定义控件不响应 ACTION_CLICK）
-        var ok = false
-        svc.tapAt(resolved.centerX.toFloat(), resolved.centerY.toFloat()) { ok = it }
-        Thread.sleep(120)
-        if (!ok) {
+        // 节点点不动就退回坐标手势（有些自定义控件不响应 ACTION_CLICK）。
+        // 逐行审查 #4：原来是 `var ok=false; tapAt{ok=it}; sleep(120); if(!ok)` ——
+        // 回调是主线程异步回来的，120ms 内没到就误判失败（执行器默认中止整批），
+        // 而那次点击稍后照样落下去，存在双击风险。改用 [doGesture]
+        // （latch + 超时、跨线程可见），与其他动作完全一致。
+        val gesture = doGesture { cb ->
+            svc.tapAt(resolved.centerX.toFloat(), resolved.centerY.toFloat(), cb)
+        }
+        if (gesture != GestureResult.Success) {
             AppLog.e(
                 "  编号[$index] →「${resolved.labelForLog()}」" +
                     "@(${resolved.centerX},${resolved.centerY}) 手势也没成功",
                 "执行",
             )
-            return@withContext "点击编号 [$index]→「${resolved.labelForLog()}」失败"
+            return@withContext gesture.toError("点击")
         }
         AppLog.i(
             "  编号[$index] 实际点中「${resolved.labelForLog()}」" +
@@ -399,19 +407,25 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                         else -> null
                     }
 
-                    // 落点：按编号时用节点中心，否则用给的坐标
-                    node?.let { n ->
-                        val r = android.graphics.Rect()
-                        n.getBoundsInScreen(r)
-                        onPoint?.invoke(r.centerX(), r.centerY())
-                    } ?: onPoint?.invoke(action.x, action.y)
+                    // 落点：按编号/hint 定位到节点时用节点中心，否则用给的坐标。
+                    // （逐行审查 #2：节点级长按失败后的**回退手势**原来直接用
+                    //  action.x / action.y —— 模型按编号给动作时那是 (0,0)，
+                    //  长按落在屏幕左上角。DOUBLE_TAP 修过一模一样的 bug，
+                    //  这里对齐它的修法；水波纹与真实落点也从此一致。）
+                    val rect = android.graphics.Rect()
+                    node?.getBoundsInScreen(rect)
+                    val cx = if (node != null) rect.centerX() else action.x
+                    val cy = if (node != null) rect.centerY() else action.y
+                    if (node != null && (cx <= 0 || cy <= 0)) return@withContext "长按目标无效"
+
+                    onPoint?.invoke(cx, cy)
 
                     if (node != null && svc.longClickNode(node)) {
                         null
                     } else {
                         doGesture { cb ->
                             svc.longPressAt(
-                                action.x.toFloat(), action.y.toFloat(),
+                                cx.toFloat(), cy.toFloat(),
                                 action.durationMs.coerceIn(300, 10_000).toLong(), cb,
                             )
                         }.toError("长按")
@@ -722,7 +736,6 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
     }
 
     override fun release() {
-        cachedSize = null
         lastNodes = emptyList()
     }
 

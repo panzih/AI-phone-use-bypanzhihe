@@ -367,6 +367,16 @@ private fun AppRoot(
     var runOnVirtualDisplay by host.runOnVirtualDisplayState
 
     /**
+     * 排队中的定时任务（逐行审查 #14）。
+     *
+     * 到点时若已有任务在跑，以前会被 submit() 静默丢弃 —— 任务写进了
+     * 输入框、没人执行、也没有任何提示。现在先记在这里，当前任务
+     * 一结束就自动开跑。
+     */
+    var queuedScheduleTask by remember { mutableStateOf<String?>(null) }
+    var queuedScheduleVirtualDisplay by remember { mutableStateOf(false) }
+
+    /**
      * **模型那一侧的历史**，和 [logs] 的作用域一样长。
      *
      * 它只在两处变：任务结束（接住 Agent 攒下的）、清空上下文（归零）。
@@ -416,6 +426,15 @@ private fun AppRoot(
      */
     var contextModelName by host.contextModelNameState
 
+    /**
+     * 落盘触发器（逐行审查 #15）。
+     *
+     * 防抖保存以 logs.size 等为 key，而收尾卡是**就地升级**最后一条的
+     * kind/label —— size 不变，升级结果可能永远不落盘，重启后看到的
+     * 是升级前的记录。任何"就地改了已保存内容也要落盘"的地方自增一次。
+     */
+    var persistTick by remember { mutableStateOf(0) }
+
     fun addLog(kind: LogKind, text: String, label: String? = null) {
         logs.add(
             LogEntry(
@@ -441,7 +460,7 @@ private fun AppRoot(
     //
     // 模型历史一起存：它和界面消息必须是**同一次**写入，否则两边会不一致
     // （见 modelHistory 的说明）
-    LaunchedEffect(logs.size, conversation.size, modelHistory, modelFingerprints, contextMemory, contextSkillCatalog, contextModelName) {
+    LaunchedEffect(logs.size, persistTick, conversation.size, modelHistory, modelFingerprints, contextMemory, contextSkillCatalog, contextModelName) {
         if (logs.isEmpty() && conversation.size == 0 && modelHistory.isEmpty()) return@LaunchedEffect
         delay(600)
         // 落盘放 IO："不限"档下 conversation.json 能有几百 KB（历史留到 40 万字符），
@@ -913,6 +932,9 @@ private fun AppRoot(
                             kind = if (success) LogKind.RESULT else LogKind.ERROR,
                             label = if (success) "任务完成" else "任务结束",
                         )
+                        // 就地升级不改 logs.size，不踹一脚的话这次升级可能
+                        // 永远不落盘（逐行审查 #15）
+                        persistTick++
                     } else {
                         addLog(
                             if (success) LogKind.RESULT else LogKind.ERROR,
@@ -1472,16 +1494,43 @@ private fun AppRoot(
      *
      * 必须放在 submit() 后面 —— Kotlin 的局部函数不能先用后定义，
      * 放前面是编译错误（这一步实际踩到了）。
+     *
+     * 任务正在跑（含暂停）时不再静默丢弃（逐行审查 #14）：定时任务是
+     * 一条**独立的任务**，不能像暂停期间的手动输入那样并进当前任务的
+     * 对话 —— 排队等当前任务结束后自动开跑。
      */
     LaunchedEffect(pendingTask) {
         val task = pendingTask ?: return@LaunchedEffect
         if (task.isBlank()) return@LaunchedEffect
+        if (isRunning) {
+            addLog(
+                LogKind.ACTION,
+                "有任务正在跑，「${task.take(40)}」已排队，当前任务结束后自动开跑",
+                LABEL_SCHEDULE,
+            )
+            toast = "有任务正在跑，这条定时任务已排队，结束后自动开跑"
+            queuedScheduleTask = task
+            queuedScheduleVirtualDisplay = pendingUseVirtualDisplay
+        } else {
+            addLog(LogKind.ACTION, task, LABEL_SCHEDULE)
+            input = task
+            // 这条任务的副屏选项要在 submit() 之前放好 —— submit 里会读它
+            runOnVirtualDisplay = pendingUseVirtualDisplay
+            submit()
+        }
+        onPendingTaskHandled()
+    }
+
+    // 排队的定时任务：当前任务结束（或删日志结束）后自动开跑
+    LaunchedEffect(queuedScheduleTask, isRunning, deletingLogs) {
+        val task = queuedScheduleTask ?: return@LaunchedEffect
+        if (isRunning) return@LaunchedEffect
+        if (deletingLogs) return@LaunchedEffect
+        queuedScheduleTask = null
         addLog(LogKind.ACTION, task, LABEL_SCHEDULE)
         input = task
-        // 这条任务的副屏选项要在 submit() 之前放好 —— submit 里会读它
-        runOnVirtualDisplay = pendingUseVirtualDisplay
+        runOnVirtualDisplay = queuedScheduleVirtualDisplay
         submit()
-        onPendingTaskHandled()
     }
 
     // ---- 系统返回键 / 返回手势 ----

@@ -107,7 +107,9 @@ class RunLogger internal constructor(
                 // 收尾之后才到的日志（清理、异步回调、服务停止）不是噪声 ——
                 // 恰恰是这类收尾阶段最容易出问题，而它们以前在这里被**整段丢掉**。
                 // report.json 已经写过，接不进去了，但文字流还可以留着。
-                runCatching { logFile.appendText("$stamped [收尾后] $message\n") }
+                // （逐行审查 #8：stamped 已经含 message，再拼一次会写成
+                //  "[时间] xxx [收尾后] xxx" —— 同一句话出现两遍。）
+                runCatching { logFile.appendText("$stamped [收尾后]\n") }
             } else {
                 runCatching { logFile.appendText(stamped + "\n") }
             }
