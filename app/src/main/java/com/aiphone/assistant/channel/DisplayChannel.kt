@@ -282,6 +282,13 @@ class DisplayChannel(
                 TouchKind.BROWSER_OPEN, TouchKind.BROWSER_HTML, TouchKind.BROWSER_EVAL ->
                     "内部错误：浏览器动作不该发到设备通道"
 
+                // ROADMAP §0 新动作在 Agent 执行层/意图层处理，不该发到通道
+                TouchKind.MOVE_APP, TouchKind.COLLECT,
+                TouchKind.SET_ALARM, TouchKind.SMS_DRAFT, TouchKind.OPEN_NAV,
+                TouchKind.SHARE_TEXT, TouchKind.CLIPBOARD_GET, TouchKind.CLIPBOARD_SET,
+                ->
+                    "内部错误：该动作在 Agent 执行层处理，不该发到设备通道"
+
                 TouchKind.TAP -> {
                     onPoint?.invoke(action.x, action.y)
                     ok(AdbShell.tap(context, displayId, action.x, action.y), "点击")
@@ -365,6 +372,9 @@ class DisplayChannel(
                 TouchKind.KEY_BACK -> ok(AdbShell.keyEvent(context, displayId, 4), "返回")
                 TouchKind.KEY_HOME -> ok(AdbShell.keyEvent(context, displayId, 3), "主页")
                 TouchKind.KEY_RECENTS -> ok(AdbShell.keyEvent(context, displayId, 187), "多任务")
+
+                // ROADMAP §0：搜索框的回车。shell 下就是 KEYCODE_ENTER（66）
+                TouchKind.PRESS_ENTER -> ok(AdbShell.keyEvent(context, displayId, 66), "回车")
 
                 TouchKind.OPEN_APP -> {
                     val pkg = action.packageName

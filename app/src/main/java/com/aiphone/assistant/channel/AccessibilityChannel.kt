@@ -398,6 +398,13 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
                 TouchKind.BROWSER_OPEN, TouchKind.BROWSER_HTML, TouchKind.BROWSER_EVAL ->
                     "内部错误：浏览器动作不该发到设备通道"
 
+                // ROADMAP §0 新动作在执行层/意图层处理，不该发到设备通道
+                TouchKind.MOVE_APP, TouchKind.COLLECT,
+                TouchKind.SET_ALARM, TouchKind.SMS_DRAFT, TouchKind.OPEN_NAV,
+                TouchKind.SHARE_TEXT, TouchKind.CLIPBOARD_GET, TouchKind.CLIPBOARD_SET,
+                ->
+                    "内部错误：该动作在 Agent 执行层处理，不该发到设备通道"
+
                 TouchKind.TAP -> {
                     if (action.targetIndex > 0) {
                         // 按编号走 —— 更准，优先；带上模型看到的那一帧当身份线索
@@ -545,6 +552,18 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
 
                 TouchKind.INPUT_TEXT -> inputText(action.text)
 
+                // ROADMAP §0：搜索框的回车（press_enter）
+                TouchKind.PRESS_ENTER -> {
+                    val focused = svc.findFocus()
+                    if (focused == null) {
+                        "没有聚焦的输入框：先点击输入框（或 input_text）再 press_enter。"
+                    } else if (svc.pressImeEnter(focused)) {
+                        null
+                    } else {
+                        "回车没有生效（系统拒绝了 IME 动作，补换行也失败）。"
+                    }
+                }
+
                 TouchKind.KEY_BACK -> if (svc.globalBack()) null else "返回失败"
                 TouchKind.KEY_HOME -> if (svc.globalHome()) null else "主页失败"
                 TouchKind.KEY_RECENTS -> if (svc.globalRecents()) null else "多任务失败"
@@ -675,8 +694,9 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
             // 绝不能往里灌 —— 灌进去会改掉用户刚打的字，而且完全看不出来
             if (own != null && pkg == own) {
                 AppLog.w("输入被拒：当前焦点是纸盒自己的输入框（$pkg），不往里灌文字", "输入")
-            } else if (svc.setText(focused, text)) {
-                return verifyText(svc, focused, text)
+            } else {
+                val why = writeTextWithRetry(svc, focused, text, "当前焦点框")
+                if (why == null) return null
             }
         }
 
@@ -690,13 +710,45 @@ class AccessibilityChannel(private val context: Context) : DeviceChannel {
         val editable = parsed.nodes.first { it.editable }
         val node = svc.findNodeByIndex(editable.index, w, h)
             ?: return "输入框（编号[${editable.index}]）在这一帧已经失效，请重新观察后再输入。"
+        return writeTextWithRetry(svc, node, text, "编号[${editable.index}]")
+    }
+
+    /**
+     * 对一个节点做"聚焦 → 写入"，失败再走 **click → refresh → 再写** 的重试链
+     * （ROADMAP §0）。
+     *
+     * 一次 ACTION_SET_TEXT 失败就放弃太脆：有些输入框要先经过一次真实点击
+     * 才接受写入（自绘控件尤其常见）。重试链只对**可编辑**节点做 ——
+     * click 是真实点击，落到不可编辑的焦点节点上可能误触按钮。
+     *
+     * @return null = 写入并回读确认成功；否则是给模型看的原因
+     */
+    private fun writeTextWithRetry(
+        svc: AutoService,
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        text: String,
+        label: String,
+    ): String? {
         svc.focusNode(node)
         Thread.sleep(120)
-        if (!svc.setText(node, text)) {
-            return "输入框（编号[${editable.index}]）不接受直接写入（系统拒绝了 SET_TEXT）。" +
-                "请改用点击输入框后再输入。"
+        if (svc.setText(node, text)) {
+            val why = verifyText(svc, node, text)
+            if (why == null) return null
         }
-        return verifyText(svc, node, text)
+        if (!node.isEditable) {
+            return "输入框（$label）不接受写入（系统拒绝了 SET_TEXT）。请重新观察后再输入。"
+        }
+        // 重试链：click → refresh → 再写
+        runCatching { svc.clickNode(node) }
+        Thread.sleep(200)
+        runCatching { node.refresh() }
+        if (svc.setText(node, text)) {
+            val why = verifyText(svc, node, text)
+            if (why == null) return null
+            return "$why（已尝试点击后再写入仍未确认）"
+        }
+        return "输入框（$label）不接受写入（SET_TEXT 与点击重试都被系统拒绝）。" +
+            "请改用坐标点击输入框后重新输入。"
     }
 
     /**

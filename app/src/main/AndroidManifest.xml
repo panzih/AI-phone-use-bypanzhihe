@@ -72,6 +72,12 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!--
+      ROADMAP §0 意图类动作：set_alarm 走 AlarmClock.ACTION_SET_ALARM（SKIP_UI）
+      需要这个普通级权限。只设闹钟，不涉及任何不可逆操作。
+    -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />

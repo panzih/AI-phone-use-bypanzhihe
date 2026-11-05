@@ -232,6 +232,32 @@ internal object BrowserJs {
       catch (e) { return { ok: false, reason: '双击失败：' + e }; }
       var b = box(el, sc);
       return { ok: true, x: b.x + b.w / 2, y: b.y + b.h / 2 };
+    },
+
+    // ROADMAP §0 press_enter：网页里的"回车"。给聚焦/指定输入框发 Enter
+    // 键事件；它在一个表单里就再触发提交 —— 搜索框的最后一击
+    enter: function (seq, want, viewWidth) {
+      var el = this.pick(seq, want);
+      if (!el && seq <= 0) {
+        var ae = document.activeElement;
+        if (ae && editable(ae)) el = ae;
+      }
+      if (!el) return { ok: false, reason: '找不到要回车的输入框（先 input_text 再 press_enter）' };
+      try {
+        el.focus();
+        var opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+        el.dispatchEvent(new KeyboardEvent('keydown', opts));
+        el.dispatchEvent(new KeyboardEvent('keypress', opts));
+        el.dispatchEvent(new KeyboardEvent('keyup', opts));
+        var form = el.form || (el.closest ? el.closest('form') : null);
+        if (form) {
+          if (typeof form.requestSubmit === 'function') { form.requestSubmit(); }
+          else if (typeof form.submit === 'function') { form.submit(); }
+        }
+        return { ok: true, x: 0, y: 0, text: textOf(el) };
+      } catch (e) {
+        return { ok: false, reason: '回车失败：' + e };
+      }
     }
   };
 })();

@@ -276,6 +276,106 @@ enum class TouchKind(
         needsPoint = false,
         needsDuration = false,
     ),
+
+    /**
+     * 模型自己换屏（ROADMAP §0 / agent-loop.md 5.5，第二阶段）。
+     *
+     * 存在理由是真的：有些界面在副屏渲染异常（SurfaceView、部分厂商 ROM 的
+     * 弹窗），模型需要主动把目标应用拉回主屏（或搬去副屏），而不是干等或盲点。
+     * 前提 Shizuku READY；复用 ChannelMigration 现有迁出/回迁路径；
+     * **单任务最多 3 次**（AgentActionExecutor 拦）—— 没有上限的话，模型会
+     * 因为某一屏显示异常而每步搬一次，比不搬更糟。
+     */
+    MOVE_APP(
+        id = "move_app",
+        label = "换屏",
+        description = "把目标应用搬到副屏（background）或搬回主屏（foreground）",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /**
+     * 触发输入法回车（ROADMAP §0：搜索框没有这一下搜不了）。
+     * 无障碍通道：聚焦节点 ACTION_IME_ENTER（API 32+，低版本退化为补 \n）；
+     * shell 通道：keyevent 66。
+     */
+    PRESS_ENTER(
+        id = "press_enter",
+        label = "回车",
+        description = "对当前聚焦的输入框触发回车/搜索（输完搜索词之后用）",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /**
+     * 批量翻页收集（ROADMAP §0）：一次动作连滚 N 页、每页读一次元素列表，
+     * 替代"一步一 scroll、每步重新问模型"。读长列表（订单/评论/通讯录）
+     * 的成本从 5~10 倍降回 1 倍。页数 / 时间 / 无新增三种停止条件。
+     */
+    COLLECT(
+        id = "collect",
+        label = "批量收集",
+        description = "连滚多页并收集每页的元素列表，一次拿全长列表",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /**
+     * 意图类动作（ROADMAP §0）：设系统闹钟。走 AlarmClock intent，
+     * 需要.SET_ALARM 权限。只设闹钟，不做任何不可逆的事。
+     */
+    SET_ALARM(
+        id = "set_alarm",
+        label = "设闹钟",
+        description = "用系统闹钟应用设一个闹钟（跳过确认界面）",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /** 打开短信**草稿**（收件人 + 内容预填好）。发送永远由用户亲手确认。 */
+    SMS_DRAFT(
+        id = "sms_draft",
+        label = "短信草稿",
+        description = "打开短信应用并预填收件人与内容（不发送，发送由用户确认）",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /** 打开地图导航（geo: intent，目的地由系统地图 App 解析）。 */
+    OPEN_NAV(
+        id = "open_nav",
+        label = "导航",
+        description = "用系统地图打开到目的地的导航",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /** 唤起系统分享面板（内容由模型准备好，发给谁由用户点）。 */
+    SHARE_TEXT(
+        id = "share_text",
+        label = "分享",
+        description = "唤起系统分享面板分享一段文字",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /** 读剪贴板（结果给模型）。剪贴板可能含敏感内容 —— 只在任务明确要求时用。 */
+    CLIPBOARD_GET(
+        id = "clipboard_get",
+        label = "读剪贴板",
+        description = "读取当前剪贴板内容",
+        needsPoint = false,
+        needsDuration = false,
+    ),
+
+    /** 写剪贴板。 */
+    CLIPBOARD_SET(
+        id = "clipboard_set",
+        label = "写剪贴板",
+        description = "把一段文字写进剪贴板",
+        needsPoint = false,
+        needsDuration = false,
+    ),
     ;
 
     companion object {
@@ -352,6 +452,17 @@ data class TouchAction(
     val selector: String = "",
     /** 浏览器：返回内容的最大字符数（0 = 用默认值）。HTML 很长，必须能截断 */
     val maxChars: Int = 0,
+    // ---- ROADMAP §0 意图类/换屏动作的参数 ----
+    /** move_app：搬去哪（"background" = 副屏，"foreground" = 主屏） */
+    val moveTarget: String = "",
+    /** set_alarm：小时（0-23）。-1 = 没给 */
+    val hour: Int = -1,
+    /** set_alarm：分钟（0-59）。-1 = 没给 */
+    val minute: Int = -1,
+    /** sms_draft：收件人（手机号/联系人代填） */
+    val target: String = "",
+    /** collect：最多翻几页（1-10；0 = 用默认值） */
+    val pages: Int = 0,
 )
 
 /**

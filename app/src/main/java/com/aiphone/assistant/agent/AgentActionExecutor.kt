@@ -353,6 +353,51 @@ internal suspend fun AgentSession.executeBatch(
                 results.add("$single → JS 返回：$trimmed")
             }
             break
+        } else if (action.kind == TouchKind.MOVE_APP) {
+            // 模型自己换屏（agent-loop.md 5.5）：复用迁出/回迁路径，单任务限 3 次。
+            // 换屏后旧编号作废 —— onChannelSwitched 已清判据，这里给模型留说明
+            OverlayBus.setPhase(AgentPhase.LAUNCHING)
+            logger?.line("  $single", "执行")
+            if (moveAppCount >= AgentLimits.MAX_MOVE_APP) {
+                results.add(
+                    "$single → 已到换屏上限（${AgentLimits.MAX_MOVE_APP} 次）。" +
+                        "请在当前屏上想办法（换控件、换做法），或 failed 说明原因。"
+                )
+                break
+            }
+            val moved = if (action.moveTarget == "background") {
+                migration.moveRequestedByUser()
+            } else {
+                migration.returnRequestedByUser()
+            }
+            if (moved) {
+                moveAppCount++
+                channelSwitchedTo = if (action.moveTarget == "background") "副屏" else "主屏"
+                results.add(
+                    "$single → 已${if (action.moveTarget == "background") "搬到副屏" else "搬回主屏"}" +
+                        "（本任务第 $moveAppCount 次换屏）。旧编号作废，下一步重新看界面。"
+                )
+            } else {
+                results.add("$single → 换屏没有成功（原因见上方日志），请在当前屏上继续")
+            }
+            break
+        } else if (action.kind == TouchKind.COLLECT) {
+            // 批量翻页收集（ROADMAP §0）：连滚 N 页、每页读一次元素列表，
+            // 一次拿全长列表。替代"一步一 scroll、每步重新问模型" ——
+            // 读长列表（订单/评论/通讯录）的成本从 5~10 倍降回 1 倍。
+            OverlayBus.setPhase(AgentPhase.WAITING_SYSTEM)
+            logger?.line("  $single", "执行")
+            results.add(runCollect(action))
+            break
+        } else if (action.kind in INTENT_KINDS) {
+            // 意图类动作（ROADMAP §0）：设闹钟/短信草稿/导航/分享/剪贴板。
+            // 走系统 Intent，不靠 UI 点 —— 成功率高、步数少。
+            // 都不产生不可逆的对外效果：短信是**草稿**、分享面板由用户点。
+            OverlayBus.setPhase(AgentPhase.ACTING)
+            logger?.line("  $single", "执行")
+            results.add("$single → ${runIntentAction(action)}")
+            executedActions++
+            break
         } else if (action.kind == TouchKind.DISMISS_DIALOG) {
             // 云端显式下发：端侧在当前页面找安全关闭按钮，找到就点、
             // 找不到（或涉及授权/支付）就不操作；然后立刻把控制权交回

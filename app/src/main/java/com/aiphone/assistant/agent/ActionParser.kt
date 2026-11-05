@@ -447,15 +447,36 @@ object ActionParser {
         val y2 = clamp(item.optInt("y2", 0), screenHeight)
         // "ms" 是模型爱写的简写（duration_ms / duration 之外多认一个）
         val duration = item.optInt("duration_ms", item.optInt("duration", item.optInt("ms", 0)))
+        // ROADMAP §0：set_alarm 的说明常写在 note 里（和 sleep 的 long_wait
+        // 同一套习惯），text/content 之外多认一个
         val text = item.optString("text", item.optString("content", ""))
+            .ifBlank {
+                if (kind == TouchKind.SET_ALARM) {
+                    item.optString("note", item.optString("reason", ""))
+                } else {
+                    ""
+                }
+            }
         val pkg = item.optString("package", item.optString("package_name", ""))
         // 浏览器三个动作的参数。同义词多认几个：模型写 url / href / link 都是那个意思
         val url = item.optString("url", item.optString("href", item.optString("link", ""))).trim()
         val js = item.optString("js", item.optString("script", item.optString("code", ""))).trim()
         val selector = item.optString("selector", item.optString("css", "")).trim()
         val maxChars = item.optInt("max_chars", item.optInt("maxChars", 0))
+        // ---- ROADMAP §0 意图类/换屏/批量收集的参数 ----
+        val moveTarget = item.optString("to", item.optString("target", "")).trim().lowercase()
+        val hour = item.optInt("hour", -1)
+        val minute = item.optInt("minute", item.optInt("minutes", -1))
+        // sms_draft 的收件人：target / to_number / phone / to 都认
+        //（move_app 的 to 也走这条链，但 kind 校验会拦住错误的值）
+        val target = item.optString(
+            "target",
+            item.optString("to_number", item.optString("phone", item.optString("to", ""))),
+        ).trim()
+        val pages = item.optInt("pages", 0)
 
         // 方向：模型可能写在 direction 里，也可能写在 action 名里（swipe_up）
+        // collect 不写方向就是向下（翻列表最常见），给个默认
         val direction = ScrollDirection.fromId(
             item.optString("direction", "").ifBlank {
                 when (actionName) {
@@ -464,7 +485,7 @@ object ActionParser {
                     else -> null
                 }
             }
-        )
+        ) ?: if (kind == TouchKind.COLLECT) ScrollDirection.DOWN else null
 
         // 打开网页的地址只允许 http/https。file:// / intent:// / 自定义 scheme
         // 一律在这里拒绝，并给模型一句能看懂的原因（它会换一个地址重试）。
@@ -502,6 +523,33 @@ object ActionParser {
 
             TouchKind.BROWSER_EVAL ->
                 if (js.isBlank()) "「执行JS」的 js 是空的" else null
+
+            // ---- ROADMAP §0：新动作的参数校验 ----
+            TouchKind.MOVE_APP ->
+                if (moveTarget != "background" && moveTarget != "foreground") {
+                    "「换屏」的 to 只认 background（副屏）/ foreground（主屏）"
+                } else null
+
+            TouchKind.SET_ALARM -> when {
+                hour !in 0..23 -> "「设闹钟」的 hour 要在 0-23"
+                minute !in 0..59 -> "「设闹钟」的 minute 要在 0-59"
+                else -> null
+            }
+
+            TouchKind.SMS_DRAFT -> when {
+                target.isBlank() -> "「短信草稿」缺 target（收件人）"
+                text.isBlank() -> "「短信草稿」的 text 是空的"
+                else -> null
+            }
+
+            TouchKind.OPEN_NAV ->
+                if (text.isBlank()) "「导航」的 text（目的地）是空的" else null
+
+            TouchKind.SHARE_TEXT ->
+                if (text.isBlank()) "「分享」的 text 是空的" else null
+
+            TouchKind.CLIPBOARD_SET ->
+                if (text.isBlank()) "「写剪贴板」的 text 是空的" else null
 
             else -> null
         }
@@ -546,6 +594,11 @@ object ActionParser {
                 js = js,
                 selector = selector,
                 maxChars = maxChars,
+                moveTarget = moveTarget,
+                hour = hour,
+                minute = minute,
+                target = target,
+                pages = pages,
             )
         )
         return null

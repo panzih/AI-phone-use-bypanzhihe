@@ -23,6 +23,7 @@ import com.aiphone.assistant.llm.LlmResult
 import com.aiphone.assistant.log.RunLogger
 import com.aiphone.assistant.overlay.AgentPhase
 import com.aiphone.assistant.overlay.OverlayBus
+import com.aiphone.assistant.touch.ScrollDirection
 import com.aiphone.assistant.touch.TouchAction
 import com.aiphone.assistant.touch.TouchKind
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,178 @@ internal data class DismissOutcome(val acted: Boolean, val note: String)
  * 模型显式下发 `dismiss_dialog` 时走这条：结论一律回灌给模型。
  */
 internal suspend fun AgentSession.handleDismissDialog(): String = dismissByLocalRules("云端").note
+
+/** 走系统 Intent 的那批意图类动作（ROADMAP §0）。它们都不产生不可逆的对外效果 */
+internal val INTENT_KINDS: Set<TouchKind> = setOf(
+    TouchKind.SET_ALARM,
+    TouchKind.SMS_DRAFT,
+    TouchKind.OPEN_NAV,
+    TouchKind.SHARE_TEXT,
+    TouchKind.CLIPBOARD_GET,
+    TouchKind.CLIPBOARD_SET,
+)
+
+/**
+ * collect：批量翻页收集（ROADMAP §0）。
+ *
+ * 连滚 [TouchAction.pages] 页（默认 5，最多 10），每页读一次元素列表，
+ * 拼成一条结果回灌。三种停止条件：页数到 / 连续两页内容一样（没有新东西了）/
+ * 时间预算（[AgentLimits.COLLECT_TIME_BUDGET_MS]）。总量也封顶
+ * （[AgentLimits.COLLECT_MAX_CHARS]）—— 收集是省往返的，不是省 token 的对立面。
+ *
+ * 当前这一页的列表模型已经拿到了，所以**先滚再读**：读到的都是新内容。
+ * 各页的编号只在该页当帧有效（翻走了就失效），结果里明确说明。
+ */
+internal suspend fun AgentSession.runCollect(action: TouchAction): String {
+    val dir = action.direction ?: ScrollDirection.DOWN
+    val pages = (if (action.pages > 0) action.pages else AgentLimits.COLLECT_DEFAULT_PAGES)
+        .coerceIn(1, AgentLimits.COLLECT_MAX_PAGES)
+    val sb = StringBuilder()
+    var lastFp: String? = null
+    var gained = 0
+    var page = 1
+    var aborted = false
+    val startAt = System.nanoTime()
+
+    while (page <= pages && !aborted) {
+        if ((System.nanoTime() - startAt) / 1_000_000L > AgentLimits.COLLECT_TIME_BUDGET_MS) {
+            sb.append("（已达收集时间上限，第 $page 页起停止）\n")
+            break
+        }
+        // 暂停/急停/切换都能停：collect 是长动作，不能把用户按在外面
+        if (OverlayBus.pauseRequested) {
+            if (!awaitResume(currentStep)) break
+        }
+        when (interruption()) {
+            WaitOutcome.DONE -> {}
+            else -> {
+                sb.append("（collect 被中断，停在第 $page 页前）\n")
+                aborted = true
+            }
+        }
+        if (aborted) break
+
+        val scrollErr = withContext(Dispatchers.IO) {
+            controller.execute(TouchAction(kind = TouchKind.SCROLL, direction = dir))
+        }
+        if (scrollErr != null) {
+            sb.append("（第 $page 页滚动失败：$scrollErr）\n")
+            break
+        }
+        val sr = awaitStable(TouchKind.SCROLL)
+        if (sr.outcome != WaitOutcome.DONE) {
+            sb.append("（collect 等待中被中断，停在第 $page 页后）\n")
+            break
+        }
+        val read = withContext(Dispatchers.IO) { controller.readUiTree() }
+        val fp = PageFingerprint.fingerprint(read.nodes)
+        if (fp == lastFp) {
+            sb.append("（第 $page 页与上一页内容相同：已经到底了，停止）\n")
+            break
+        }
+        lastFp = fp
+        gained += read.nodes.size
+        sb.append("── 第 $page 页（${read.nodes.size} 项；本页编号只在本页有效）──\n")
+        sb.append(read.text ?: "（这一页读不到元素列表）").append('\n')
+        if (sb.length > AgentLimits.COLLECT_MAX_CHARS) {
+            sb.append("（收集内容已达 ${AgentLimits.COLLECT_MAX_CHARS} 字上限，停止）\n")
+            break
+        }
+        page++
+    }
+    return "收集到 $gained 项（当前页之前的列表你已有）：\n$sb"
+}
+
+/**
+ * 意图类动作（ROADMAP §0）：走系统 Intent，不靠 UI 点。
+ *
+ * 都不产生不可逆的对外效果：短信只开**草稿**（发送由用户亲手确认）、
+ * 分享面板发给谁由用户点、闹钟是用户看得见的系统闹钟。
+ * 剪贴板**读**可能带出敏感内容 —— 提示词里已经写明只在任务明确要求时用，
+ * 返回内容限 500 字；导出日志的脱敏（LogSanitizer）照常生效。
+ */
+internal suspend fun AgentSession.runIntentAction(action: TouchAction): String =
+    withContext(Dispatchers.IO) {
+        val ctx = controller.appContext
+        runCatching {
+            when (action.kind) {
+                TouchKind.SET_ALARM -> {
+                    val i = android.content.Intent(
+                        android.provider.AlarmClock.ACTION_SET_ALARM,
+                    ).apply {
+                        putExtra(android.provider.AlarmClock.EXTRA_HOUR, action.hour)
+                        putExtra(android.provider.AlarmClock.EXTRA_MINUTES, action.minute)
+                        if (action.text.isNotBlank()) {
+                            putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, action.text.take(60))
+                        }
+                        putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    ctx.startActivity(i)
+                    "已设闹钟 ${action.hour}:" + "%02d".format(action.minute) +
+                        (if (action.text.isBlank()) "" else "（${action.text.take(20)}）")
+                }
+
+                TouchKind.SMS_DRAFT -> {
+                    val i = android.content.Intent(
+                        android.content.Intent.ACTION_SENDTO,
+                        android.net.Uri.parse("smsto:${action.target}"),
+                    ).apply {
+                        putExtra("sms_body", action.text)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    ctx.startActivity(i)
+                    "已打开短信草稿（收件人 ${action.target.take(20)}，内容已预填）——" +
+                        "发送由用户确认，不要替用户点发送"
+                }
+
+                TouchKind.OPEN_NAV -> {
+                    val q = android.net.Uri.encode(action.text)
+                    val i = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("geo:0,0?q=$q"),
+                    ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    ctx.startActivity(i)
+                    "已打开地图导航：${action.text.take(30)}"
+                }
+
+                TouchKind.SHARE_TEXT -> {
+                    val i = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_TEXT, action.text)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    val chooser = android.content.Intent.createChooser(i, "分享").apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    ctx.startActivity(chooser)
+                    "已唤起分享面板（发给谁由用户选）"
+                }
+
+                TouchKind.CLIPBOARD_GET -> {
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    val t = cm?.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+                    if (t.isBlank()) {
+                        "剪贴板是空的"
+                    } else {
+                        "剪贴板内容（可能含敏感信息，不要写进 summary）：\n" + t.take(500)
+                    }
+                }
+
+                TouchKind.CLIPBOARD_SET -> {
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(
+                        android.content.ClipData.newPlainText("纸盒", action.text),
+                    )
+                    "已写入剪贴板（${action.text.length} 字符）"
+                }
+
+                else -> "内部错误：${action.kind.id} 不该走到意图处理器"
+            }
+        }.getOrElse { "启动失败：${it.message ?: it.javaClass.simpleName}" }
+    }
 
 /**
  * 按本地规则找无副作用的关闭按钮并点掉。

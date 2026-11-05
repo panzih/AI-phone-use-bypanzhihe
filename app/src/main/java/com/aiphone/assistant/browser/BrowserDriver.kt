@@ -253,6 +253,12 @@ object BrowserDriver {
                 TouchKind.BROWSER_HTML -> fail("内部错误：读网页源码不该作为触控动作下发")
                 TouchKind.BROWSER_EVAL -> fail("内部错误：执行 JS 不该作为触控动作下发")
 
+                // ROADMAP §0 新动作在 Agent 执行层/意图层处理，不发到浏览器
+                TouchKind.MOVE_APP, TouchKind.COLLECT,
+                TouchKind.SET_ALARM, TouchKind.SMS_DRAFT, TouchKind.OPEN_NAV,
+                TouchKind.SHARE_TEXT, TouchKind.CLIPBOARD_GET, TouchKind.CLIPBOARD_SET,
+                -> fail("内部错误：该动作在 Agent 执行层处理，不该发到浏览器")
+
                 TouchKind.TAP -> {
                     if (action.targetIndex > 0) {
                         val seq = seqOf(hint, action.targetIndex)
@@ -340,6 +346,18 @@ object BrowserDriver {
                 TouchKind.KEY_RECENTS -> fail("浏览器通道不支持多任务键")
 
                 TouchKind.OPEN_APP -> fail("浏览器通道不负责打开应用")
+
+                // ROADMAP §0：网页里的"回车"= 触发表单提交（搜索框最常用）
+                TouchKind.PRESS_ENTER -> {
+                    val seq = seqOf(hint, action.targetIndex)
+                    simpleResult(
+                        execJs(
+                            host,
+                            "__zh__.enter(" + seq + "," +
+                                BrowserJs.jsString(wantText(hint)) + ")",
+                        ),
+                    )
+                }
             }
         } catch (t: Throwable) {
             fail("浏览器操作失败：" + t.javaClass.simpleName + " " + (t.message ?: ""))

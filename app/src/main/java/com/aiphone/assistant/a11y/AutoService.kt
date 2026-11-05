@@ -475,6 +475,32 @@ class AutoService : AccessibilityService() {
     }
 
     /**
+     * 触发输入法回车（ROADMAP §0：press_enter，搜索框的最后一击）。
+     *
+     * API 32+ 走 ACTION_IME_ENTER —— 系统推荐路径，等价用户点了"搜索/回车"。
+     * 更低的版本没有这个动作：退化为把**原文本 + 换行**重新 SET_TEXT，
+     * 绝大多数搜索框把换行当回车。内容不写日志（可能是密码框）。
+     *
+     * @return false = 两条路都没走通，调用方如实报失败
+     */
+    fun pressImeEnter(node: AccessibilityNodeInfo): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S_V2) {
+            if (node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)) {
+                return true
+            }
+        }
+        if (!node.isEditable) return false
+        val current = node.text?.toString().orEmpty()
+        val args = android.os.Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                current + "\n",
+            )
+        }
+        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /**
      * 按编号找节点。编号是 [parseTree] 给的。
      *
      * 必须重新解析一遍（节点对象不能跨帧缓存，界面一变就失效），

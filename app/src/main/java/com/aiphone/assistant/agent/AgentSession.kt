@@ -206,6 +206,13 @@ internal class AgentSession(
      */
     internal var pendingView: String? = null
 
+    /**
+     * 本任务模型用 move_app 换了几次屏（agent-loop.md 5.5）。
+     * 上限 [AgentLimits.MAX_MOVE_APP]：没有上限的话模型会因为某一屏
+     * 显示异常而每步搬一次。
+     */
+    internal var moveAppCount = 0
+
     /** 模型连续几次没给出可用动作。 */
     internal var parseFails = 0
 
@@ -427,6 +434,7 @@ internal class AgentSession(
         unreadableTreeSteps = 0
         blindNoFrameSteps = 0
         pendingView = null
+        moveAppCount = 0
         parseFails = 0
         refusedBlindFinish = false
         finishRefusals = 0

@@ -58,8 +58,12 @@ object AgentPrompt {
      *      写进提示词 —— 端侧只是建议，**最终决定权在云端模型**。
      * 7 —— 0.12.0：browser_open 只接受 http/https（file/intent/自定义 scheme
      *      会被拒绝）；browser_eval 默认关闭，需用户在设置里显式开启。
+     * 8 —— 2026-11（ROADMAP §0 感知层）：新增操作环境卡与 view 字段
+     *      （tree/image/both）、collect 批量收集、move_app 换屏、press_enter
+     *      回车、意图类动作（set_alarm/sms_draft/open_nav/share_text/
+     *      clipboard_get/clipboard_set）。
      */
-    const val VERSION = "7"
+    const val VERSION = "8"
 
     /**
      * 系统提示词。
@@ -96,6 +100,8 @@ object AgentPrompt {
   「这个元素已经不在当前界面上了」，那时重新看，不要硬撑。
 - 列表末尾写「已达上限」= 元素比发给你的多：用 scroll 翻，或给坐标。
 - **这一轮没有列表**（副屏 / 自绘界面）：一律不要用 index，直接看附图给 x / y。
+- **附图带编号圆标**（元素列表随图一起发时）：图上的数字和列表的 [n] 是
+  **同一个元素** —— 用图确认外观、用列表拿编号，不用来回对。
 
 # 一次给一批，别一步一步来
 `actions` 是按顺序执行的数组。每个动作之后系统会**自己等界面稳定**
@@ -136,6 +142,14 @@ object AgentPrompt {
 | browser_open | 打开**内置浏览器**并加载网址 | url（可省 = 空白页） |
 | browser_html | 读当前网页的 HTML（背后的代码） | selector（可省，省 = 整页）；max_chars |
 | browser_eval | 在网页里执行一段 JS 并拿回结果（默认关闭，需用户在设置里开启） | js |
+| press_enter | 对当前聚焦的输入框触发回车/搜索（输完搜索词之后用） | 无 |
+| collect | 连滚多页收集长列表（订单/评论），每页元素都带编号 | direction（默认 down）；pages（默认 5，最多 10） |
+| move_app | 把目标应用搬到副屏/搬回主屏（界面在某屏渲染异常时用） | to（background/foreground）；需 Shizuku；单任务最多 3 次 |
+| set_alarm | 用系统闹钟设一个闹钟 | hour（0-23）、minute（0-59）；note 可省 |
+| sms_draft | 打开短信**草稿**（发送由用户确认，不要替用户点发送） | target（收件人）；text |
+| open_nav | 用系统地图打开导航 | text（目的地） |
+| share_text | 唤起系统分享面板 | text |
+| clipboard_get / clipboard_set | 读/写剪贴板（读可能带出敏感信息，只在任务明确要求时用） | 无 / text |
 
 找列表里更靠后的内容用 scroll，不要用 swipe —— scroll 直接滚那个容器，不会滚过头。
 
@@ -558,6 +572,19 @@ $catalog
         TouchKind.BROWSER_EVAL -> "执行 JS「${action.js.take(40)}」"
         TouchKind.OPEN_APP -> "打开应用 ${action.packageName}"
         TouchKind.WAIT -> "等待 ${action.durationMs}ms"
+        // ---- ROADMAP §0 新动作的可读描述（界面/日志里显示给用户）----
+        TouchKind.MOVE_APP ->
+            "换屏 → " + (if (action.moveTarget == "background") "副屏" else "主屏")
+        TouchKind.COLLECT ->
+            "批量收集 " + (action.direction?.label ?: "向下") +
+                (if (action.pages > 0) " ${action.pages} 页" else "")
+        TouchKind.SET_ALARM -> "设闹钟 ${action.hour}:" + "%02d".format(action.minute)
+        TouchKind.SMS_DRAFT ->
+            "短信草稿 → ${action.target.take(16)}「${action.text.take(16)}」"
+        TouchKind.OPEN_NAV -> "导航 → ${action.text.take(20)}"
+        TouchKind.SHARE_TEXT -> "分享「${action.text.take(20)}」"
+        TouchKind.CLIPBOARD_GET -> "读剪贴板"
+        TouchKind.CLIPBOARD_SET -> "写剪贴板「${action.text.take(16)}」"
         else -> action.kind.label
     }
 

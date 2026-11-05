@@ -303,7 +303,17 @@ internal suspend fun AgentSession.askModel(
         // 不清的话，模型在同一步里再要一次截图/技能（continue@ask）时，
         // 下一条 user 消息会把**同一张图**原样再附一遍 —— 白烧一份图片
         // token，免费池的额度就是这么被加速烧完的。
-        val sentImage = pendingImage
+        // ROADMAP §0 截图编号：**元素列表随本条消息一起发**时，把同一套编号
+        // 画到图上（图上的 [n] = 列表里的 [n]）。view:image 那种"只有图没有
+        // 列表"的轮次不编号 —— 模型不知道 [n] 是谁，画了也白画。
+        // annotate 失败返回 null 时退回原图：编号是增益，绝不能把图弄丢。
+        val sentImage = pendingImage?.let { img ->
+            if (effectiveTree != null && treeRead.nodes.isNotEmpty()) {
+                com.aiphone.assistant.a11y.NumberedShot.annotate(img, treeRead.nodes, w, h) ?: img
+            } else {
+                img
+            }
+        }
         history.add(ChatTurn(ChatTurn.USER, userText, sentImage))
         pendingImage = null
         // 原样落盘：导出包里要能看到"我们问了什么"，而不只是模型答了什么

@@ -258,6 +258,24 @@ internal object AgentLimits {
     const val BLIND_NO_FRAME_STOP_STEPS = 3
 
     /**
+     * move_app 单任务上限（agent-loop.md 5.5）。
+     *
+     * 没有上限的话，模型会因为某一屏显示异常而每步搬一次 ——
+     * 每次搬运都要迁移任务栈 + 重建虚拟屏，比不搬更糟。
+     */
+    const val MAX_MOVE_APP = 3
+
+    /** collect（批量翻页收集）的页数：默认 5，最多 10 */
+    const val COLLECT_DEFAULT_PAGES = 5
+    const val COLLECT_MAX_PAGES = 10
+
+    /** collect 的总时间预算：到了就停，已收集的内容照常返回 */
+    const val COLLECT_TIME_BUDGET_MS = 20_000L
+
+    /** collect 收集文本的总量上限（防极端列表把这条消息撑爆） */
+    const val COLLECT_MAX_CHARS = 20_000
+
+    /**
      * 打开应用（冷启动）的稳定参数：最小起步更长 —— 启动页常常整段
      * 不在控件树里，指纹会误判"已稳定"；硬上限也相应放宽。
      *
