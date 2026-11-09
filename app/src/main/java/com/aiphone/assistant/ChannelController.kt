@@ -297,7 +297,21 @@ class ChannelController(private val context: Context) {
         action: com.aiphone.assistant.touch.TouchAction,
         onPoint: ((Int, Int) -> Unit)? = null,
         hint: com.aiphone.assistant.a11y.UiNode? = null,
-    ): String? = withContext(Dispatchers.IO) { ensureChannel().perform(action, onPoint, hint) }
+    ): String? = withContext(Dispatchers.IO) {
+        // open_app / 主页键 / 多任务键的目标是「离开当前页面、回到系统」，
+        // 浏览器通道里没有这些动作的实现。以前直接拒绝，模型就被锁死在
+        // WebView 里出不来（实机日志：连试两次 open_app + 一次 home 全被拒）。
+        // 这里先关掉浏览器、切回主通道，再按原动作执行。
+        if (com.aiphone.assistant.browser.BrowserHandoff.shouldLeaveBrowser(isBrowser, action.kind)) {
+            android.util.Log.i(
+                "ChannelController",
+                "浏览器通道不能执行 ${action.kind.id}，先关闭浏览器并切回主通道",
+            )
+            runCatching { com.aiphone.assistant.browser.BrowserDriver.close() }
+            exitBrowser()
+        }
+        ensureChannel().perform(action, onPoint, hint)
+    }
 
     /**
      * 当前前台应用的包名。

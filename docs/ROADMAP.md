@@ -153,6 +153,13 @@
   结论性判断只做建议，最终决定权归模型。
 - **引入第三方运行时依赖**：运行时只用 AndroidX + Shizuku，不加网络框架、依赖注入框架。
   `androidx.test` 只用于 `androidTest`，不进 APK。
+- **把 `material-icons-extended` 换成 `material-icons-core`**：换过一轮评估（2026-11-09），
+  结论是**保留 extended**。收益只在 debug：它让 `classes.dex` 到 44.7MB、debug APK 到 56MB，
+  换掉能降到 ~15MB、编译也快一截。但代价要先动 23 个图标 —— 项目实际用到 39 个图标，
+  其中 23 个（`Visibility`/`Timer`/`Sync`/`TouchApp` 等）core 里没有，要么自己写 `ImageVector`
+  （路径数据抄错就是图标变形），要么换成语义对不上的近似图标。
+  **对最终用户零影响**：release 开了 R8，没引用的图标已被裁掉，包只有 3.6MB。
+  所以这纯粹是本地 debug 的体验优化，不值得为它引入视觉回归风险。
 - **MCP 协议 / 插件市场 / 远程连电脑**：这三项是"接生态"，不是"点得准"，和命中率不是一个维度，
   不该和感知层的工作抢优先级：
   - MCP 的价值在"容器里的 Node 进程"能通过标准协议调手机能力。我们本来就在同一个进程里，
