@@ -271,7 +271,7 @@ private fun MainTopBar(
                     )
                     Spacer(Modifier.width(Space.sm))
                     StatusPill(
-                        text = if (state.settings.useFreeModel) "免费通道" else "自定义",
+                        text = if (state.settings.useFreeModel) "免费通道 Beta" else "自定义",
                         tone = if (state.settings.useFreeModel) Tone.Positive else Tone.Neutral,
                         dot = false,
                     )
@@ -497,7 +497,7 @@ private fun AppDrawer(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        text = if (useFreeModel) "免费通道 · 无需 Key" else "自定义模型",
+                        text = if (useFreeModel) "免费通道 Beta · 无需 Key" else "自定义模型",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

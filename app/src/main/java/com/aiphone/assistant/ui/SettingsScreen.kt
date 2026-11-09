@@ -157,7 +157,7 @@ fun SettingsScreen(
                     icon = Icons.Filled.Tune,
                     trailing = {
                         if (s.useFreeModel) {
-                            StatusPill(text = "免费通道", tone = Tone.Positive)
+                            StatusPill(text = "免费通道 Beta", tone = Tone.Positive)
                         }
                     },
                 )
@@ -344,7 +344,7 @@ private fun SettingsOverview(s: AppSettings, modifier: Modifier = Modifier) {
     ) {
         StatTile(
             label = "通道",
-            value = if (s.useFreeModel) "免费" else "自定义",
+            value = if (s.useFreeModel) "免费 Beta" else "自定义",
             tone = if (s.useFreeModel) Tone.Positive else Tone.Neutral,
             modifier = Modifier.weight(0.8f),
         )

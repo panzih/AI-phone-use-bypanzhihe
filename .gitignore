@@ -84,6 +84,8 @@ local.properties
 .cursor/
 .aider*
 .codex/
+# 本机 AI 助手配置（taste / 会话），属于开发机专属，不入库
+.commandcode/
 
 # ---------- 临时文件 ----------
 *.log
@@ -103,6 +105,11 @@ local.properties
 # release/ 里是打好的安装包、更新说明和校验记录，属于本地发布物料。
 # 仓库只放源码；需要发布包时在本地构建，或由维护者另行分发。
 release/
+
+# 宣传素材（音频 / 封面 / 成片）只留本机，不入库；脚本与说明照常入库
+promo/*.wav
+promo/*.png
+promo/*.mp4
 
 # 宣传片：成片两个 mp4 各 55MB（GitHub 单文件上限 100MB，但两个一起 111MB 没必要）；
 # raw/ 是录制原素材。脚本（render/audio/mux.swift）、README、封面图可入库。

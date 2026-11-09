@@ -299,10 +299,11 @@ internal suspend fun AgentSession.askModel(
         // 现在整条对话严格递增、每个字节都可复现：
         //     [system][user1(+图)][assistant1][user2(+图)]...
         //
-        // ⚠️ 图只属于**这一条**消息：拼进 history 后立刻清掉 pendingImage。
-        // 不清的话，模型在同一步里再要一次截图/技能（continue@ask）时，
-        // 下一条 user 消息会把**同一张图**原样再附一遍 —— 白烧一份图片
-        // token，免费池的额度就是这么被加速烧完的。
+        // ⚠️ 这里**故意不清空 pendingImage**（2026-11-09 复核后回退）。
+        // 同一步里模型再要一次截图/技能（continue@ask）时，下一条 user 消息
+        // 会重新带上这张图 —— 这是**为了保持上下文前缀逐字节稳定**。
+        // 不重发的话，图片所在回合的字节会发生变化，服务端缓存从该处起全部
+        // 失效，代价远大于省下的那份图片 token。重复发送是有意为之，不是 bug。
         // ROADMAP §0 截图编号：**元素列表随本条消息一起发**时，把同一套编号
         // 画到图上（图上的 [n] = 列表里的 [n]）。view:image 那种"只有图没有
         // 列表"的轮次不编号 —— 模型不知道 [n] 是谁，画了也白画。
@@ -315,7 +316,7 @@ internal suspend fun AgentSession.askModel(
             }
         }
         history.add(ChatTurn(ChatTurn.USER, userText, sentImage))
-        pendingImage = null
+        // 故意保留 pendingImage（见上）：重复带图换取缓存前缀稳定命中。
         // 原样落盘：导出包里要能看到"我们问了什么"，而不只是模型答了什么
         logger?.recordPrompt(step, userText)
 

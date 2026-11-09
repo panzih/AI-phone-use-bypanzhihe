@@ -131,7 +131,7 @@
     <string name="settings_back">返回</string>
     <string name="settings_section_model">模型</string>
     <string name="settings_model_mode_custom">自定义模型</string>
-    <string name="settings_model_mode_free">免费模型</string>
+    <string name="settings_model_mode_free">免费模型 Beta</string>
     <string name="settings_model_free_hint">走社区免密聚合网关，不用填 API Key。非官方通道，可能限流、中断或被封禁，屏幕内容会发送到该网关；可随时切回「自定义模型」。</string>
     <string name="settings_model_free_notice_title">免费通道风险说明</string>
     <string name="settings_model_free_notice_body">免费通道是社区共享的非官方聚合网关，不是本应用提供的服务：\n\n• 可能被限流、随时中断或被上游封禁；\n• 屏幕控件树、截图和你输入的文字会发送到该第三方网关；\n• 稳定性和隐私保障都不如你自己的 API Key。\n\n确认后才会开启。你可以随时在设置里切回「自定义模型」，切回后不再经免费通道发送任何内容。</string>
