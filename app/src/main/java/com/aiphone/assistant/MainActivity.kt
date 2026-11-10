@@ -1625,6 +1625,8 @@ private fun AppRoot(
     var updateCheckHint by remember { mutableStateOf("") }
 
     fun startUpdate() {
+        // 编译期开关关闭时，整条更新路径都不执行（源码保留，见 build.gradle.kts）
+        if (!BuildConfig.ENABLE_UPDATE) return
         val info = updateInfo ?: return
         // Android 8+ 装 APK 要用户先允许「安装未知应用」，没开就直接拉安装器
         // 只会得到一句「应用未安装」，所以先查再把人带过去
@@ -1666,6 +1668,7 @@ private fun AppRoot(
     }
 
     fun checkUpdateManually() {
+        if (!BuildConfig.ENABLE_UPDATE) return
         if (checkingUpdate) return
         checkingUpdate = true
         updateCheckHint = "正在检查…"
@@ -1690,6 +1693,8 @@ private fun AppRoot(
     }
 
     LaunchedEffect(Unit) {
+        // 编译期开关关闭：启动时完全不联网检查更新
+        if (!BuildConfig.ENABLE_UPDATE) return@LaunchedEffect
         if (!settings.autoCheckUpdate) return@LaunchedEffect
         val info = UpdateChecker.check(context).getOrNull() ?: return@LaunchedEffect
         if (info.versionCode == settings.skippedUpdateCode) return@LaunchedEffect
@@ -1900,6 +1905,7 @@ private fun AppRoot(
 
         Screen.ABOUT -> AboutScreen(
             appVersion = appVersion,
+            updateEnabled = BuildConfig.ENABLE_UPDATE,
             autoCheck = settings.autoCheckUpdate,
             checking = checkingUpdate,
             checkHint = updateCheckHint,
@@ -1912,19 +1918,21 @@ private fun AppRoot(
         )
     }
 
-    updateInfo?.let { info ->
-        UpdateDialog(
-            info = info,
-            progress = updateProgress,
-            downloading = updating,
-            error = updateError,
-            onUpdate = { startUpdate() },
-            onLater = {
-                updateInfo = null
-                updateError = null
-            },
-            onSkip = { skipUpdate() },
-        )
+    if (BuildConfig.ENABLE_UPDATE) {
+        updateInfo?.let { info ->
+            UpdateDialog(
+                info = info,
+                progress = updateProgress,
+                downloading = updating,
+                error = updateError,
+                onUpdate = { startUpdate() },
+                onLater = {
+                    updateInfo = null
+                    updateError = null
+                },
+                onSkip = { skipUpdate() },
+            )
+        }
     }
 
     // 老版本用户可能已经开着免费通道，但没有确认过风险说明。

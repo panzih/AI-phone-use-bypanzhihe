@@ -109,6 +109,9 @@ object BrowserDriver {
     /** 浏览器 Activity 是否还活着（能被驱动） */
     fun isAlive(): Boolean = activity?.isAliveNow() == true
 
+    /** 浏览器窗口是不是还在最前面（被别的应用盖住就 false） */
+    fun isForeground(): Boolean = activity?.isResumedNow() == true
+
     /** 关闭浏览器。用 Handler 投到主线程，因为 finish() 必须在主线程 */
     fun close() {
         val a = activity ?: return
@@ -179,12 +182,13 @@ object BrowserDriver {
             return null
         }
 
+        val (originX, originY) = host.locationOnScreen()
         return when (val r = execJs(host, "__zh__.snapshot(" + limit + "," + width + ")", 8_000)) {
             is Js.Fail -> {
                 fail(r.reason)
                 null
             }
-            is Js.Ok -> BrowserDom.parseSnapshot(r.out) ?: run {
+            is Js.Ok -> BrowserDom.parseSnapshot(r.out, originX, originY) ?: run {
                 fail("页面返回的元素数据格式不对")
                 null
             }

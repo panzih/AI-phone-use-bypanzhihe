@@ -426,7 +426,11 @@ internal suspend fun AgentSession.executeBatch(
             val isOpenApp = action.kind == TouchKind.OPEN_APP
             // 非 open_app 动作：执行前先按需让开（纸盒在前台就回桌面），
             // 否则这一下会点到纸盒自己。
-            if (!isOpenApp) yieldForegroundIfNeeded()
+            //
+            // 内置浏览器是例外：那个窗口本来就是纸盒自己的 Activity，让位逻辑
+            // 会把"自己在前台"判成"要点到我们自己的界面了"，按 HOME 关掉浏览器 ——
+            // 表现是"在网页里点一下，浏览器就没了"。
+            if (!isOpenApp && !controller.isBrowser) yieldForegroundIfNeeded()
 
             // 模型看到的那个控件（按编号操作时用来在当前帧里按身份找回它）。
             // 编号是逐帧的，模型往返期间界面可能重排，直接点第 N 个

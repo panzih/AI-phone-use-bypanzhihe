@@ -70,6 +70,7 @@ import com.aiphone.assistant.ui.design.Tone
 @Composable
 fun AboutScreen(
     appVersion: String,
+    updateEnabled: Boolean,
     autoCheck: Boolean,
     checking: Boolean,
     checkHint: String,
@@ -83,7 +84,7 @@ fun AboutScreen(
 
     AppScaffold(
         title = stringResource(R.string.about_title),
-        subtitle = "版本、更新与开源许可",
+        subtitle = if (updateEnabled) "版本、更新与开源许可" else "版本与开源许可",
         onBack = onBack,
         backLabel = stringResource(R.string.settings_back),
     ) { inner ->
@@ -101,29 +102,33 @@ fun AboutScreen(
                 )
             }
 
-            item { SectionTitle(text = "更新", icon = Icons.Filled.Download) }
-            item {
-                GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
-                    SettingRow(
-                        title = "检查新版本",
-                        subtitle = if (checkHint.isNotBlank()) checkHint else "会去仓库读最新版本的说明",
-                        trailing = {
-                            AppButton(
-                                text = if (checking) "检查中" else "检查",
-                                onClick = onCheckUpdate,
-                                variant = ButtonVariant.Ghost,
-                                loading = checking,
-                                enabled = !checking,
-                            )
-                        },
-                    )
-                    GroupDivider()
-                    SwitchRow(
-                        title = "启动时自动检查",
-                        subtitle = "默认关闭。开启后每次启动会向更新站发送 IP、User-Agent、设备标识（Android ID）、包名和版本号，用于版本分发与统计；关掉也能在这里手动查。",
-                        checked = autoCheck,
-                        onCheckedChange = onAutoCheckChange,
-                    )
+            // 更新功能由编译期开关控制（默认关，见 build.gradle.kts）。
+            // 关闭时整个区块不渲染，源码仍在工程里。
+            if (updateEnabled) {
+                item { SectionTitle(text = "更新", icon = Icons.Filled.Download) }
+                item {
+                    GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
+                        SettingRow(
+                            title = "检查新版本",
+                            subtitle = if (checkHint.isNotBlank()) checkHint else "会去仓库读最新版本的说明",
+                            trailing = {
+                                AppButton(
+                                    text = if (checking) "检查中" else "检查",
+                                    onClick = onCheckUpdate,
+                                    variant = ButtonVariant.Ghost,
+                                    loading = checking,
+                                    enabled = !checking,
+                                )
+                            },
+                        )
+                        GroupDivider()
+                        SwitchRow(
+                            title = "启动时自动检查",
+                            subtitle = "默认关闭。开启后每次启动会向更新站发送 IP、User-Agent、设备标识（Android ID）、包名和版本号，用于版本分发与统计；关掉也能在这里手动查。",
+                            checked = autoCheck,
+                            onCheckedChange = onAutoCheckChange,
+                        )
+                    }
                 }
             }
 
@@ -136,11 +141,13 @@ fun AboutScreen(
             }
             item {
                 GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
-                    SettingRow(
-                        title = "更新检查",
-                        subtitle = "手动检查或开启自动检查时，会向更新站发送 IP、User-Agent、Android ID、包名和版本号。服务端保存设备哈希以及检查/下载统计，用于版本分发。",
-                    )
-                    GroupDivider()
+                    if (updateEnabled) {
+                        SettingRow(
+                            title = "更新检查",
+                            subtitle = "手动检查或开启自动检查时，会向更新站发送 IP、User-Agent、Android ID、包名和版本号。服务端保存设备哈希以及检查/下载统计，用于版本分发。",
+                        )
+                        GroupDivider()
+                    }
                     SettingRow(
                         title = "模型请求",
                         subtitle = "屏幕控件树、截图和你输入的文字会发送给你选择的模型接口。免费通道是社区非官方网关，首次开启前会单独告知风险。",

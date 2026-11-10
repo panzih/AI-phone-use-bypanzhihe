@@ -168,12 +168,24 @@ class ChannelController(private val context: Context) {
      * 副屏没设置好时**回退到无障碍**而不是抛异常 —— 宁可走错通道让用户
      * 看见主屏在被操作，也不要因为一处状态不同步就整个崩掉。
      */
-    fun ensureChannel(): DeviceChannel = when {
-        mode == Mode.BROWSER ->
-            browser ?: com.aiphone.assistant.channel.BrowserChannel(context).also { browser = it }
-        isVirtualDisplay -> display!!
-        preferredAdb -> adbMain ?: buildAdbMain()
-        else -> accessibility ?: AccessibilityChannel(context).also { accessibility = it }
+    fun ensureChannel(): DeviceChannel {
+        // 网页把别的应用叫起来之后（点下载 → 系统安装器，点链接 → 外部 App），
+        // 浏览器窗口就不在前台了。这时候再按"网页"给界面、按 DOM 点元素全是错的：
+        // 用户看到的是安装器，模型看到的还是那张下载页，两边对不上，任务就卡死。
+        // 所以每轮取界面之前先问一句"网页还在最前面吗"，不在就切回无障碍。
+        if (mode == Mode.BROWSER &&
+            !com.aiphone.assistant.browser.BrowserDriver.isForeground()
+        ) {
+            android.util.Log.i("ChannelController", "浏览器不在前台了，切回主通道")
+            exitBrowser()
+        }
+        return when {
+            mode == Mode.BROWSER ->
+                browser ?: com.aiphone.assistant.channel.BrowserChannel(context).also { browser = it }
+            isVirtualDisplay -> display!!
+            preferredAdb -> adbMain ?: buildAdbMain()
+            else -> accessibility ?: AccessibilityChannel(context).also { accessibility = it }
+        }
     }
 
     /**
@@ -302,6 +314,8 @@ class ChannelController(private val context: Context) {
         // 浏览器通道里没有这些动作的实现。以前直接拒绝，模型就被锁死在
         // WebView 里出不来（实机日志：连试两次 open_app + 一次 home 全被拒）。
         // 这里先关掉浏览器、切回主通道，再按原动作执行。
+        // 网页里点了下载 / 跳了外部应用以后，浏览器会被盖到后面去。
+        // 通道切换统一交给 ensureChannel() 判断，这里只处理"要离开浏览器"的动作。
         if (com.aiphone.assistant.browser.BrowserHandoff.shouldLeaveBrowser(isBrowser, action.kind)) {
             android.util.Log.i(
                 "ChannelController",

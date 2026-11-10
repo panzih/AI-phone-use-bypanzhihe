@@ -380,7 +380,7 @@ object BrowserDom {
      * 解析 JS snapshot 的 JSON。不是对象 / 根本解析不了时返回 null ——
      * 调用方要把它当成"这一帧没读到页面"，而不是"页面有 0 个元素"。
      */
-    fun parseSnapshot(json: String): Snapshot? {
+    fun parseSnapshot(json: String, originX: Int = 0, originY: Int = 0): Snapshot? {
         val root = runCatching { BrowserJson.parse(json) }.getOrNull() as? Map<*, *> ?: return null
         val url = root["url"] as? String ?: ""
         val title = root["title"] as? String ?: ""
@@ -407,7 +407,11 @@ object BrowserDom {
                 text = text,
                 contentDesc = "",
                 viewId = "web:" + (i + 1),
-                bounds = Rect(x, y, x + w, y + h),
+                // 页面坐标以 WebView 左上角为原点，而元素列表里报给模型、以及
+            // 按编号点击用的都是**整块屏幕**坐标 —— 不加这个偏移，浏览器里的
+            // 一切都往上偏一个工具条的高度（实测 148px），看着点在按钮上，
+            // 实际点在按钮上方的空白处。
+            bounds = Rect(x + originX, y + originY, x + originX + w, y + originY + h),
                 // 输入框不标"可点"，只标"可输入"，和 UiNode.describe 的风格一致；
                 // 真正点击时 JS 仍然会对它 .click()，功能不受影响
                 clickable = !editable,

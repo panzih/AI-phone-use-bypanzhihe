@@ -22,6 +22,14 @@
         name="updates"
         path="updates/" />
 
+    <!--
+      内置浏览器里点网页上的下载链接，落在这里。和上面的更新包分开：
+      更新包每次只留一个、会被清掉，网页下载不该被它误删。
+    -->
+    <cache-path
+        name="downloads"
+        path="downloads/" />
+
     <files-path
         name="logs"
         path="纸盒/logs/" />

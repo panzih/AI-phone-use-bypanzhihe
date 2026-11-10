@@ -1,6 +1,7 @@
 package com.aiphone.assistant.browser
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -8,6 +9,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.View
+import android.webkit.URLUtil
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -224,9 +226,73 @@ class BrowserActivity : ComponentActivity() {
         bar.addView(reload)
         bar.addView(close)
 
-        webView = WebView(this).apply { setBackgroundColor(Color.WHITE) }
+        webView = WebView(this).apply {
+            setBackgroundColor(Color.WHITE)
+            // 网页里的下载链接交给系统下载器。
+            //
+            // 不接这个回调的话，点 apk 链接 WebView 无从处理，表现是
+            // 页面"闪一下就没了"——模型和用户都看不出来发生了什么。
+            // 下载落盘 / 通知 / 进度全由 DownloadManager 负责，这里只递一单，
+            // 不在本进程里开线程、也不碰文件路径。
+            setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+                enqueueDownload(url, contentDisposition, mimeType)
+            }
+        }
         root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         return root
+    }
+
+    /** 把一次下载转给系统下载器；失败只记日志，不打断页面 */
+    private fun enqueueDownload(url: String?, contentDisposition: String?, mimeType: String?) {
+        android.util.Log.i("BrowserActivity", "onDownloadStart 进来了：$url")
+        if (url.isNullOrBlank() || !BrowserUrl.isAllowedPage(url)) {
+            android.util.Log.w("BrowserActivity", "拒绝下载非 http/https 地址：" + url)
+            return
+        }
+        val name = URLUtil.guessFileName(url, contentDisposition, mimeType)
+        urlText.text = "正在下载：$name"
+        ready?.complete(Unit)
+        // 自己下、自己拉起安装器，不走 DownloadManager：
+        // 那个路子要再等一个跨进程广播，而且部分机型上它的通知压根不出现，
+        // 用户（和模型）都看不到"下完了"。这里下完就直接把安装弹出来。
+        Thread {
+            try {
+                val dir = java.io.File(cacheDir, "downloads").apply { mkdirs() }
+                val target = java.io.File(dir, name)
+                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 15_000
+                    readTimeout = 60_000
+                    instanceFollowRedirects = true
+                }
+                try {
+                    if (conn.responseCode != java.net.HttpURLConnection.HTTP_OK) {
+                        error("下载失败（" + conn.responseCode + "）")
+                    }
+                    conn.inputStream.use { input ->
+                        target.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+                android.util.Log.i("BrowserActivity", "下载完成：" + target.length() + " 字节 → $target")
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    this,
+                    packageName + ".fileprovider",
+                    target,
+                )
+                val intent = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                // 安装器要盖在网页上面。这里先把浏览器自己关掉：留着它的话
+                // 网页窗口会一直停在"下载完成"，而用户其实已经进了安装流程，
+                // 上层的通道也就跟着卡在"网页"上了。
+                runOnUiThread { runCatching { finish() } }
+                startActivity(intent)
+            } catch (e: Exception) {
+                android.util.Log.w("BrowserActivity", "下载没起来：" + e.message)
+                runOnUiThread { urlText.text = "下载失败：" + e.message }
+            }
+        }.start()
     }
 
     private fun toolButton(label: String, desc: String): TextView = TextView(this).apply {
@@ -346,15 +412,28 @@ class BrowserActivity : ComponentActivity() {
         }.getOrNull()
     }
 
+    /**
+     * 窗口是不是还在最前面。
+     *
+     * 网页里点个下载链接，系统安装器会盖到浏览器上面来 —— 这时候"网页"已经
+     * 不是用户在看的界面了，Agent 得把通道切回无障碍才能读安装器。
+     */
+    @Volatile
+    private var resumedNow = false
+
     override fun onResume() {
         super.onResume()
+        resumedNow = true
         if (::webView.isInitialized) webView.onResume()
     }
 
     override fun onPause() {
+        resumedNow = false
         if (::webView.isInitialized) webView.onPause()
         super.onPause()
     }
+
+    fun isResumedNow(): Boolean = resumedNow
 
     override fun onDestroy() {
         destroyed = true

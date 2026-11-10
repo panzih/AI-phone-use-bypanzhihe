@@ -23,6 +23,18 @@ val releaseProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
+/**
+ * 自动更新开关（编译期）。
+ *
+ * **默认关闭**：更新相关的源码（UpdateChecker / UpdateDialog / 关于页入口）
+ * 都保留在工程里，但构建时写进 BuildConfig 的常量是 false —— 运行时不会
+ * 发起任何检查/下载，release 包经 R8 常量折叠后这些代码不会被编进产物。
+ *
+ * 需要恢复更新能力时，构建时加 `-PenableUpdate=true` 即可，不用改源码。
+ */
+val enableUpdate: Boolean =
+    (project.findProperty("enableUpdate") as String?)?.toBoolean() ?: false
+
 /** 配置齐了、而且密钥文件真的在，才启用发布签名 */
 val hasReleaseKey: Boolean = run {
     val path = releaseProps.getProperty("storeFile") ?: return@run false
@@ -40,10 +52,12 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 81      // 0.12.2：修复内置浏览器通道无法退出
-        versionName = "0.12.2"
+        versionCode = 82      // 0.12.3：关闭自动更新（编译期开关），保留源码
+        versionName = "0.12.3"
         // 设备冒烟测试：androidTest 用 AndroidJUnitRunner 跑
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // 自动更新总开关（见文件开头 enableUpdate 的说明）
+        buildConfigField("boolean", "ENABLE_UPDATE", enableUpdate.toString())
     }
 
     /**
