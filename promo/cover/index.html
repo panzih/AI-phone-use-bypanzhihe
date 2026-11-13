@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>纸盒 · B站封面</title>
+<style>
+  @font-face { font-family: "Display"; src: url(../v3/fonts/SmileySans.ttf) format("truetype"); }
+  @font-face { font-family: "Text";    src: url(../v3/fonts/WenKai.ttf)     format("truetype"); }
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+const W = 1920, H = 1200;
+const c = document.getElementById('c');
+c.width = W; c.height = H;
+const ctx = c.getContext('2d');
+
+// 这张是一次性画的静态图，但 skill 的截图器要求页面上有 render(t) 这个契约函数
+window.DUR = 1;
+window.render = () => {};
+
+const C = {
+  paper: '#F2EFE8',
+  ink: '#171A18',
+  dim: 'rgba(23,26,24,.56)',
+  green: '#3E6B4A',
+  greenSoft: 'rgba(62,107,74,.13)',
+};
+const F_DISP = s => `400 ${s}px "Display", "PingFang SC", sans-serif`;
+const F_TEXT = s => `400 ${s}px "Text", "PingFang SC", serif`;
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function txt(s, x, y, font, color, align = 'left', sp = 0) {
+  ctx.save();
+  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  if (sp) ctx.letterSpacing = sp + 'px';
+  const w = ctx.measureText(s).width;
+  let dx = x;
+  if (align === 'center') dx = x - w / 2;
+  if (align === 'right') dx = x - w;
+  ctx.fillText(s, dx, y);
+  ctx.restore();
+  return w;
+}
+
+// 立方体 logo（同 ic_box_logo.xml 的斜二测几何）
+function logo(cx, cy, size, color, lw) {
+  const s = size / 108;
+  const P = (x, y) => [cx + (x - 54) * s, cy + (y - 54) * s];
+  const out = [[20, 88], [20, 46], [46, 20], [88, 20], [88, 62], [62, 88], [20, 88]].map(p => P(...p));
+  const inner = [[[20, 46], [62, 46]], [[62, 46], [62, 88]], [[62, 46], [88, 20]]].map(e => e.map(p => P(...p)));
+  ctx.save();
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = color; ctx.lineWidth = lw;
+  ctx.beginPath(); ctx.moveTo(...out[0]);
+  for (let i = 1; i < out.length; i++) ctx.lineTo(...out[i]);
+  ctx.stroke();
+  ctx.beginPath();
+  for (const e of inner) { ctx.moveTo(...e[0]); ctx.lineTo(...e[1]); }
+  ctx.stroke();
+  ctx.restore();
+}
+
+const loadImage = src => new Promise((res, rej) => {
+  const im = new Image();
+  im.onload = () => res(im); im.onerror = () => rej(new Error(src));
+  im.src = src;
+});
+
+(async () => {
+  await Promise.all([
+    document.fonts.load(F_DISP(80)), document.fonts.load(F_DISP(200)),
+    document.fonts.load(F_TEXT(40)),
+  ]);
+  const calc = await loadImage('../v3/assets/shots/calc.png');
+
+  // 底：纸色 + 极淡横纹
+  ctx.fillStyle = C.paper;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(23,26,24,.03)';
+  ctx.lineWidth = 1;
+  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  // 左上的产品标识
+  logo(152, 150, 86, C.ink, 5);
+  txt('纸盒', 214, 176, F_DISP(58), C.ink, 'left', 4);
+
+  // 主文案：这五个字就是片子里的那句话
+  const main = '我没碰屏幕';
+  const MS = 212;
+  let x = 108;
+  const baseY = 690;
+  for (let i = 0; i < main.length; i++) {
+    const ch = main[i];
+    const w = txt(ch, x, baseY, F_DISP(MS), i >= 3 ? C.green : C.ink);
+    x += w + 4;
+  }
+
+  // 副文案
+  txt('只说了五个字：装个计算器', 112, 802, F_TEXT(54), C.dim, 'left', 1);
+
+  // 绿色标签
+  const tag = '全程 0 次点击';
+  ctx.font = F_TEXT(44);
+  const tw = ctx.measureText(tag).width + 82;
+  ctx.fillStyle = C.greenSoft;
+  rr(112, 852, tw, 84, 42);
+  ctx.fill();
+  txt(tag, 112 + tw / 2, 909, F_TEXT(44), C.green, 'center', 1);
+
+  // 右侧手机：顶部完整（状态栏被切一半会显得像没加载完），底部出血
+  const pw = 590, ph = pw * 2400 / 1080;
+  const px = 1286, py = 2;
+  ctx.save();
+  ctx.shadowColor = 'rgba(20,24,20,.22)';
+  ctx.shadowBlur = 54; ctx.shadowOffsetY = 26;
+  ctx.fillStyle = '#0d0f0e';
+  rr(px - 11, py - 11, pw + 22, ph + 22, 50);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  rr(px, py, pw, ph, 40);
+  ctx.clip();
+  ctx.drawImage(calc, px, py, pw, ph);
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.18)';
+  ctx.lineWidth = 2;
+  rr(px + 1, py + 1, pw - 2, ph - 2, 39);
+  ctx.stroke();
+  ctx.restore();
+
+  // 底部留白给 B 站的时长角标，别放仓库地址 —— 观众在列表页点不进文字
+
+  window.READY = true;
+})().catch(e => { console.error(e); });
+</script>
+</body>
+</html>
