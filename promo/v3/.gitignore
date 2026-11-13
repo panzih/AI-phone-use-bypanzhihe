@@ -1,0 +1,7 @@
+# 成片与中间产物不入库：字体 28MB、音频 4MB、MP4 7MB，推上去只会把仓库撑大
+fonts/
+audio/
+out/
+qa/
+poster*.png
+assets/shots/run3.mp4

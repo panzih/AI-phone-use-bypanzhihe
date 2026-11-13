@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>纸盒 · 15s</title>
+<style>
+  @font-face { font-family: "Display"; src: url(fonts/SmileySans.ttf) format("truetype"); font-weight: 400; }
+  @font-face { font-family: "Text";    src: url(fonts/WenKai.ttf)     format("truetype"); font-weight: 400; }
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module" src="./preview.js"></script>
+<script type="module">
+import { DUR, CUES, SHOTS, b } from './timeline.js';
+import { seg, lerp, ease, springTo, pulse,
+         stageSize, setupCanvas, loadFonts } from './motion.js';
+
+const { W, H } = stageSize();
+const ctx = setupCanvas(document.getElementById('c'), W, H);
+const U = H / 1080;
+
+// ---------------------------------------------------------------- 设计变量
+const C = {
+  paper: '#F2EFE8',
+  ink: '#171A18',
+  dim: 'rgba(23,26,24,.52)',
+  line: 'rgba(23,26,24,.16)',
+  green: '#3E6B4A',
+  greenSoft: 'rgba(62,107,74,.12)',
+};
+
+const F_DISP = s => `400 ${s}px "Display", "PingFang SC", sans-serif`;
+const F_TEXT = s => `400 ${s}px "Text", "PingFang SC", serif`;
+
+const shot = id => SHOTS.find(s => s.id === id);
+const hit = sfx => CUES.filter(c => c.sfx === sfx).map(c => c.t);
+const HITS = {
+  snap: hit('snap'), impact: hit('impact'), bloom: hit('bloom'),
+  shimmer: hit('shimmer'), click: hit('click'), whoosh: hit('whoosh'),
+};
+
+// ---------------------------------------------------------------- 素材
+const SHOT_DIR = 'assets/shots/';
+const IMG = {};
+const NAMES = { main: 'main-empty.png', page: 'browser1.png', inst: 'inst.png', calc: 'calc.png' };
+
+const loadImage = src => new Promise((res, rej) => {
+  const im = new Image();
+  im.onload = () => res(im);
+  im.onerror = () => rej(new Error('image failed: ' + src));
+  im.src = src;
+});
+
+// ---------------------------------------------------------------- 画布小工具
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function text(str, x, y, font, color, align = 'left', spacing = 0) {
+  ctx.save();
+  ctx.font = font;
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  if (spacing) ctx.letterSpacing = spacing + 'px';
+  const w = ctx.measureText(str).width;
+  let dx = x;
+  if (align === 'center') dx = x - w / 2;
+  if (align === 'right') dx = x - w;
+  ctx.fillText(str, dx, y);
+  ctx.restore();
+  return w;
+}
+
+// 纸盒的 logo：斜二测立方体，外轮廓六顶点 + 三条内棱（取自 res/drawable/ic_box_logo.xml）
+function logo(cx, cy, size, color, lw, prog = 1, glow = 0) {
+  const s = size / 108;
+  const P = (x, y) => [cx + (x - 54) * s, cy + (y - 54) * s];
+  const outline = [[20, 88], [20, 46], [46, 20], [88, 20], [88, 62], [62, 88], [20, 88]].map(p => P(...p));
+  const inner = [
+    [[20, 46], [62, 46]],
+    [[62, 46], [62, 88]],
+    [[62, 46], [88, 20]],
+  ].map(sg => sg.map(p => P(...p)));
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = color;
+  if (glow > 0.01) {
+    ctx.shadowColor = 'rgba(62,107,74,' + (0.55 * glow) + ')';
+    ctx.shadowBlur = 28 * glow;
+  }
+  const per = [];
+  let total = 0;
+  for (let i = 0; i < outline.length - 1; i++) {
+    const d = Math.hypot(outline[i + 1][0] - outline[i][0], outline[i + 1][1] - outline[i][1]);
+    per.push(d); total += d;
+  }
+  let left = total * Math.min(1, Math.max(0, prog));
+  ctx.beginPath();
+  ctx.moveTo(...outline[0]);
+  for (let i = 0; i < per.length && left > 0; i++) {
+    const k = Math.min(1, left / per[i]);
+    const a = outline[i], c = outline[i + 1];
+    ctx.lineTo(lerp(a[0], c[0], k), lerp(a[1], c[1], k));
+    left -= per[i];
+  }
+  ctx.stroke();
+  if (prog > 0.98) {
+    ctx.beginPath();
+    for (const e of inner) { ctx.moveTo(...e[0]); ctx.lineTo(...e[1]); }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// 手机：外框 + 内屏（真实截图）
+function phone(img, x, y, w, { rot = 0 } = {}) {
+  const h = w * 2400 / 1080;
+  ctx.save();
+  ctx.translate(x + w / 2, y + h / 2);
+  if (rot) ctx.rotate(rot);
+  ctx.translate(-w / 2, -h / 2);
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(20,24,20,.20)';
+  ctx.shadowBlur = 46 * U;
+  ctx.shadowOffsetY = 26 * U;
+  ctx.fillStyle = '#0d0f0e';
+  roundRect(-10 * U, -10 * U, w + 20 * U, h + 20 * U, 42 * U);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  roundRect(0, 0, w, h, 34 * U);
+  ctx.clip();
+  ctx.drawImage(img, 0, 0, w, h);
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.16)';
+  ctx.lineWidth = 2 * U;
+  roundRect(1 * U, 1 * U, w - 2 * U, h - 2 * U, 33 * U);
+  ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
+
+// 颗粒：固定纹理，逐帧不抖（确定性）
+const GRAIN = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 160;
+  const g = c.getContext('2d');
+  const d = g.createImageData(160, 160);
+  let s = 20261110;
+  for (let i = 0; i < d.data.length; i += 4) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    const v = (s >> 16) & 255;
+    d.data[i] = d.data[i + 1] = d.data[i + 2] = v;
+    d.data[i + 3] = 16;
+  }
+  g.putImageData(d, 0, 0);
+  return c;
+})();
+
+function grain() {
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = ctx.createPattern(GRAIN, 'repeat');
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+
+// 左上角的镜号
+function stepTag(no, label, x, y, a = 1) {
+  if (a <= 0.001) return;
+  ctx.save();
+  ctx.globalAlpha = a;
+  text(String(no).padStart(2, '0'), x, y, F_TEXT(30 * U), C.green);
+  text(label, x + 58 * U, y, F_TEXT(30 * U), C.ink);
+  ctx.beginPath();
+  ctx.moveTo(x, y + 18 * U);
+  ctx.lineTo(x + 400 * U, y + 18 * U);
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 1.5 * U;
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- 启动
+window.DUR = DUR;
+
+(async () => {
+  await loadFonts([F_DISP(80), F_TEXT(30)]);
+  const imgs = await Promise.all(Object.entries(NAMES).map(([k, f]) => loadImage(SHOT_DIR + f).then(i => [k, i])));
+  for (const [k, i] of imgs) IMG[k] = i;
+
+  const S = { ask: shot('ask'), open: shot('open'), page: shot('page'),
+              inst: shot('inst'), done: shot('done'), say: shot('say'), end: shot('end') };
+
+  const phoneW = 462 * U;
+  const phoneH = phoneW * 2400 / 1080;
+  const flashT = [...HITS.snap, ...HITS.impact].sort((a, z) => a - z);
+
+  window.render = t => {
+    ctx.save();
+
+    ctx.fillStyle = C.paper;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(23,26,24,.032)';
+    ctx.lineWidth = 1;
+    for (let y = 0; y < H; y += 54 * U) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    ctx.restore();
+
+    // ---------------------------------------------------- 01 一句话
+    if (t < S.open.t0 + 0.02) {
+      const zoom = springTo(t, [[0, 1.04], [b(4), 1.0]], { freq: 1.6, damp: 0.9 });
+      ctx.save();
+      ctx.translate(W / 2, H / 2); ctx.scale(zoom, zoom); ctx.translate(-W / 2, -H / 2);
+
+      const lp = ease.outCubic(seg(t, 0.10, 1.05));
+      logo(W - 250 * U, 250 * U, 210 * U, 'rgba(23,26,24,.30)', 5.2 * U, lp, 0.25 * lp);
+
+      const a1 = ease.outCubic(seg(t, 0.12, 0.5));
+      text('你说', 132 * U, 372 * U + (1 - a1) * 18 * U, F_TEXT(38 * U), C.dim, 'left', 4);
+      ctx.save();
+      ctx.globalAlpha = a1;
+      ctx.fillStyle = C.green;
+      ctx.fillRect(132 * U, 396 * U, 62 * U, 3 * U);
+      ctx.restore();
+
+      const line = '装个计算器';
+      const start = 0.02, per = 0.085;
+      let x = 128 * U;
+      const baseY = 610 * U;
+      for (let i = 0; i < line.length; i++) {
+        const t0 = start + i * per;
+        const p = ease.outCubic(seg(t, t0, t0 + 0.26));
+        const bounce = springTo(t, [[t0 + 0.20, 0], [t0 + 0.30, -10 * U], [t0 + 0.46, 0]], { freq: 2.2, damp: 0.55 });
+        ctx.save();
+        ctx.globalAlpha = p;
+        ctx.translate(0, (1 - p) * 46 * U + bounce);
+        const w = text(line[i], x, baseY, F_DISP(196 * U), i === line.length - 1 ? C.green : C.ink);
+        x += w + 6 * U;
+        ctx.restore();
+      }
+
+      if (Math.floor(t / 0.28) % 2 === 0) {
+        ctx.fillStyle = C.green;
+        ctx.fillRect(x + 10 * U, baseY - 148 * U, 10 * U, 156 * U);
+      }
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, 1.02, 1.60));
+      text('不用点菜单，不用找图标', 134 * U, 730 * U, F_TEXT(40 * U), C.dim, 'left', 2);
+      ctx.restore();
+      ctx.restore();
+    }
+
+    // ---------------------------------------------------- 02–05 手机段
+    if (t >= S.open.t0 && t < S.say.t0) {
+      const inOpen = t < S.page.t0;
+      const inPage = t >= S.page.t0 && t < S.inst.t0;
+      const inInst = t >= S.inst.t0 && t < S.done.t0;
+      const inDone = t >= S.done.t0;
+
+      let px, py, rot, scale;
+      if (inOpen) {
+        const p = springTo(t, [[S.open.t0, 0], [S.open.t0 + 0.55, 1]], { freq: 1.5, damp: 0.72 });
+        px = 1178 * U; rot = 0; scale = 1;
+        py = lerp(H + 60 * U, 78 * U, p);
+      } else if (inPage) {
+        const p = ease.outCubic(seg(t, S.page.t0, S.page.t1));
+        px = lerp(206 * U, 250 * U, p); rot = lerp(-0.018, 0, p); scale = lerp(1.0, 1.035, p);
+        py = 74 * U;
+      } else if (inInst) {
+        const p = ease.inOutCubic(seg(t, S.inst.t0, S.inst.t1));
+        px = lerp(724 * U, 700 * U, p); rot = lerp(0.012, 0, p); scale = lerp(1.0, 1.07, p);
+        py = 70 * U;
+      } else {
+        const p = ease.inOutCubic(seg(t, S.done.t0, S.done.t1));
+        const enter = springTo(t, [[S.done.t0, 0], [S.done.t0 + 0.40, 1]], { freq: 1.7, damp: 0.78 });
+        px = lerp(1276 * U, 1244 * U, p); rot = lerp(0.02, 0, enter); scale = lerp(1.05, 1.09, p);
+        py = 58 * U;
+      }
+
+      const img = inOpen ? IMG.main : inPage ? IMG.page : inInst ? IMG.inst : IMG.calc;
+
+      ctx.save();
+      ctx.translate(px + phoneW / 2, py + phoneH / 2);
+      ctx.scale(scale, scale);
+      ctx.translate(-(px + phoneW / 2), -(py + phoneH / 2));
+      phone(img, px, py, phoneW, { rot });
+      ctx.restore();
+
+      const y0 = 300 * U;
+
+      if (inOpen) {
+        ctx.save();
+        ctx.globalAlpha = ease.outCubic(seg(t, S.open.t0 + 0.18, S.open.t0 + 0.62));
+        stepTag(1, '说一句', 132 * U, y0 - 60 * U);
+        text('它先开浏览器', 128 * U, y0 + 92 * U, F_DISP(112 * U), C.ink);
+        text('不是让你去找地址栏 —— 它自己开', 132 * U, y0 + 152 * U, F_TEXT(34 * U), C.dim, 'left', 1);
+        ctx.restore();
+      }
+
+      if (inPage) {
+        ctx.save();
+        ctx.globalAlpha = ease.outCubic(seg(t, S.page.t0, S.page.t0 + 0.22));
+        stepTag(2, '找页面', 866 * U, y0 - 60 * U);
+        ctx.restore();
+        ctx.save();
+        ctx.globalAlpha = ease.outCubic(seg(t, S.page.t0 + 0.30, S.page.t0 + 0.60));
+        text('下载页', 858 * U, y0 + 96 * U, F_DISP(136 * U), C.ink);
+        text('它读得懂页面上的按钮', 862 * U, y0 + 160 * U, F_TEXT(34 * U), C.dim, 'left', 1);
+        ctx.restore();
+
+        const cx = px + phoneW * 0.5, cy = py + phoneH * 0.616;
+        const ck = HITS.click[0];
+        for (let i = 0; i < 2; i++) {
+          const q = seg(t, ck + i * 0.10, ck + i * 0.10 + 0.62);
+          if (q > 0 && q < 1) {
+            ctx.save();
+            ctx.globalAlpha = (1 - q) * 0.5;
+            ctx.strokeStyle = C.green;
+            ctx.lineWidth = 3.2 * U;
+            ctx.beginPath();
+            ctx.arc(cx, cy, lerp(12 * U, 92 * U, ease.outCubic(q)), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      }
+
+      if (inInst) {
+        ctx.save();
+        ctx.globalAlpha = ease.outCubic(seg(t, S.inst.t0, S.inst.t0 + 0.20));
+        stepTag(3, '过系统这一关', 120 * U, 210 * U);
+        text('系统问一句', 116 * U, 330 * U, F_DISP(96 * U), C.ink);
+        text('它替你答', 116 * U, 420 * U, F_DISP(96 * U), C.green);
+        text('安装确认它自己点', 120 * U, 492 * U, F_TEXT(32 * U), C.dim, 'left', 1);
+        ctx.restore();
+      }
+
+      if (inDone) {
+        const a = ease.outCubic(seg(t, S.done.t0 + 0.05, S.done.t0 + 0.35));
+        const bb = springTo(t, [[S.done.t0 + 0.10, 0], [S.done.t0 + 0.50, 1]], { freq: 1.9, damp: 0.7 });
+        ctx.save();
+        ctx.globalAlpha = a;
+        stepTag(4, '装好了', 120 * U, 250 * U);
+        ctx.translate(0, (1 - bb) * 26 * U);
+        text('装好了', 112 * U, 420 * U, F_DISP(168 * U), C.ink);
+        ctx.restore();
+        ctx.save();
+        ctx.globalAlpha = a;
+        text('从下载到安装，你没碰过屏幕', 120 * U, 492 * U, F_TEXT(36 * U), C.dim, 'left', 1);
+        const lp = ease.outCubic(seg(t, S.done.t0 + 0.45, S.done.t0 + 1.0));
+        ctx.fillStyle = C.green;
+        ctx.fillRect(122 * U, 540 * U, 320 * U * lp, 3 * U);
+        ctx.restore();
+      }
+    }
+
+    // ---------------------------------------------------- 06 结论
+    if (t >= S.say.t0 && t < S.end.t0) {
+      const k = springTo(t, [[S.say.t0, 0], [S.say.t0 + 0.36, 1]], { freq: 1.5, damp: 0.78 });
+      // 整段一直在缓推，不能停成一帧死画面
+      const push = 1 + 0.055 * ease.inOutCubic(seg(t, S.say.t0, S.say.t1));
+      ctx.save();
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(lerp(0.96, 1, k) * push, lerp(0.96, 1, k) * push);
+      ctx.translate(-W / 2, -H / 2);
+      ctx.globalAlpha = ease.outCubic(seg(t, S.say.t0, S.say.t0 + 0.20));
+      text('它自己下的', W / 2, 470 * U, F_DISP(150 * U), C.ink, 'center');
+      text('自己装的', W / 2, 625 * U, F_DISP(150 * U), C.green, 'center');
+
+      // 绿色下划线从中间向两边长出来
+      const lp = ease.outCubic(seg(t, S.say.t0 + 0.46, S.say.t0 + 0.90));
+      if (lp > 0) {
+        ctx.fillStyle = C.green;
+        ctx.fillRect(W / 2 - 170 * U * lp, 694 * U, 340 * U * lp, 4 * U);
+      }
+
+      ctx.globalAlpha = ease.outCubic(seg(t, S.say.t0 + 0.30, S.say.t0 + 0.62));
+      text('全程没让你点一下', W / 2, 766 * U, F_TEXT(38 * U), C.dim, 'center', 2);
+      ctx.restore();
+    }
+
+    // ---------------------------------------------------- 07 落版
+    if (t >= S.end.t0) {
+      const lp = ease.outCubic(seg(t, S.end.t0 + 0.02, S.end.t0 + 0.55));
+      const a0 = ease.outCubic(seg(t, S.end.t0, S.end.t0 + 0.34));
+
+      // 横排 lockup：立方体 + 字标并排，下面压一行定位句和仓库
+      const L = 250 * U;               // logo 边长
+      const wordSize = 168 * U;
+      ctx.save();
+      ctx.font = F_DISP(wordSize);
+      const ww = ctx.measureText('纸盒').width + 6 * 2 * U;
+      ctx.restore();
+      const gap = 54 * U;
+      const total = L + gap + ww;
+      const left = W / 2 - total / 2;
+      const midY = 478 * U;
+
+      ctx.save();
+      ctx.globalAlpha = a0;
+      logo(left + L / 2, midY, L, C.ink, 5.4 * U, lp, 0.4 * lp);
+      text('纸盒', left + L + gap, midY + wordSize * 0.36, F_DISP(wordSize), C.ink, 'left', 6);
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, S.end.t0 + 0.30, S.end.t0 + 0.64));
+      text('说一句话，手机自己动', W / 2, 636 * U, F_TEXT(44 * U), C.dim, 'center', 2);
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, S.end.t0 + 0.46, S.end.t0 + 0.80));
+      const u = 'github.com/panzih/AI-phone-use-bypanzhihe';
+      ctx.font = F_TEXT(34 * U);
+      const uw = ctx.measureText(u).width;
+      const bw = uw + 84 * U;
+      ctx.fillStyle = C.greenSoft;
+      roundRect(W / 2 - bw / 2, 700 * U, bw, 70 * U, 35 * U);
+      ctx.fill();
+      text(u, W / 2, 747 * U, F_TEXT(34 * U), C.green, 'center');
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, S.end.t0 + 0.62, S.end.t0 + 0.94));
+      text('MIT 开源 · 不绑定厂商，不限定机型', W / 2, 836 * U, F_TEXT(28 * U), 'rgba(23,26,24,.34)', 'center', 1);
+      ctx.restore();
+    }
+
+    // ---------------------------------------------------- 切点闪白
+    let fl = 0;
+    for (const h of flashT) fl = Math.max(fl, pulse(t, h, 0.075, 0.006) * 0.14);
+    if (fl > 0.004) {
+      ctx.save();
+      ctx.globalAlpha = fl;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+
+    // ---------------------------------------------------- 进度条
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = 'rgba(23,26,24,.10)';
+    ctx.fillRect(0, H - 5 * U, W, 5 * U);
+    ctx.fillStyle = C.green;
+    ctx.fillRect(0, H - 5 * U, W * Math.min(1, t / DUR), 5 * U);
+    ctx.restore();
+
+    grain();
+    ctx.restore();
+  };
+
+  window.READY = true;
+})().catch(e => { console.error('启动失败：', e); });
+</script>
+</body>
+</html>
