@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>纸盒 · B站竖版封面</title>
+<style>
+  @font-face { font-family: "Display"; src: url(../v3/fonts/SmileySans.ttf) format("truetype"); }
+  @font-face { font-family: "Text";    src: url(../v3/fonts/WenKai.ttf)     format("truetype"); }
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+// B站投稿页的「竖屏封面」位：9:16，手机端信息流里整块铺开
+const W = 1080, H = 1920;
+const c = document.getElementById('c');
+c.width = W; c.height = H;
+const ctx = c.getContext('2d');
+
+window.DUR = 1;
+window.render = () => {};
+
+const C = {
+  paper: '#F2EFE8',
+  ink: '#171A18',
+  dim: 'rgba(23,26,24,.56)',
+  green: '#3E6B4A',
+  greenSoft: 'rgba(62,107,74,.13)',
+};
+const F_DISP = s => `400 ${s}px "Display", "PingFang SC", sans-serif`;
+const F_TEXT = s => `400 ${s}px "Text", "PingFang SC", serif`;
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function txt(s, x, y, font, color, align = 'left', sp = 0) {
+  ctx.save();
+  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  if (sp) ctx.letterSpacing = sp + 'px';
+  const w = ctx.measureText(s).width;
+  let dx = x;
+  if (align === 'center') dx = x - w / 2;
+  if (align === 'right') dx = x - w;
+  ctx.fillText(s, dx, y);
+  ctx.restore();
+  return w;
+}
+
+function logo(cx, cy, size, color, lw) {
+  const s = size / 108;
+  const P = (x, y) => [cx + (x - 54) * s, cy + (y - 54) * s];
+  const out = [[20, 88], [20, 46], [46, 20], [88, 20], [88, 62], [62, 88], [20, 88]].map(p => P(...p));
+  const inner = [[[20, 46], [62, 46]], [[62, 46], [62, 88]], [[62, 46], [88, 20]]].map(e => e.map(p => P(...p)));
+  ctx.save();
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = color; ctx.lineWidth = lw;
+  ctx.beginPath(); ctx.moveTo(...out[0]);
+  for (let i = 1; i < out.length; i++) ctx.lineTo(...out[i]);
+  ctx.stroke();
+  ctx.beginPath();
+  for (const e of inner) { ctx.moveTo(...e[0]); ctx.lineTo(...e[1]); }
+  ctx.stroke();
+  ctx.restore();
+}
+
+const loadImage = src => new Promise((res, rej) => {
+  const im = new Image();
+  im.onload = () => res(im); im.onerror = () => rej(new Error(src));
+  im.src = src;
+});
+
+(async () => {
+  await Promise.all([
+    document.fonts.load(F_DISP(80)), document.fonts.load(F_DISP(250)),
+    document.fonts.load(F_TEXT(44)),
+  ]);
+  const calc = await loadImage('../v3/assets/shots/calc.png');
+
+  ctx.fillStyle = C.paper;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(23,26,24,.03)';
+  ctx.lineWidth = 1;
+  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  // 顶部：产品标识 + "AI手机"标签（竖版单独强调，方便信息流里被认出来）
+  logo(104, 150, 82, C.ink, 5);
+  txt('纸盒', 164, 174, F_DISP(56), C.ink, 'left', 4);
+
+  const tag = 'AI手机';
+  ctx.font = F_DISP(38);
+  const tw = ctx.measureText(tag).width + 54;
+  ctx.fillStyle = C.green;
+  rr(362, 122, tw, 66, 33);
+  ctx.fill();
+  txt(tag, 362 + tw / 2, 169, F_DISP(38), C.paper, 'center', 2);
+
+  // 主文案：两行，屏幕那两字绿
+  const L1 = '我没碰', L2 = '屏幕';
+  const MS = 258;
+  let x = 100;
+  for (let i = 0; i < L1.length; i++) x += txt(L1[i], x, 520, F_DISP(MS), C.ink) + 4;
+  x = 100;
+  for (let i = 0; i < L2.length; i++) x += txt(L2[i], x, 790, F_DISP(MS), C.green) + 4;
+
+  // 副文案
+  txt('只说了五个字：装个计算器', 104, 876, F_TEXT(48), C.dim, 'left', 1);
+
+  // 手机：从下方顶上来，底部出血
+  const pw = 548, ph = pw * 2400 / 1080;
+  const px = (W - pw) / 2, py = 952;
+  ctx.save();
+  ctx.shadowColor = 'rgba(20,24,20,.22)';
+  ctx.shadowBlur = 48; ctx.shadowOffsetY = 22;
+  ctx.fillStyle = '#0d0f0e';
+  rr(px - 10, py - 10, pw + 20, ph + 20, 44);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  rr(px, py, pw, ph, 36);
+  ctx.clip();
+  ctx.drawImage(calc, px, py, pw, ph);
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.18)';
+  ctx.lineWidth = 2;
+  rr(px + 1, py + 1, pw - 2, ph - 2, 35);
+  ctx.stroke();
+  ctx.restore();
+
+  window.READY = true;
+})().catch(e => { console.error(e); });
+</script>
+</body>
+</html>

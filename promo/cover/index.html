@@ -93,9 +93,17 @@ const loadImage = src => new Promise((res, rej) => {
   ctx.lineWidth = 1;
   for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-  // 左上的产品标识
+  // 左上的产品标识 + 关键词标签
   logo(152, 150, 86, C.ink, 5);
   txt('纸盒', 214, 176, F_DISP(58), C.ink, 'left', 4);
+
+  const ktag = 'AI手机';
+  ctx.font = F_DISP(40);
+  const ktw = ctx.measureText(ktag).width + 58;
+  ctx.fillStyle = C.green;
+  rr(364, 122, ktw, 70, 35);
+  ctx.fill();
+  txt(ktag, 364 + ktw / 2, 172, F_DISP(40), C.paper, 'center', 2);
 
   // 主文案：这五个字就是片子里的那句话
   const main = '我没碰屏幕';
