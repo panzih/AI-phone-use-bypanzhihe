@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>纸盒 · B站封面</title>
+<title>纸盒 · B站封面 16:9</title>
 <style>
   @font-face { font-family: "Display"; src: url(../v3/fonts/SmileySans.ttf) format("truetype"); }
   @font-face { font-family: "Text";    src: url(../v3/fonts/WenKai.ttf)     format("truetype"); }
@@ -13,12 +13,12 @@
 <body>
 <canvas id="c"></canvas>
 <script type="module">
-const W = 1920, H = 1200;
+// 播放页 / 推荐流用的 16:9 封面
+const W = 1920, H = 1080;
 const c = document.getElementById('c');
 c.width = W; c.height = H;
 const ctx = c.getContext('2d');
 
-// 这张是一次性画的静态图，但 skill 的截图器要求页面上有 render(t) 这个契约函数
 window.DUR = 1;
 window.render = () => {};
 
@@ -55,7 +55,6 @@ function txt(s, x, y, font, color, align = 'left', sp = 0) {
   return w;
 }
 
-// 立方体 logo（同 ic_box_logo.xml 的斜二测几何）
 function logo(cx, cy, size, color, lw) {
   const s = size / 108;
   const P = (x, y) => [cx + (x - 54) * s, cy + (y - 54) * s];
@@ -86,61 +85,53 @@ const loadImage = src => new Promise((res, rej) => {
   ]);
   const calc = await loadImage('../v3/assets/shots/calc.png');
 
-  // 底：纸色 + 极淡横纹
   ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, W, H);
   ctx.strokeStyle = 'rgba(23,26,24,.03)';
   ctx.lineWidth = 1;
-  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  for (let y = 0; y < H; y += 56) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-  // 左上的产品标识 + 关键词标签
-  logo(152, 150, 86, C.ink, 5);
-  txt('纸盒', 214, 176, F_DISP(58), C.ink, 'left', 4);
+  logo(146, 132, 78, C.ink, 4.6);
+  txt('纸盒', 202, 156, F_DISP(52), C.ink, 'left', 4);
 
   const ktag = 'AI手机';
-  ctx.font = F_DISP(40);
-  const ktw = ctx.measureText(ktag).width + 58;
+  ctx.font = F_DISP(36);
+  const ktw = ctx.measureText(ktag).width + 52;
   ctx.fillStyle = C.green;
-  rr(364, 122, ktw, 70, 35);
+  rr(340, 106, ktw, 64, 32);
   ctx.fill();
-  txt(ktag, 364 + ktw / 2, 172, F_DISP(40), C.paper, 'center', 2);
+  txt(ktag, 340 + ktw / 2, 152, F_DISP(36), C.paper, 'center', 2);
 
-  // 主文案：这五个字就是片子里的那句话
+  // 主文案
   const main = '我没碰屏幕';
-  const MS = 212;
-  let x = 108;
-  const baseY = 690;
-  for (let i = 0; i < main.length; i++) {
-    const ch = main[i];
-    const w = txt(ch, x, baseY, F_DISP(MS), i >= 3 ? C.green : C.ink);
-    x += w + 4;
-  }
+  const MS = 204;
+  let x = 104;
+  const baseY = 612;
+  for (let i = 0; i < main.length; i++) x += txt(main[i], x, baseY, F_DISP(MS), i >= 3 ? C.green : C.ink) + 4;
 
-  // 副文案
-  txt('只说了五个字：装个计算器', 112, 802, F_TEXT(54), C.dim, 'left', 1);
+  txt('只说了五个字：装个计算器', 108, 716, F_TEXT(50), C.dim, 'left', 1);
 
-  // 绿色标签
   const tag = '全程 0 次点击';
-  ctx.font = F_TEXT(44);
-  const tw = ctx.measureText(tag).width + 82;
+  ctx.font = F_TEXT(42);
+  const tw = ctx.measureText(tag).width + 78;
   ctx.fillStyle = C.greenSoft;
-  rr(112, 852, tw, 84, 42);
+  rr(108, 762, tw, 80, 40);
   ctx.fill();
-  txt(tag, 112 + tw / 2, 909, F_TEXT(44), C.green, 'center', 1);
+  txt(tag, 108 + tw / 2, 817, F_TEXT(42), C.green, 'center', 1);
 
-  // 右侧手机：顶部完整（状态栏被切一半会显得像没加载完），底部出血
-  const pw = 590, ph = pw * 2400 / 1080;
-  const px = 1286, py = 2;
+  // 手机（右侧，底部出血）
+  const pw = 556, ph = pw * 2400 / 1080;
+  const px = 1300, py = 6;
   ctx.save();
   ctx.shadowColor = 'rgba(20,24,20,.22)';
-  ctx.shadowBlur = 54; ctx.shadowOffsetY = 26;
+  ctx.shadowBlur = 52; ctx.shadowOffsetY = 24;
   ctx.fillStyle = '#0d0f0e';
-  rr(px - 11, py - 11, pw + 22, ph + 22, 50);
+  rr(px - 10, py - 10, pw + 20, ph + 20, 46);
   ctx.fill();
   ctx.restore();
 
   ctx.save();
-  rr(px, py, pw, ph, 40);
+  rr(px, py, pw, ph, 37);
   ctx.clip();
   ctx.drawImage(calc, px, py, pw, ph);
   ctx.restore();
@@ -148,11 +139,9 @@ const loadImage = src => new Promise((res, rej) => {
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,.18)';
   ctx.lineWidth = 2;
-  rr(px + 1, py + 1, pw - 2, ph - 2, 39);
+  rr(px + 1, py + 1, pw - 2, ph - 2, 36);
   ctx.stroke();
   ctx.restore();
-
-  // 底部留白给 B 站的时长角标，别放仓库地址 —— 观众在列表页点不进文字
 
   window.READY = true;
 })().catch(e => { console.error(e); });

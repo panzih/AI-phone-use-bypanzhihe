@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>纸盒 · B站竖版封面</title>
+<title>纸盒 · B站封面 4:3</title>
 <style>
   @font-face { font-family: "Display"; src: url(../v3/fonts/SmileySans.ttf) format("truetype"); }
   @font-face { font-family: "Text";    src: url(../v3/fonts/WenKai.ttf)     format("truetype"); }
@@ -13,8 +13,8 @@
 <body>
 <canvas id="c"></canvas>
 <script type="module">
-// B站投稿页的「竖屏封面」位：9:16，手机端信息流里整块铺开
-const W = 1080, H = 1920;
+// 首页 / 分区列表用的 4:3 封面 —— 这是缩略图最小的位置，字要占到最大
+const W = 1600, H = 1200;
 const c = document.getElementById('c');
 c.width = W; c.height = H;
 const ctx = c.getContext('2d');
@@ -80,8 +80,8 @@ const loadImage = src => new Promise((res, rej) => {
 
 (async () => {
   await Promise.all([
-    document.fonts.load(F_DISP(80)), document.fonts.load(F_DISP(250)),
-    document.fonts.load(F_TEXT(44)),
+    document.fonts.load(F_DISP(80)), document.fonts.load(F_DISP(230)),
+    document.fonts.load(F_TEXT(46)),
   ]);
   const calc = await loadImage('../v3/assets/shots/calc.png');
 
@@ -89,52 +89,61 @@ const loadImage = src => new Promise((res, rej) => {
   ctx.fillRect(0, 0, W, H);
   ctx.strokeStyle = 'rgba(23,26,24,.03)';
   ctx.lineWidth = 1;
-  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  for (let y = 0; y < H; y += 56) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-  // 顶部：产品标识 + "AI手机"标签（竖版单独强调，方便信息流里被认出来）
-  logo(104, 150, 82, C.ink, 5);
-  txt('纸盒', 164, 174, F_DISP(56), C.ink, 'left', 4);
+  logo(106, 118, 76, C.ink, 4.6);
+  txt('纸盒', 160, 142, F_DISP(50), C.ink, 'left', 4);
 
-  const tag = 'AI手机';
-  ctx.font = F_DISP(38);
-  const tw = ctx.measureText(tag).width + 54;
+  const ktag = 'AI手机';
+  ctx.font = F_DISP(34);
+  const ktw = ctx.measureText(ktag).width + 50;
   ctx.fillStyle = C.green;
-  rr(362, 122, tw, 66, 33);
+  rr(292, 94, ktw, 60, 30);
   ctx.fill();
-  txt(tag, 362 + tw / 2, 169, F_DISP(38), C.paper, 'center', 2);
+  txt(ktag, 292 + ktw / 2, 138, F_DISP(34), C.paper, 'center', 2);
 
-  // 主文案：两行，屏幕那两字绿
-  const L1 = '我没碰', L2 = '屏幕';
-  const MS = 258;
-  let x = 100;
-  for (let i = 0; i < L1.length; i++) x += txt(L1[i], x, 520, F_DISP(MS), C.ink) + 4;
-  x = 100;
-  for (let i = 0; i < L2.length; i++) x += txt(L2[i], x, 790, F_DISP(MS), C.green) + 4;
+  // 主文案：一行铺满，缩到 180px 宽也认得出
+  const main = '我没碰屏幕';
+  const MS = 226;
+  ctx.font = F_DISP(MS);
+  const total = ctx.measureText(main).width + 4 * 4;
+  let x = (W - total) / 2;
+  const baseY = 452;
+  for (let i = 0; i < main.length; i++) x += txt(main[i], x, baseY, F_DISP(MS), i >= 3 ? C.green : C.ink) + 4;
 
-  // 副文案
-  txt('只说了五个字：装个计算器', 104, 876, F_TEXT(48), C.dim, 'left', 1);
+  txt('只说了五个字：装个计算器', W / 2, 540, F_TEXT(46), C.dim, 'center', 1);
 
-  // 手机：从下方顶上来，底部出血
-  const pw = 548, ph = pw * 2400 / 1080;
-  const px = (W - pw) / 2, py = 952;
+  const tag = '全程 0 次点击';
+  ctx.font = F_TEXT(42);
+  const tw = ctx.measureText(tag).width + 76;
+  ctx.fillStyle = C.greenSoft;
+  rr((W - tw) / 2, 574, tw, 78, 39);
+  ctx.fill();
+  txt(tag, W / 2, 628, F_TEXT(42), C.green, 'center', 1);
+
+  // 手机从下方探上来，底部出血。
+  // 只截计算器的按键区：整张屏原样放进来会有一大块白，缩到 180px 宽就什么信息都没有了。
+  const SRC_Y = 880, SRC_H = 1460;
+  const pw = 604, ph = pw * SRC_H / 1080;
+  const px = (W - pw) / 2, py = 700;
   ctx.save();
   ctx.shadowColor = 'rgba(20,24,20,.22)';
-  ctx.shadowBlur = 48; ctx.shadowOffsetY = 22;
+  ctx.shadowBlur = 50; ctx.shadowOffsetY = 22;
   ctx.fillStyle = '#0d0f0e';
-  rr(px - 10, py - 10, pw + 20, ph + 20, 44);
+  rr(px - 10, py - 10, pw + 20, ph + 20, 46);
   ctx.fill();
   ctx.restore();
 
   ctx.save();
-  rr(px, py, pw, ph, 36);
+  rr(px, py, pw, ph, 37);
   ctx.clip();
-  ctx.drawImage(calc, px, py, pw, ph);
+  ctx.drawImage(calc, 0, SRC_Y, 1080, SRC_H, px, py, pw, ph);
   ctx.restore();
 
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,.18)';
   ctx.lineWidth = 2;
-  rr(px + 1, py + 1, pw - 2, ph - 2, 35);
+  rr(px + 1, py + 1, pw - 2, ph - 2, 36);
   ctx.stroke();
   ctx.restore();
 
