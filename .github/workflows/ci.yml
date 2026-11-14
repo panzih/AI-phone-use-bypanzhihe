@@ -22,14 +22,16 @@ concurrency:
 
 jobs:
   unit-tests:
-    runs-on: ubuntu-latest
+    # 钉死 24.04：ubuntu-latest 2026-10-19 起迁 Ubuntu 26，镜像换代会悄悄改变
+    # 单测环境（Robolectric 尤其敏感），这里不让它漂
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
       # AGP 8.7 需要 JDK 17（build.gradle.kts 里 sourceCompatibility=17）
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -41,6 +43,12 @@ jobs:
       # 所以不需要 local.properties，也不需要再装 SDK
       - name: 跑单测
         run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      # 红的时候不再只有一行 exit code 1：直接列出挂掉的用例名，
+      # 日志和 Annotations 区都能看到，不用下载 artifact 才知道原因
+      - name: 打印失败用例
+        if: failure()
+        run: python3 tools/print_failed_tests.py
 
       # lint error 直接挡住合并；warning 留在报告里，不阻塞
       - name: Lint

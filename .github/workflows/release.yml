@@ -1,0 +1,125 @@
+# 打 tag 就出 Release。
+#
+# 触发：往远端推一个 v* 标签（git push origin v0.12.5，或 git push --follow-tags）。
+#      推分支本身不会触发这里 —— Release 只跟标签走，普通 push 只跑 CI。
+#
+# 干的事：assembleRelease 出包 → 挑更新说明 → 建 Release 并把 APK 挂上去。
+#
+# 更新说明从哪儿来（按优先级）：
+#   1. release-notes/<tag>.md      例如 release-notes/v0.12.5.md
+#   2. release-notes/<版本>.md     例如 release-notes/0.12.5.md
+#   3. CHANGELOG.md 里 "## 0.12.5" 这一节（自动截取到下一个 ## 之前）
+#   4. 标签自己的注释（git tag -a 的 -m 内容）
+#   5. 都没有就让 GitHub 按提交自动生成
+# 所以日常发版只要把 md 写好推进去就行，不用去网页上粘。
+#
+# 签名：仓库里没有 keystore.properties 时，build.gradle.kts 会回退到仓库内
+# 的 debug keystore（CN=Android Debug），出来的包能装、能覆盖旧版，但不是
+# 正式签名。要用正式签名，把 keystore 四要素放进 Actions Secrets 再放开。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# 同一个标签重复推，只留最后一次
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # 与 CI 保持一致，别让镜像漂移影响出包
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 取全历史：生成说明和读 tag 注释都要用
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 提醒：tag 和包里的 versionName 不一致时给个警告，避免"标签叫 0.12.5、
+      # 装上去是 0.12.4"这种低级错
+      - name: 检查版本号是否对得上
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          NAME=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -n1 | sed 's/.*"\(.*\)"/\1/')
+          echo "标签 ${TAG} / 工程 versionName ${NAME}"
+          if [ "$VER" != "$NAME" ]; then
+            echo "::warning title=版本号不一致::标签是 ${VER}，build.gradle.kts 里是 ${NAME}；确认无误再发"
+          fi
+
+      - name: 构建 Release APK
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      # 选出这次要用的说明文件，写进 step output
+      - name: 准备更新说明
+        id: notes
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          NOTES=""
+
+          for f in "release-notes/${TAG}.md" "release-notes/${VER}.md"; do
+            if [ -f "$f" ]; then NOTES="$f"; break; fi
+          done
+
+          if [ -z "$NOTES" ] && [ -f CHANGELOG.md ]; then
+            awk -v ver="$VER" 'index($0, "## " ver) == 1 { on = 1; next } on && /^## / { exit } on { print }' CHANGELOG.md > /tmp/notes.md
+            if [ -s /tmp/notes.md ]; then NOTES=/tmp/notes.md; fi
+          fi
+
+          if [ -z "$NOTES" ]; then
+            git tag -l --format='%(contents)' "$TAG" > /tmp/notes.md 2>/dev/null || true
+            if [ -s /tmp/notes.md ]; then NOTES=/tmp/notes.md; fi
+          fi
+
+          echo "path=$NOTES" >> "$GITHUB_OUTPUT"
+          if [ -n "$NOTES" ]; then
+            echo "说明来源：$NOTES"
+            head -n 20 "$NOTES"
+          else
+            echo "没有现成说明，交给 GitHub 自动生成"
+          fi
+
+      - name: 创建 / 更新 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES_PATH: ${{ steps.notes.outputs.path }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+          ASSET="AI手机-${TAG}.apk"
+          PRE=""
+          case "$TAG" in
+            *-beta*|*-rc*|*-alpha*) PRE="--prerelease" ;;
+          esac
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "该标签已有 Release，改为覆盖重传"
+            gh release upload "$TAG" "$APK#$ASSET" --clobber --repo "$GITHUB_REPOSITORY"
+            if [ -n "$NOTES_PATH" ]; then
+              gh release edit "$TAG" --notes-file "$NOTES_PATH" --repo "$GITHUB_REPOSITORY"
+            fi
+          elif [ -n "$NOTES_PATH" ]; then
+            gh release create "$TAG" "$APK#$ASSET" \
+              --title "$TAG" --notes-file "$NOTES_PATH" $PRE --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "$APK#$ASSET" \
+              --title "$TAG" --generate-notes $PRE --repo "$GITHUB_REPOSITORY"
+          fi
+
+          echo "发布完成：https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
