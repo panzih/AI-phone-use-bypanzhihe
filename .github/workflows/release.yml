@@ -103,22 +103,26 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
           ASSET="AI手机-${TAG}.apk"
+          # gh 的 `path#name` 写法在不同版本上并不都会改名（实测 v0.12.5 首发
+          # 被挂成了 app-release.apk）。先复制成目标文件名再上传，附件名才稳定。
+          STAGE="${RUNNER_TEMP}/${ASSET}"
+          cp "$APK" "$STAGE"
           PRE=""
           case "$TAG" in
             *-beta*|*-rc*|*-alpha*) PRE="--prerelease" ;;
           esac
 
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "该标签已有 Release，改为覆盖重传"
-            gh release upload "$TAG" "$APK#$ASSET" --clobber --repo "$GITHUB_REPOSITORY"
-            if [ -n "$NOTES_PATH" ]; then
-              gh release edit "$TAG" --notes-file "$NOTES_PATH" --repo "$GITHUB_REPOSITORY"
-            fi
-          elif [ -n "$NOTES_PATH" ]; then
-            gh release create "$TAG" "$APK#$ASSET" \
+            # 同一标签重复推：整套重建，避免旧附件（app-release.apk）和新附件并存。
+            echo "该标签已有 Release，删除后按本次构建重建"
+            gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY"
+          fi
+
+          if [ -n "$NOTES_PATH" ]; then
+            gh release create "$TAG" "$STAGE" \
               --title "$TAG" --notes-file "$NOTES_PATH" $PRE --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" "$APK#$ASSET" \
+            gh release create "$TAG" "$STAGE" \
               --title "$TAG" --generate-notes $PRE --repo "$GITHUB_REPOSITORY"
           fi
 
