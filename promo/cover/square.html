@@ -83,7 +83,7 @@ const loadImage = src => new Promise((res, rej) => {
     document.fonts.load(F_DISP(80)), document.fonts.load(F_DISP(230)),
     document.fonts.load(F_TEXT(46)),
   ]);
-  const calc = await loadImage('../v3/assets/shots/calc.png');
+  const shot = await loadImage('../v3/assets/shots/main-empty.png');
 
   ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, W, H);
@@ -91,41 +91,37 @@ const loadImage = src => new Promise((res, rej) => {
   ctx.lineWidth = 1;
   for (let y = 0; y < H; y += 56) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-  logo(106, 118, 76, C.ink, 4.6);
-  txt('纸盒', 160, 142, F_DISP(50), C.ink, 'left', 4);
+  logo(96, 116, 74, C.ink, 4.4);
+  txt('纸盒', 148, 140, F_DISP(48), C.ink, 'left', 4);
 
   const ktag = 'AI手机';
   ctx.font = F_DISP(34);
   const ktw = ctx.measureText(ktag).width + 50;
   ctx.fillStyle = C.green;
-  rr(292, 94, ktw, 60, 30);
+  rr(274, 92, ktw, 60, 30);
   ctx.fill();
-  txt(ktag, 292 + ktw / 2, 138, F_DISP(34), C.paper, 'center', 2);
+  txt(ktag, 274 + ktw / 2, 136, F_DISP(34), C.paper, 'center', 2);
 
-  // 主文案：一行铺满，缩到 180px 宽也认得出
-  const main = '我没碰屏幕';
-  const MS = 226;
-  ctx.font = F_DISP(MS);
-  const total = ctx.measureText(main).width + 4 * 4;
-  let x = (W - total) / 2;
-  const baseY = 452;
-  for (let i = 0; i < main.length; i++) x += txt(main[i], x, baseY, F_DISP(MS), i >= 3 ? C.green : C.ink) + 4;
+  // 主文案：两行，缩到 180px 宽也认得出
+  const MS = 212;
+  let x = 92;
+  for (const ch of '我没碰') x += txt(ch, x, 558, F_DISP(MS), C.ink) + 4;
+  x = 92;
+  for (const ch of '屏幕') x += txt(ch, x, 786, F_DISP(MS), C.green) + 4;
 
-  txt('只说了五个字：装个计算器', W / 2, 540, F_TEXT(46), C.dim, 'center', 1);
+  txt('一个 App，让手机自己会动', 96, 900, F_TEXT(44), C.dim, 'left', 1);
 
   const tag = '全程 0 次点击';
   ctx.font = F_TEXT(42);
   const tw = ctx.measureText(tag).width + 76;
   ctx.fillStyle = C.greenSoft;
-  rr((W - tw) / 2, 574, tw, 78, 39);
+  rr(96, 944, tw, 78, 39);
   ctx.fill();
-  txt(tag, W / 2, 628, F_TEXT(42), C.green, 'center', 1);
+  txt(tag, 96 + tw / 2, 998, F_TEXT(42), C.green, 'center', 1);
 
-  // 手机从下方探上来，底部出血。
-  // 只截计算器的按键区：整张屏原样放进来会有一大块白，缩到 180px 宽就什么信息都没有了。
-  const SRC_Y = 880, SRC_H = 1460;
-  const pw = 604, ph = pw * SRC_H / 1080;
-  const px = (W - pw) / 2, py = 700;
+  // 手机：右侧整机，上下都出血。放的是产品自己的主界面 —— 屏里那两行就是产品在说什么
+  const pw = 620, ph = pw * 2400 / 1080;
+  const px = W - pw + 34, py = 0;
   ctx.save();
   ctx.shadowColor = 'rgba(20,24,20,.22)';
   ctx.shadowBlur = 50; ctx.shadowOffsetY = 22;
@@ -137,7 +133,7 @@ const loadImage = src => new Promise((res, rej) => {
   ctx.save();
   rr(px, py, pw, ph, 37);
   ctx.clip();
-  ctx.drawImage(calc, 0, SRC_Y, 1080, SRC_H, px, py, pw, ph);
+  ctx.drawImage(shot, px, py, pw, ph);
   ctx.restore();
 
   ctx.save();

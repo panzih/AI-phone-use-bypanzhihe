@@ -83,7 +83,7 @@ const loadImage = src => new Promise((res, rej) => {
     document.fonts.load(F_DISP(80)), document.fonts.load(F_DISP(200)),
     document.fonts.load(F_TEXT(40)),
   ]);
-  const calc = await loadImage('../v3/assets/shots/calc.png');
+  const shot = await loadImage('../v3/assets/shots/main-empty.png');
 
   ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, W, H);
@@ -109,7 +109,7 @@ const loadImage = src => new Promise((res, rej) => {
   const baseY = 612;
   for (let i = 0; i < main.length; i++) x += txt(main[i], x, baseY, F_DISP(MS), i >= 3 ? C.green : C.ink) + 4;
 
-  txt('只说了五个字：装个计算器', 108, 716, F_TEXT(50), C.dim, 'left', 1);
+  txt('一个 App，让手机自己会动', 108, 716, F_TEXT(50), C.dim, 'left', 1);
 
   const tag = '全程 0 次点击';
   ctx.font = F_TEXT(42);
@@ -120,8 +120,8 @@ const loadImage = src => new Promise((res, rej) => {
   txt(tag, 108 + tw / 2, 817, F_TEXT(42), C.green, 'center', 1);
 
   // 手机（右侧，底部出血）
-  const pw = 556, ph = pw * 2400 / 1080;
-  const px = 1300, py = 6;
+  const pw = 560, ph = pw * 2400 / 1080;
+  const px = 1288, py = -10;
   ctx.save();
   ctx.shadowColor = 'rgba(20,24,20,.22)';
   ctx.shadowBlur = 52; ctx.shadowOffsetY = 24;
@@ -133,7 +133,7 @@ const loadImage = src => new Promise((res, rej) => {
   ctx.save();
   rr(px, py, pw, ph, 37);
   ctx.clip();
-  ctx.drawImage(calc, px, py, pw, ph);
+  ctx.drawImage(shot, px, py, pw, ph);
   ctx.restore();
 
   ctx.save();
