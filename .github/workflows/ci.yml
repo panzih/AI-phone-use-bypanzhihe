@@ -41,8 +41,11 @@ jobs:
 
       # GitHub 的 ubuntu 镜像自带 Android SDK（ANDROID_HOME 已设好），
       # 所以不需要 local.properties，也不需要再装 SDK
+      # --rerun-tasks --no-build-cache：setup-gradle 会把 ~/.gradle 的构建缓存一起
+      # 带上，命中缓存时 test 任务直接 FROM-CACHE 秒过 —— 代码没测却显示绿。
+      # 这道门要真跑，宁可多花两分钟。
       - name: 跑单测
-        run: ./gradlew :app:testDebugUnitTest --stacktrace
+        run: ./gradlew :app:testDebugUnitTest --rerun-tasks --no-build-cache --stacktrace
 
       # 红的时候不再只有一行 exit code 1：直接列出挂掉的用例名，
       # 日志和 Annotations 区都能看到，不用下载 artifact 才知道原因
