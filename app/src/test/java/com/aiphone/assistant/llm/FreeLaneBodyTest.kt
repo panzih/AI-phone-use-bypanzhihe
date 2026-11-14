@@ -5,24 +5,22 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
  * 免费通道请求体的字段策略。
  *
  * 上游对非标准字段做**严格校验**，多发一个字段、甚至是字段值不在它的白名单里，
- * 都会 400 —— 这不是假想的风险，2026-10-16 的线上事故就是这么来的：
+ * 都会 400/429：
  *
- *  - 思考模式 OFF 多发 `thinking:{"type":"disabled"}` → space-bunny-free 上游
- *    `400 [invalid_request_error] invalid request`；
- *  - 消息带截图时多发 `image_url.detail:"original"` → 同一个上游同样 400
- *    （改成 "auto" 或不带字段都 200；把 image_url 摊平成纯字符串也会 400）。
- *
- * 同一天的 8 模型 × 2 形态实测矩阵：这些字段值只有个别上游拒，
- * 所以策略是"免费通道只发最小公倍数，个性化字段一律不带"。
+ *  - 思考模式 OFF 多发 `thinking:{"type":"disabled"}` → 400 invalid request；
+ *  - 消息带截图时多发 `image_url.detail:"original"` → 400（省掉字段才 200）；
+ *  - 缺官方 CLI 系统提示 / 缺官方 13 工具 → 429（2026-10-28 单变量实测）。
  *
  * 这里钉的不是"打了什么"，而是"**绝对不打什么**"。
  */
@@ -33,6 +31,11 @@ class FreeLaneBodyTest {
     /** 前两个字节是 JPEG 的魔数，够 [LlmClient] 的 mimeOf 认成 image/jpeg */
     private val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0x01, 0x02, 0x00)
 
+    @Before
+    fun installAssets() {
+        FreeLaneWire.installAssets(RuntimeEnvironment.getApplication())
+    }
+
     private fun body(
         useFree: Boolean,
         thinking: ThinkingMode,
@@ -41,6 +44,7 @@ class FreeLaneBodyTest {
         // 免费通道默认用池子里真实存在的 id：能力表按 id 查，用假 id 会落到
         // 保守兜底（纯文本、无档位），测不到真实的档位映射
         model: String = if (useFree) "deepseek-v4.1-flash-free" else "test-model",
+        system: String = "你是一个助手",
     ): JSONObject = LlmClient(
         LlmConfig(
             baseUrl = "https://api.example.com/v1",
@@ -50,13 +54,13 @@ class FreeLaneBodyTest {
             thinking = thinking,
             customEffort = customEffort,
         )
-    ).buildBody("你是一个助手", listOf(ChatTurn(ChatTurn.USER, "打开设置", imageBytes = image)))
+    ).buildBody(system, listOf(ChatTurn(ChatTurn.USER, "打开设置", imageBytes = image)))
 
     // ---- 免费通道 ----
 
     @Test
     fun `免费通道_OFF档不带thinking字段`() {
-        // 回归锚点：thinking:{type:disabled} 会让 space-bunny-free 400
+        // 回归锚点：thinking:{type:disabled} 会让免费上游 400
         val b = body(useFree = true, thinking = ThinkingMode.OFF)
         assertFalse("免费通道的 OFF 档不能发 thinking 字段：$b", b.has("thinking"))
         // OFF 不是思考模式，temperature 照发
@@ -65,8 +69,7 @@ class FreeLaneBodyTest {
 
     @Test
     fun `免费通道_LOW档只发effort不发thinking`() {
-        // 免费池只认 reasoning_effort 一个表达（上游 effortPatch 也只发这一个），
-        // 多发 thinking 对象是对非标准字段的额外风险
+        // 免费池只认 reasoning_effort 一个表达，多发 thinking 对象是额外风险
         val b = body(useFree = true, thinking = ThinkingMode.LOW)
         assertFalse("免费通道不该带 thinking：$b", b.has("thinking"))
         assertEquals("low", b.getString("reasoning_effort"))
@@ -82,7 +85,7 @@ class FreeLaneBodyTest {
 
     @Test
     fun `免费通道_没有推理的模型一个档位都不发`() {
-        // jev-1.13 没有推理能力，带 reasoning_effort 会被拒
+        // 认不出来的模型走保守兜底（无推理），带 reasoning_effort 会被拒
         val b = body(useFree = true, thinking = ThinkingMode.HIGH, model = "jev-1.13-free")
         assertFalse("无推理模型不能带 reasoning_effort：$b", b.has("reasoning_effort"))
         assertFalse("免费通道本来就不带 thinking：$b", b.has("thinking"))
@@ -116,86 +119,80 @@ class FreeLaneBodyTest {
     }
 
     @Test
-    fun `免费通道_按插件源码声明read与shell`() {
-        // 依据是 src/upstream.js 的 applyFingerprint / FINGERPRINT_TOOL_DEFINITIONS。
-        // 上游比对 description 全文与 parameters JSON：少声明、改措辞、properties:{}、
-        // 改名都是 403 FreeTierError。
+    fun `免费通道_补齐官方13工具集`() {
+        // 依据是 src/o2a/official-tools.js：13 个官方工具全量，chat 线带 strict:false。
         val b = body(useFree = true, thinking = ThinkingMode.OFF)
         assertTrue("免费通道必须流式", b.getBoolean("stream"))
         assertFalse("绝不能下发 tool_choice（v2 见到 none 就 403）：$b", b.has("tool_choice"))
 
         val tools = b.getJSONArray("tools")
-        assertEquals(2, tools.length())
-        val read = tools.getJSONObject(0).getJSONObject("function")
-        val shell = tools.getJSONObject(1).getJSONObject("function")
-        assertEquals("read", read.getString("name"))
-        assertEquals("shell", shell.getString("name"))
+        assertEquals("必须是官方 13 个工具", 13, tools.length())
+        val names = (0 until tools.length()).map { tools.getJSONObject(it).getJSONObject("function").getString("name") }
+        assertEquals(FreeLaneWire.OFFICIAL_TOOL_ORDER, names)
 
+        val byName = (0 until tools.length()).associate {
+            val fn = tools.getJSONObject(it).getJSONObject("function")
+            fn.getString("name") to fn
+        }
+        val read = byName.getValue("read")
         assertTrue(
             "read 的描述必须是官方原文",
             read.getString("description").startsWith(
                 "Read the contents of a file or directory. Supports text files, images, and PDFs.",
             ),
         )
-        assertEquals(
-            "read 的 path 参数不能省",
-            "File or directory to read",
-            read.getJSONObject("parameters").getJSONObject("properties")
-                .getJSONObject("path").getString("description"),
-        )
+        val shell = byName.getValue("shell")
         assertTrue(
             "shell 的描述必须是官方原文",
             shell.getString("description").startsWith(
                 "Execute a shell command and return its output. Commands run on Linux using bash.",
             ),
         )
-        assertTrue(
-            "shell 必须带 command 参数",
-            shell.getJSONObject("parameters").getJSONObject("properties").has("command"),
-        )
         assertEquals(
-            "additionalProperties 必须是 false（官方 schema 就是这样）",
+            "chat 线的官方工具必须带 strict:false",
             false,
-            read.getJSONObject("parameters").getBoolean("additionalProperties"),
+            read.getBoolean("strict"),
         )
     }
 
     @Test
-    fun `免费通道_system必须带env块`() {
-        // ensureFreeLaneEnvironment 的注释原话：
-        // "Reversible live controls (2026-10-28) returned 429 without it and PONG with it."
-        // —— 缺这个块不是"少点上下文"，是直接 429。
+    fun `免费通道_带测试用量的流式参数与默认输出上限`() {
+        val b = body(useFree = true, thinking = ThinkingMode.OFF)
+        assertTrue("必须让网关回 usage 帧", b.getJSONObject("stream_options").getBoolean("include_usage"))
+        assertEquals(32000, b.getInt("max_completion_tokens"))
+    }
+
+    @Test
+    fun `免费通道_system必须有官方提示与env块`() {
+        // 缺官方 CLI 提示（base prompt + <env> + skills）就是 429（2026-10-28 实测）。
         val b = body(useFree = true, thinking = ThinkingMode.OFF)
         val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertTrue("必须有官方提示标记：${system.take(120)}", system.contains(FreeLaneWire.OFFICIAL_PROMPT_MARKER))
         assertTrue("必须有 <env>：$system", system.contains("<env>"))
         assertTrue("必须有工作目录：$system", system.contains("Working directory:"))
         assertTrue("必须有平台：$system", system.contains("Platform: android"))
         // 注入的是真工具，必须同时告诉模型别调
         assertTrue("必须带上占位说明：$system", system.contains(FreeLaneWire.PLACEHOLDER_NOTE))
-        assertTrue("原有系统提示不能丢：$system", system.startsWith("你是一个助手"))
+        assertTrue("原有系统提示不能丢：$system", system.contains("你是一个助手"))
     }
 
     @Test
-    fun `免费通道_已有env块就不重复追加`() {
-        val cfg = LlmConfig(
-            baseUrl = "https://api.example.com/v1",
-            apiKey = "k",
-            model = "deepseek-v4.1-flash-free",
-            useFreeModel = true,
-            thinking = ThinkingMode.OFF,
-        )
-        val withEnv = "你是助手\n\n<env>\n  Working directory: /x\n  Platform: android\n</env>"
-        val b = LlmClient(cfg).buildBody(withEnv, listOf(ChatTurn(ChatTurn.USER, "hi")))
+    fun `免费通道_已有官方提示就不再重复注入`() {
+        val already = "${FreeLaneWire.OFFICIAL_PROMPT_MARKER} 之后的正文\n\n<env>\n  Working directory: /x\n  Platform: android\n</env>"
+        val b = body(useFree = true, thinking = ThinkingMode.OFF, system = already)
         val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertEquals("官方提示只能出现一次：$system", 1, Regex("You are opencode").findAll(system).count())
         assertEquals("<env> 只能出现一次：$system", 1, Regex("<env>").findAll(system).count())
+        assertTrue("占位说明仍要补：$system", system.contains(FreeLaneWire.PLACEHOLDER_NOTE))
     }
 
     @Test
-    fun `自定义通道不掺env块`() {
+    fun `自定义通道不掺标准背书`() {
         val b = body(useFree = false, thinking = ThinkingMode.OFF)
         val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
         assertEquals("自定义通道的 system 必须原样", "你是一个助手", system)
         assertFalse("自定义通道不该有 tools", b.has("tools"))
+        assertFalse("自定义通道不该有 stream_options", b.has("stream_options"))
     }
 
     @Test
@@ -213,7 +210,7 @@ class FreeLaneBodyTest {
 
     @Test
     fun `免费通道_截图消息不带detail字段`() {
-        // 回归锚点：detail:"original"（App 默认）会让 space-bunny-free 400
+        // 回归锚点：detail:"original" 会让部分免费上游 400
         val b = body(useFree = true, thinking = ThinkingMode.OFF, image = jpeg)
         val url = imagePart(b)
         assertFalse("免费通道的图片不能带 detail：$b", url.has("detail"))

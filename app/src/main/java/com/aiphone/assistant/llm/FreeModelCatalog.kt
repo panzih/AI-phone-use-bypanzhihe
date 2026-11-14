@@ -60,7 +60,7 @@ object FreeModelCatalog {
     private val LADDER = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
     /**
-     * 当前免费池里会出现的模型。
+     * 当前免费池里会出现的模型（2026-11-10 从网关 `/inference/v1/models` 实测）。
      *
      * 只列网关真在服务的 id；一旦某个 id 下架，这里留着也不会被选中
      * （选择器用的是实时目录），所以宁可多留也不要让新 id 落进默认值。
@@ -71,19 +71,36 @@ object FreeModelCatalog {
             label = "DeepSeek V4.1 Flash",
             vision = true,
             reasoning = true,
-            contextWindow = 1_048_576,
-            maxOutput = 384_000,
-            efforts = listOf("none", "low", "high", "max"),
+            contextWindow = 200_000,
+            maxOutput = 32_000,
+            efforts = listOf("low", "high", "max"),
         ),
         FreeModelSpec(
             id = "glm-5.3-flash-free",
             label = "GLM 5.3 Flash",
             vision = true,
             reasoning = true,
-            contextWindow = 1_048_576,
-            maxOutput = 131_072,
-            // 声明里没有 none，而且实测 OFF 档也照样花推理 token，所以不提供
+            contextWindow = 200_000,
+            maxOutput = 32_000,
             efforts = listOf("low", "high", "max"),
+        ),
+        FreeModelSpec(
+            id = "mimo-v2.6-flash-free",
+            label = "MiMo V2.6 Flash",
+            vision = true,
+            reasoning = true,
+            contextWindow = 200_000,
+            maxOutput = 32_000,
+            efforts = null,
+        ),
+        FreeModelSpec(
+            id = "minimax-m3.1-flash-free",
+            label = "MiniMax M3.1 Flash",
+            vision = true,
+            reasoning = true,
+            contextWindow = 1_000_000,
+            maxOutput = 512_000,
+            efforts = listOf("low", "medium", "high", "xhigh", "max"),
         ),
         FreeModelSpec(
             id = "nemotron-3.5-super-vl-free",
@@ -99,58 +116,68 @@ object FreeModelCatalog {
             label = "Nemotron 3.5 Lightning",
             vision = false,
             reasoning = true,
-            contextWindow = 131_072,
-            maxOutput = 32_768,
-            // 上游没给它声明档位菜单 → 不发 reasoning_effort（猜一个可能 400）
-            efforts = null,
-        ),
-        FreeModelSpec(
-            id = "mimo-v2.6-flash-free",
-            label = "MiMo V2.6 Flash",
-            vision = true,
-            reasoning = true,
-            contextWindow = 1_048_576,
-            maxOutput = 131_072,
+            contextWindow = 262_144,
+            maxOutput = 262_144,
             efforts = null,
         ),
         FreeModelSpec(
             id = "big-pickle",
             label = "Big Pickle",
-            vision = true,
+            vision = false,
+            reasoning = true,
+            contextWindow = 200_000,
+            maxOutput = 32_000,
+            efforts = null,
+        ),
+        FreeModelSpec(
+            id = "longcat-2.5-free",
+            label = "LongCat 2.5",
+            vision = false,
+            reasoning = true,
+            contextWindow = 1_000_000,
+            maxOutput = 262_144,
+            efforts = null,
+        ),
+        FreeModelSpec(
+            id = "iceman-free",
+            label = "Iceman",
+            vision = false,
             reasoning = true,
             contextWindow = 262_144,
             maxOutput = 131_072,
             efforts = null,
         ),
         FreeModelSpec(
-            id = "jev-1.13-free",
-            label = "Jev 1.13",
+            id = "inkling-2-small-free",
+            label = "Inkling 2 Small",
             vision = false,
-            // 这个模型没有推理，发档位字段会被拒
-            reasoning = false,
-            contextWindow = 32_768,
-            maxOutput = 4_096,
-            efforts = null,
+            reasoning = true,
+            contextWindow = 1_048_576,
+            maxOutput = 131_072,
+            efforts = listOf("none", "minimal", "low", "medium", "high", "max"),
         ),
         FreeModelSpec(
             id = "beam-free",
             label = "Beam",
             vision = false,
             reasoning = true,
-            contextWindow = 131_072,
-            maxOutput = 32_768,
-            efforts = null,
+            contextWindow = 1_048_576,
+            maxOutput = 131_072,
+            efforts = listOf("low", "medium", "high", "xhigh", "max"),
         ),
         FreeModelSpec(
             id = "flint-40b-free",
             label = "Flint 40B",
             vision = false,
             reasoning = true,
-            contextWindow = 131_072,
-            maxOutput = 32_768,
-            efforts = null,
+            contextWindow = 262_144,
+            maxOutput = 65_536,
+            efforts = listOf("low", "medium", "high", "xhigh", "max"),
         ),
     ).associateBy { it.id }
+
+    /** 已知的免费模型 id，按上面的声明顺序 —— 实时目录拉不到时的兜底。 */
+    fun ids(): List<String> = EXACT.keys.toList()
 
     /**
      * 表里没有的 id 用这套保守值。

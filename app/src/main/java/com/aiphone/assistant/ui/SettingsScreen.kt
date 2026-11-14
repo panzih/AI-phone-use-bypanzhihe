@@ -1,6 +1,7 @@
 package com.aiphone.assistant.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,21 +10,23 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -39,9 +42,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.data.AppSettings
@@ -49,8 +54,10 @@ import com.aiphone.assistant.data.ContextPolicy
 import com.aiphone.assistant.data.TapReviewMode
 import com.aiphone.assistant.data.ThinkingMode
 import com.aiphone.assistant.llm.EndpointSafety
+import com.aiphone.assistant.llm.FreeLaneWire
 import com.aiphone.assistant.llm.FreeModelCatalog
 import com.aiphone.assistant.llm.ModelListFetcher
+import com.aiphone.assistant.llm.ModelProviderCatalog
 import com.aiphone.assistant.ui.design.ActionRow
 import com.aiphone.assistant.ui.design.AppAlertDialog
 import com.aiphone.assistant.ui.design.AppButton
@@ -59,20 +66,19 @@ import com.aiphone.assistant.ui.design.AppTextField
 import com.aiphone.assistant.ui.design.Banner
 import com.aiphone.assistant.ui.design.ButtonRow
 import com.aiphone.assistant.ui.design.ButtonVariant
+import com.aiphone.assistant.ui.design.DropdownRow
 import com.aiphone.assistant.ui.design.GroupCard
 import com.aiphone.assistant.ui.design.GroupDivider
 import com.aiphone.assistant.ui.design.HintText
 import com.aiphone.assistant.ui.design.LoadingRow
+import com.aiphone.assistant.ui.design.Radius
 import com.aiphone.assistant.ui.design.SectionNote
 import com.aiphone.assistant.ui.design.SectionTitle
-import com.aiphone.assistant.ui.design.SegmentedControl
-import com.aiphone.assistant.ui.design.SettingRow
 import com.aiphone.assistant.ui.design.Size
 import com.aiphone.assistant.ui.design.SliderSetting
 import com.aiphone.assistant.ui.design.Space
 import com.aiphone.assistant.ui.design.StatBlock
 import com.aiphone.assistant.ui.design.StatTile
-import com.aiphone.assistant.ui.design.StatusPill
 import com.aiphone.assistant.ui.design.SwitchRow
 import com.aiphone.assistant.ui.design.Tone
 import kotlinx.coroutines.Dispatchers
@@ -155,11 +161,6 @@ fun SettingsScreen(
                 SectionTitle(
                     text = stringResource(R.string.settings_section_model),
                     icon = Icons.Filled.Tune,
-                    trailing = {
-                        if (s.useFreeModel) {
-                            StatusPill(text = "免费通道 Beta", tone = Tone.Positive)
-                        }
-                    },
                 )
             }
             item { ModelSection(s, onSettingsChange) }
@@ -344,8 +345,7 @@ private fun SettingsOverview(s: AppSettings, modifier: Modifier = Modifier) {
     ) {
         StatTile(
             label = "通道",
-            value = if (s.useFreeModel) "免费 Beta" else "自定义",
-            tone = if (s.useFreeModel) Tone.Positive else Tone.Neutral,
+            value = if (s.useFreeModel) "免费" else "自定义",
             modifier = Modifier.weight(0.8f),
         )
         StatTile(
@@ -368,8 +368,13 @@ private fun SettingsOverview(s: AppSettings, modifier: Modifier = Modifier) {
 /**
  * 模型设置。
  *
- * 两条通道（自定义 / 免费）用分段控件切换，而不是两个并排按钮：
- * 并排的两个按钮看起来像「两个动作」，分段控件才表达「这是同一件事的两种取值」。
+ * 交互照搬 DeepSeek Harness 的模型页：**先选供应商，再选模型**。
+ *
+ *   - 供应商是下拉，选中自动填好接口地址和该渠道的常用模型；
+ *   - 下拉最前面的「免费模型（无需 Key）」切到 opencode.ai 公共免费池；
+ *   - 模型名是带下拉的输入框，既能从列表里点，也能手敲（兼容自建网关）；
+ *   - 「获取模型列表」放在最下面，点一次就用当前地址+Key（免费通道不要 Key）
+ *     拉实时目录。
  */
 @Composable
 private fun ModelSection(
@@ -378,62 +383,94 @@ private fun ModelSection(
 ) {
     var keyVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val providers = remember { ModelProviderCatalog.load(context) }
 
-    // 模型列表对话框状态
+    // 把免费池做成供应商下拉里的一项（排在最前）。选中它就切到免密通道：
+    // 不发 Key，请求走 opencode.ai，模型清单从网关实时读取。
+    val freeProvider = remember {
+        ModelProviderCatalog.Provider(
+            id = "our-free-model",
+            name = "免费模型（无需 Key）",
+            baseUrl = FreeLaneWire.BASE_URL,
+            category = "free",
+            models = FreeModelCatalog.ids(),
+        )
+    }
+
+    val selectedProvider = if (s.useFreeModel) freeProvider
+    else ModelProviderCatalog.find(providers, s.baseUrl)
+
     var fetching by remember { mutableStateOf(false) }
-    var models by remember { mutableStateOf<List<String>?>(null) }
+    var models by remember {
+        mutableStateOf(
+            if (s.useFreeModel) FreeModelCatalog.ids() else selectedProvider?.models ?: emptyList()
+        )
+    }
     var fetchError by remember { mutableStateOf<String?>(null) }
-    var showFreePicker by remember { mutableStateOf(false) }
-    // 首次切到免费通道时的风险告知。确认之前不落库、不切换。
     var showFreeNotice by remember { mutableStateOf(false) }
 
-    // 免费模型的实时列表：打开选择器时用接口读
-    var freeFetching by remember { mutableStateOf(false) }
-    var freeLive by remember { mutableStateOf<List<FreeModel>?>(null) }
-    var freeFetchError by remember { mutableStateOf<String?>(null) }
-
-    fun loadFreeModels(force: Boolean = false) {
-        if (!force && (freeLive != null || freeFetching)) return
-        freeFetching = true
-        freeFetchError = null
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { ModelListFetcher.fetchFree() }
-            }
-            freeFetching = false
-            result.onSuccess { ids -> freeLive = ids.map { FreeModel(it, freeLabel(it)) } }
-                .onFailure { e -> freeFetchError = e.message ?: e.javaClass.simpleName }
-        }
+    fun enableFree(accepted: Boolean) {
+        val known = FreeModelCatalog.ids()
+        models = known
+        onChange(
+            s.copy(
+                useFreeModel = true,
+                freeLaneNoticeAccepted = s.freeLaneNoticeAccepted || accepted,
+                modelName = s.modelName.takeIf { it in known } ?: known.first(),
+            )
+        )
     }
 
-    fun openFreePicker() {
-        showFreePicker = true
-        loadFreeModels()
+    // 切到免费通道时拉一次实时目录；失败就保留内置名单，不打断操作。
+    LaunchedEffect(s.useFreeModel) {
+        if (!s.useFreeModel) return@LaunchedEffect
+        if (models.isEmpty()) models = FreeModelCatalog.ids()
+        val result = withContext(Dispatchers.IO) { runCatching { ModelListFetcher.fetchFree() } }
+        result.onSuccess { if (it.isNotEmpty()) models = it }
     }
-
-    val customModeLabel = stringResource(R.string.settings_model_mode_custom)
-    val freeModeLabel = stringResource(R.string.settings_model_mode_free)
 
     Column(modifier = Modifier.padding(horizontal = Space.lg)) {
         GroupCard {
             Column(modifier = Modifier.padding(Space.lg)) {
-                SegmentedControl(
-                    options = listOf(false, true),
-                    selected = s.useFreeModel,
-                    label = { if (it) freeModeLabel else customModeLabel },
-                    onSelect = { free ->
+                DropdownRow(
+                    title = "模型供应商",
+                    subtitle = "选中后自动填入接口地址和常用模型",
+                    current = selectedProvider,
+                    options = listOf<ModelProviderCatalog.Provider?>(null, freeProvider) + providers,
+                    optionLabel = { it?.name ?: "自定义接口" },
+                    onSelect = { provider ->
                         when {
-                            !free -> onChange(s.copy(useFreeModel = false))
-                            s.freeLaneNoticeAccepted -> onChange(s.copy(useFreeModel = true))
-                            else -> showFreeNotice = true
+                            provider == null -> {
+                                models = emptyList()
+                                onChange(s.copy(useFreeModel = false))
+                            }
+                            provider.id == freeProvider.id -> {
+                                // 免费通道首次开启前先过风险说明；已确认过就直接切。
+                                if (s.freeLaneNoticeAccepted) enableFree(false) else showFreeNotice = true
+                            }
+                            else -> {
+                                models = provider.models
+                                onChange(
+                                    s.copy(
+                                        useFreeModel = false,
+                                        baseUrl = provider.baseUrl,
+                                        modelName = provider.models.firstOrNull() ?: s.modelName,
+                                    )
+                                )
+                            }
                         }
                     },
                 )
 
-                Spacer(Modifier.height(Space.lg))
+                Spacer(Modifier.height(Space.md))
 
-                if (!s.useFreeModel) {
-                    // ---------- 自定义模式 ----------
+                if (s.useFreeModel) {
+                    HintText(
+                        "免费通道不需要填接口地址和 API Key，请求直连 opencode.ai 的公共免费池。" +
+                            "屏幕控件树、截图和输入的文字会发送到该第三方网关。"
+                    )
+                } else {
                     AppTextField(
                         value = s.baseUrl,
                         onValueChange = { onChange(s.copy(baseUrl = it)) },
@@ -476,49 +513,30 @@ private fun ModelSection(
                             }
                         },
                     )
-
-                    Spacer(Modifier.height(Space.md))
-                } else {
-                    // ---------- 免费模式 ----------
-                    Banner(
-                        text = stringResource(R.string.settings_model_free_hint),
-                        tone = Tone.Info,
-                    )
-                    Spacer(Modifier.height(Space.md))
-                }
-
-                AppTextField(
-                    value = s.modelName,
-                    onValueChange = { onChange(s.copy(modelName = it)) },
-                    label = stringResource(R.string.settings_model_name),
-                )
-
-                // 免费通道：把当前这个模型的能力摊在明面上
-                if (s.useFreeModel) {
-                    val spec = FreeModelCatalog.specFor(s.modelName)
-                    Spacer(Modifier.height(Space.xs))
-                    HintText(
-                        buildString {
-                            append(spec.label.ifBlank { s.modelName })
-                            append(" · ")
-                            append(spec.summary)
-                        },
-                    )
                 }
 
                 Spacer(Modifier.height(Space.md))
 
-                if (!s.useFreeModel) {
-                    AppButton(
-                        text = stringResource(R.string.settings_model_fetch),
-                        onClick = {
-                            if (fetching) return@AppButton
-                            fetching = true
-                            fetchError = null
-                            models = null
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    runCatching {
+                ModelNameField(
+                    value = s.modelName,
+                    onValueChange = { onChange(s.copy(modelName = it)) },
+                    models = models,
+                )
+
+                Spacer(Modifier.height(Space.md))
+
+                AppButton(
+                    text = stringResource(R.string.settings_model_fetch),
+                    onClick = {
+                        if (fetching) return@AppButton
+                        fetching = true
+                        fetchError = null
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    if (s.useFreeModel) {
+                                        ModelListFetcher.fetchFree()
+                                    } else {
                                         ModelListFetcher.fetch(
                                             s.baseUrl,
                                             s.apiKey,
@@ -526,42 +544,55 @@ private fun ModelSection(
                                         )
                                     }
                                 }
-                                fetching = false
-                                result.onSuccess { list -> models = list }
-                                    .onFailure { e -> fetchError = e.message ?: e.javaClass.simpleName }
                             }
-                        },
-                        variant = ButtonVariant.Secondary,
-                        loading = fetching,
-                        enabled = !fetching,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (fetching) {
-                        Spacer(Modifier.height(Space.sm))
-                        LoadingRow(stringResource(R.string.settings_model_fetching))
-                    }
-                    fetchError?.let { err ->
-                        Spacer(Modifier.height(Space.sm))
-                        Banner(
-                            text = stringResource(R.string.settings_model_fetch_failed, err),
-                            tone = Tone.Negative,
-                        )
-                    }
-                } else {
-                    AppButton(
-                        text = stringResource(R.string.settings_model_free_pick),
-                        onClick = { openFreePicker() },
-                        variant = ButtonVariant.Secondary,
-                        modifier = Modifier.fillMaxWidth(),
+                            fetching = false
+                            result.onSuccess { list ->
+                                models = list
+                                if (s.modelName.isBlank() || s.modelName !in list) {
+                                    list.firstOrNull()?.let { onChange(s.copy(modelName = it)) }
+                                }
+                            }.onFailure { e ->
+                                fetchError = e.message ?: e.javaClass.simpleName
+                            }
+                        }
+                    },
+                    variant = ButtonVariant.Secondary,
+                    loading = fetching,
+                    enabled = !fetching,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                if (fetching) {
+                    Spacer(Modifier.height(Space.sm))
+                    LoadingRow(stringResource(R.string.settings_model_fetching))
+                }
+                fetchError?.let { err ->
+                    Spacer(Modifier.height(Space.sm))
+                    Banner(
+                        text = stringResource(R.string.settings_model_fetch_failed, err),
+                        tone = Tone.Negative,
                     )
                 }
+                Spacer(Modifier.height(Space.sm))
+                HintText(
+                    when {
+                        s.useFreeModel && models.isEmpty() ->
+                            "免费池暂时没读到模型；点「获取模型列表」重试"
+                        s.useFreeModel ->
+                            "免费池已载入 ${models.size} 个模型，点模型名右侧箭头选择，也可直接输入"
+                        models.isEmpty() ->
+                            "点「获取模型列表」后，模型名右侧会出现可选项"
+                        else ->
+                            "已载入 ${models.size} 个模型，点模型名右侧箭头选择，也可直接输入"
+                    }
+                )
             }
 
             GroupDivider()
             ThinkingModeSlider(
                 current = s.thinking,
                 freeLane = s.useFreeModel,
-                baseUrl = s.baseUrl,
+                baseUrl = if (s.useFreeModel) FreeLaneWire.BASE_URL else s.baseUrl,
                 customEffort = s.customEffort,
                 onChange = { onChange(s.copy(thinking = it)) },
                 onCustomEffortChange = { onChange(s.copy(customEffort = it)) },
@@ -569,145 +600,76 @@ private fun ModelSection(
         }
     }
 
-    // 自定义模式：拉回来的模型列表
-    models?.let { list ->
-        AppAlertDialog(
-            title = stringResource(R.string.settings_model_dialog_title),
-            onDismiss = { models = null },
-            dismissText = stringResource(R.string.schedule_cancel),
-            content = {
-                if (list.isEmpty()) {
-                    HintText(stringResource(R.string.settings_model_empty))
-                } else {
-                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                        items(list) { m ->
-                            SelectableItem(
-                                title = m,
-                                selected = m == s.modelName,
-                                onClick = {
-                                    onChange(s.copy(modelName = m))
-                                    models = null
-                                },
-                            )
-                        }
-                    }
-                }
-            },
-        )
-    }
-
-    // 免费模式：实时列表（用接口读；失败退回内置名单）
-    if (showFreePicker) {
-        val live = freeLive
-        val shown = live ?: freeModels
-        AppAlertDialog(
-            title = stringResource(R.string.settings_model_free_pick),
-            onDismiss = { showFreePicker = false },
-            dismissText = stringResource(R.string.schedule_cancel),
-            confirmText = stringResource(R.string.settings_model_free_reload),
-            onConfirm = { loadFreeModels(force = true) },
-            content = {
-                when {
-                    freeFetching -> LoadingRow("正在从接口读取模型列表 …")
-                    live != null -> HintText("已从接口实时读取（${live.size} 个）")
-                    freeFetchError != null -> Banner(
-                        text = "接口读取失败：$freeFetchError（下面用内置名单）",
-                        tone = Tone.Warning,
-                    )
-                }
-                Spacer(Modifier.height(Space.sm))
-                LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                    items(shown) { m ->
-                        val spec = FreeModelCatalog.specFor(m.id)
-                        SelectableItem(
-                            title = spec.label.ifBlank { m.label },
-                            subtitle = spec.summary,
-                            selected = m.id == s.modelName,
-                            onClick = {
-                                onChange(s.copy(modelName = m.id))
-                                showFreePicker = false
-                            },
-                        )
-                    }
-                }
-            },
-        )
-    }
-
+    // 免费通道首次开启前的风险说明。确认后同时写入 freeLaneNoticeAccepted，
+    // 避免启动时 MainActivity 再弹一次。
     if (showFreeNotice) {
         AppAlertDialog(
             title = stringResource(R.string.settings_model_free_notice_title),
             body = stringResource(R.string.settings_model_free_notice_body),
-            onDismiss = { showFreeNotice = false },
             confirmText = stringResource(R.string.settings_model_free_notice_accept),
             onConfirm = {
                 showFreeNotice = false
-                onChange(s.copy(useFreeModel = true, freeLaneNoticeAccepted = true))
+                enableFree(true)
             },
+            onDismiss = { showFreeNotice = false },
             dismissText = stringResource(R.string.settings_model_free_notice_decline),
         )
     }
 }
 
-/** 列表里的可选项（选模型用）：选中态用胶囊，而不是整行变蓝 */
+/**
+ * 模型名输入框 + 内联下拉。
+ *
+ * 保留手输：很多自建网关不实现 /v1/models，拉不到列表时只能靠人填。
+ * 拉回来之后箭头可点，菜单直接列模型 id。
+ */
 @Composable
-private fun SelectableItem(
-    title: String,
-    onClick: () -> Unit,
-    subtitle: String? = null,
-    selected: Boolean = false,
+private fun ModelNameField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    models: List<String>,
 ) {
-    SettingRow(
-        title = title,
-        subtitle = subtitle,
-        onClick = onClick,
-        trailing = {
-            if (selected) {
-                StatusPill(text = "当前", tone = Tone.Positive, dot = false)
+    var open by remember { mutableStateOf(false) }
+    Box {
+        AppTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = stringResource(R.string.settings_model_name),
+            trailingIcon = {
+                IconButton(onClick = { open = true }, enabled = models.isNotEmpty()) {
+                    Icon(
+                        imageVector = Icons.Filled.ArrowDropDown,
+                        contentDescription = "选择模型",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(Size.iconMd),
+                    )
+                }
+            },
+        )
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = RoundedCornerShape(Radius.md),
+        ) {
+            models.forEach { id ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = id,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    onClick = {
+                        onValueChange(id)
+                        open = false
+                    },
+                )
             }
-        },
-    )
+        }
+    }
 }
-
-/**
- * 免费模式的内置模型名单（**只当兜底**）。
- *
- * 正常路径是打开选择器时用接口实时读取（[ModelListFetcher.fetchFree]）——
- * 这份名单只在读不到时顶上，按 **2026-10-27** 网关 /inference/v1/models
- * 的实时目录校对过（当时免费池 9 个，全部收录）。
- */
-private val freeModels = listOf(
-    FreeModel("deepseek-v4.1-flash-free", "DeepSeek V4.1 Flash"),
-    FreeModel("glm-5.3-flash-free", "GLM 5.3 Flash"),
-    FreeModel("mimo-v2.6-flash-free", "MiMo V2.6 Flash"),
-    FreeModel("nemotron-3.5-super-vl-free", "Nemotron 3.5 Super VL"),
-    FreeModel("nemotron-3.5-lightning-free", "Nemotron 3.5 Lightning"),
-    FreeModel("flint-40b-free", "Flint 40B"),
-    FreeModel("beam-free", "Beam"),
-    FreeModel("jev-1.13-free", "Jev 1.13"),
-    FreeModel("big-pickle", "Big Pickle"),
-)
-
-/**
- * 接口读回来的只有 id（如 `glm-5.3-flash-free`）。
- *
- * 内置名单里有的直接用现成的显示名；没见过的现拼一个顺眼的：
- * 去掉 `-free` 后缀、按连字符断词、首字母大写。
- */
-private fun freeLabel(id: String): String =
-    freeModels.firstOrNull { it.id == id }?.label
-        ?: id.removeSuffix("-free")
-            .split('-', '_')
-            .filter { it.isNotBlank() }
-            .joinToString(" ") { part ->
-                if (part.lowercase() in ACRONYMS) part.uppercase()
-                else part.replaceFirstChar { c -> c.uppercase() }
-            }
-
-/** 拼显示名时保持全大写的词 */
-private val ACRONYMS = setOf("glm", "vl", "ai", "ui", "api", "ocr", "tts")
-
-private data class FreeModel(val id: String, val label: String)
 
 /**
  * 思考模式滑块 —— 5 档连续：OFF → LOW → HIGH → MAX → 默认。

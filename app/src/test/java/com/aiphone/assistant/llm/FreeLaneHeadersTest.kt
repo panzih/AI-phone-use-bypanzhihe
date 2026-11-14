@@ -2,6 +2,7 @@ package com.aiphone.assistant.llm
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -11,14 +12,9 @@ import org.robolectric.annotation.Config
 /**
  * 免费通道请求头的契约。
  *
- * 断言依据不是文档，而是**上游插件源码** `dsh-our-free-model/src/upstream.js`
- * 的 `gatewayHeaders()` —— 那个插件是这份免密通道的长期维护方，它怎么写就是
- * 上游认什么。历史上两次翻车都是因为照着 README 写而没照代码写。
- *
- * 最容易搞反的三条（前两版就错在这）：
- * - **必须带 `Authorization: Bearer public`** —— 不发不是"更干净"，是过不了鉴权；
- * - **`x-opencode-project` 是固定字符串 `global`**，不是 40 位 hex、也不是 `prj_`；
- * - **不发 `b3` / `traceparent`** —— 官方客户端会带，这个插件不带，多带无用。
+ * 断言依据不是文档，而是**上游插件源码** `dsh-our-free-model/src/o2a/headers.js`
+ * （2.8.3 移植的 opencode2api v1.4.7）。历史上三次翻车都是照着 README 写而没照
+ * 代码写：v1 的 `x-opencode-request`、v2 的 `global` project、以及缺官方提示。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -30,7 +26,7 @@ class FreeLaneHeadersTest {
     @Test
     fun `端点与插件一致`() {
         assertEquals(
-            "https://opencode.ai/inference/v1/chat/completions",
+            "https://opencode.ai/inference/openai/v1/chat/completions",
             FreeLaneWire.chatUrl(),
         )
         assertEquals("https://opencode.ai/inference/v1/models", FreeLaneWire.modelsUrl())
@@ -46,7 +42,7 @@ class FreeLaneHeadersTest {
     fun `客户端指纹与四个 session 头`() {
         val session = FreeLaneWire.newSessionId()
         val h = headers(session)
-        assertEquals("整串匹配，改一个字符就不是 v2 客户端", "opencode/latest/2.0.26/cli", h["user-agent"])
+        assertEquals("整串匹配，改一个字符就不是 v2 客户端", "opencode/latest/2.2.3/cli", h["user-agent"])
         assertEquals("cli", h["x-opencode-client"])
         assertEquals(session, h["x-opencode-session"])
         assertEquals(session, h["x-opencode-session-id"])
@@ -57,15 +53,29 @@ class FreeLaneHeadersTest {
     }
 
     @Test
-    fun `project 是 global`() {
-        assertEquals("global", headers()["x-opencode-project"])
+    fun `project 是 40 位 hex 且由 session 派生`() {
+        val session = FreeLaneWire.newSessionId()
+        val project = headers(session)["x-opencode-project"].orEmpty()
+        assertEquals("必须是 40 位小写 hex（共享的 global 会预烧额度）", 40, project.length)
+        assertTrue("只能是 [0-9a-f]：$project", Regex("^[0-9a-f]{40}$").matches(project))
+        assertNotEquals("global", project)
+        assertEquals("同一会话必须落同一个配额桶", project, FreeLaneWire.projectIdFor(session))
     }
 
     @Test
-    fun `不带 b3 与 traceparent`() {
+    fun `带 b3 与 traceparent 且形状合法`() {
         val h = headers()
-        assertFalse("插件不发 b3：$h", h.containsKey("b3"))
-        assertFalse("插件不发 traceparent：$h", h.containsKey("traceparent"))
+        val traceparent = h["traceparent"].orEmpty()
+        assertTrue("traceparent 形态：$traceparent", Regex("^00-[0-9a-f]{32}-[0-9a-f]{16}-01$").matches(traceparent))
+        val b3 = h["b3"].orEmpty()
+        assertTrue("b3 形态：$b3", Regex("^[0-9a-f]{32}-[0-9a-f]{16}-1-[0-9a-f]{16}$").matches(b3))
+        // 每请求新 trace：两次调用不应相同
+        assertNotEquals(traceparent, headers()["traceparent"])
+    }
+
+    @Test
+    fun `accept 是通配符`() {
+        assertEquals("*/*", headers()["accept"])
     }
 
     @Test
@@ -83,5 +93,12 @@ class FreeLaneHeadersTest {
         val hex = session.removePrefix("ses_").take(12)
         val low = hex.takeLast(3).toInt(16)
         assertTrue("低 12 位必须落在 0xfc0–0xfff（解码出很小的 seq），实际 $hex", low in 0xfc0..0xfff)
+    }
+
+    @Test
+    fun `session 时间戳落在近期窗口`() {
+        // 纯哈希供日期会落到 1970，上游直接 429；慢钟铸造必须通过可接受性检查。
+        val id = FreeLaneWire.newSessionId()
+        assertTrue("新铸的 session 必须通过时间可接受性检查：$id", FreeLaneWire.isOfficialSession(id))
     }
 }

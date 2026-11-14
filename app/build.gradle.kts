@@ -52,8 +52,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 82      // 0.12.3：关闭自动更新（编译期开关），保留源码
-        versionName = "0.12.3"
+        versionCode = 83      // 0.12.4：免费模型重新接入供应商下拉 + v2 报文整形
+        versionName = "0.12.4"
         // 设备冒烟测试：androidTest 用 AndroidJUnitRunner 跑
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 自动更新总开关（见文件开头 enableUpdate 的说明）

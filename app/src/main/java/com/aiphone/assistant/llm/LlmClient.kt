@@ -561,10 +561,12 @@ class LlmClient(private val cfg: LlmConfig) {
     internal fun accumulateSse(raw: String): String {
         val content = StringBuilder()
         val reasoning = StringBuilder()
-        // 网关门禁逼着声明的 read/shell 是**真工具**：模型不理会占位说明时，
+        // 网关门禁逼着声明的 13 个官方工具是**真工具**：模型不理会占位说明时，
         // 会输出 tool_calls 而不是文字。全 tool_calls 的回复按老逻辑会攒成
         // 空内容 → 三连重发 → "模型连续 N 次没有正常响应"，任务直接死。
         var sawToolCall = false
+        // stream_options.include_usage 会把 usage 放在 choices 为空的最后一帧里。
+        var usage: JSONObject? = null
         raw.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (!trimmed.startsWith("data:")) return@forEach
@@ -575,6 +577,7 @@ class LlmClient(private val cfg: LlmConfig) {
             } catch (_: Throwable) {
                 return@forEach
             }
+            json.optJSONObject("usage")?.let { usage = it }
             val choices = json.optJSONArray("choices") ?: return@forEach
             if (choices.length() == 0) return@forEach
             val delta = choices.optJSONObject(0)?.optJSONObject("delta") ?: return@forEach
@@ -601,7 +604,7 @@ class LlmClient(private val cfg: LlmConfig) {
             // 与其当"空响应"烧光重发次数，不如把话说回来：占位工具什么都不会做，
             // 让模型直接输出本轮的 JSON。这句话会作为 assistant 回合进历史并回灌，
             // 模型下一轮就能自纠（ActionParser 解析失败的那条路也兜得住它）。
-            Log.w(TAG, "免费通道：模型没有输出文字，直接调了 read/shell 占位工具，交回提示让它继续")
+            Log.w(TAG, "免费通道：模型没有输出文字，直接调了官方占位工具，交回提示让它继续")
             return JSONObject()
                 .put(
                     "choices",
@@ -629,6 +632,7 @@ class LlmClient(private val cfg: LlmConfig) {
                     ),
                 ),
             )
+            .apply { usage?.let { put("usage", it) } }
             .toString()
     }
 
@@ -755,8 +759,8 @@ class LlmClient(private val cfg: LlmConfig) {
         val wav = AudioProbe.silentWav()
         val b64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
         val body: ByteArray = if (cfg.useFreeModel) {
-            // 免费通道的探针报文必须过同一道 v2 闸门：逐字 tools（read/shell）与
-            // system 里的 <env> 块缺一个都是 403 FreeTierError。不补齐的话探针
+            // 免费通道的探针报文必须过同一道 v2 闸门：官方 13 工具与
+            // 官方系统提示缺一个都是 403/429。不补齐的话探针
             // 永远报"通道拒绝"，看起来像"不收音频"，其实是报文没进门。
             val obj = JSONObject(AudioProbe.buildBody(cfg.model, b64))
             val userMessages = obj.optJSONArray("messages") ?: JSONArray()
@@ -765,7 +769,7 @@ class LlmClient(private val cfg: LlmConfig) {
                     .put("role", "system")
                     .put(
                         "content",
-                        FreeLaneWire.environmentBlock(workingDirectory = "/sdcard", platform = "android") +
+                        FreeLaneWire.officialSystemPrompt(cfg.model, "/sdcard") +
                             "\n\n" + FreeLaneWire.PLACEHOLDER_NOTE,
                     ),
             )
@@ -816,8 +820,8 @@ class LlmClient(private val cfg: LlmConfig) {
      * 三种都要能用，所以按后缀判断，不硬编码。
      */
     private fun endpoint(): String {
-        // 免费通道走 /inference/v1（2026-10 上游改版；旧的 /zen/v1 对话端点
-        // 对免费 model 一律 403 FreeTierError）。端点与请求头的全部常量在 FreeLaneWire。
+        // 免费通道走 /inference/openai/v1（2.1 客户端的族路径；旧扁平
+        // /inference/v1 仍可用）。端点与请求头的全部常量在 FreeLaneWire。
         if (cfg.useFreeModel) return FreeLaneWire.chatUrl()
         val base = cfg.baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) return "https://api.deepseek.com/v1/chat/completions"
@@ -864,15 +868,17 @@ class LlmClient(private val cfg: LlmConfig) {
         // 免费通道要在 system 里补两段（都是上游插件实测的硬要求，见 FreeLaneWire）：
         //   1. `<env>` 块 —— ensureFreeLaneEnvironment 的注释原话是
         //      "returned 429 without it and PONG with it"，缺了就是额度错误的样子；
-        //   2. 占位说明 —— read/shell 是网关门禁逼着声明的**真工具**，
+        //   2. 占位说明 —— 官方 13 工具是网关门禁逼着声明的**真工具**，
         //      不打招呼模型真的会去调 shell 跑命令。
         val systemContent = if (cfg.useFreeModel) {
-            val withEnv = if (Regex("<env>[\\s\\S]*?</env>", RegexOption.IGNORE_CASE).containsMatchIn(system)) {
+            // 官方 CLI 全量提示（base prompt + <env> + skills）是 v2 闸门的硬要求：
+            // 工具与请求头全对、IP 干净，缺它仍然 429（2026-10-28 单变量实测）。
+            val withPrompt = if (FreeLaneWire.carriesOfficialPrompt(system)) {
                 system
             } else {
-                system + "\n\n" + FreeLaneWire.environmentBlock(workingDirectory = "/sdcard", platform = "android")
+                FreeLaneWire.officialSystemPrompt(cfg.model, "/sdcard") + "\n\n" + system
             }
-            "$withEnv\n\n${FreeLaneWire.PLACEHOLDER_NOTE}"
+            "$withPrompt\n\n${FreeLaneWire.PLACEHOLDER_NOTE}"
         } else {
             system
         }
@@ -986,17 +992,22 @@ class LlmClient(private val cfg: LlmConfig) {
                 effort?.let { put("reasoning_effort", it) }
             }
             // 免费通道（opencode.ai 免费池）的报文，**逐项抄上游插件 src/upstream.js**：
-            //   1. 端点 /inference/v1/chat/completions（endpointFor）
+            //   1. 端点 /inference/openai/v1/chat/completions（endpointFor）
             //   2. 必须 stream:true（插件全线强制流式）
-            //   3. tools 必须声明逐字的 read + shell（applyFingerprint / FINGERPRINT_TOOL_DEFINITIONS）
-            //      —— 少了、改了措辞、properties:{} 都是 403 FreeTierError
+            //   3. tools 必须补齐官方 13 个工具（o2a 的 renameAndCompleteTools）
+            //      —— 缺项、改名、改定义都是 403/429
             //   4. **绝不下发 tool_choice**（v2 见到 "none" 直接 403）
-            //   5. system 里必须有 <env> 块（ensureFreeLaneEnvironment，缺它就是 429）
-            //   6. 请求头由 FreeLaneWire.applyHeaders 负责（含 Bearer public）
+            //   5. system 里必须有官方 CLI 提示（含 <env>），缺它就是 429
+            //   6. 请求头由 FreeLaneWire.applyHeaders 负责（含 Bearer public / project / trace）
             // 断言在 FreeLaneBodyTest 里钉着，改这条链路先跑它。
             if (cfg.useFreeModel) {
                 put("stream", true)
                 put("tools", FreeLaneWire.toolsJson())
+                // 2.x 客户端另带的两个常量字段：流式 usage 帧 + 默认输出上限。
+                put("stream_options", JSONObject().put("include_usage", true))
+                if (!has("max_completion_tokens") && !has("max_tokens")) {
+                    put("max_completion_tokens", FreeLaneWire.V2_COMPLETION_LIMIT)
+                }
             } else {
                 // 自定义通道保持非流式，响应是单个 JSON
                 put("stream", false)

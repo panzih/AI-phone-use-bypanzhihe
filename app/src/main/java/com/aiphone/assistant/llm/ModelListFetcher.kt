@@ -97,12 +97,13 @@ object ModelListFetcher {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 15_000
-            // 目录端点不需要 session 头（实测不带也放行），但 UA 要跟上 v2 ——
-            // 旧 UA 是上游点名拒掉的那一串，留着等于给将来埋一个坑。
+            // 目录端点不需要会话头（实测不带也放行），但 UA / 客户端标记 / project
+            // 跟主请求保持一致，免得将来闸门收紧时这里成为唯一漏项。
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Authorization", "Bearer public")
             setRequestProperty("User-Agent", FreeLaneWire.CLIENT_UA)
             setRequestProperty("x-opencode-client", "cli")
+            setRequestProperty("x-opencode-project", FreeLaneWire.projectIdFor(FreeLaneWire.session()))
         }
 
         try {

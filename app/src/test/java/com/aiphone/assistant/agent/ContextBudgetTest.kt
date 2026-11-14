@@ -38,8 +38,12 @@ class ContextBudgetTest {
 
     @Test
     fun `免费模型按目录窗口算，自定义模型有保守默认`() {
-        val free = AgentLimits.contextBudgetFor(useFreeModel = true, modelName = "jev-1.13-free")
-        assertEquals(32_768, free.window)
+        val free = AgentLimits.contextBudgetFor(useFreeModel = true, modelName = "nemotron-3.5-lightning-free")
+        assertEquals(262_144, free.window)
+
+        // 认不出的免费 id 走保守兜底窗口，而不是 1M
+        val unknownFree = AgentLimits.contextBudgetFor(useFreeModel = true, modelName = "some-removed-free")
+        assertTrue(unknownFree.window in 1..262_144)
 
         val custom = AgentLimits.contextBudgetFor(useFreeModel = false, modelName = "unknown-model")
         assertEquals(AgentLimits.DEFAULT_CONTEXT_WINDOW, custom.window)
