@@ -102,9 +102,11 @@ jobs:
           set -e
           TAG="${GITHUB_REF_NAME}"
           APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
-          ASSET="AI手机-${TAG}.apk"
-          # gh 的 `path#name` 写法在不同版本上并不都会改名（实测 v0.12.5 首发
-          # 被挂成了 app-release.apk）。先复制成目标文件名再上传，附件名才稳定。
+          ASSET="AI-phone-${TAG}.apk"
+          # 附件名用 ASCII：GitHub 会把非 ASCII 字符清洗掉（实测
+          # 「AI手机-v0.12.5.apk」变成了「AI.-v0.12.5.apk」）。
+          # gh 的 `path#name` 写法在不同版本上也不都会改名，所以先复制成
+          # 目标文件名再上传，附件名才稳定。
           STAGE="${RUNNER_TEMP}/${ASSET}"
           cp "$APK" "$STAGE"
           PRE=""
