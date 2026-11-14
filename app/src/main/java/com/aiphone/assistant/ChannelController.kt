@@ -26,7 +26,19 @@ import kotlinx.coroutines.withContext
  * 所以这一层回归到最朴素的形态：**要什么给什么，失败返回原因字符串**。
  * 状态判断（授权没授权）由界面直接问 AutoService.isConnected。
  */
-class ChannelController(private val context: Context) {
+class ChannelController(
+    private val context: Context,
+    /**
+     * 浏览器窗口是否仍在前台。
+     *
+     * 生产用 [com.aiphone.assistant.browser.BrowserDriver.isForeground]；
+     * 单测里没有真实 Activity，构造时注入一个固定判定，避免把「浏览器还在、
+     * 只是测试环境读不到窗口状态」误判成「浏览器被盖住了」。
+     */
+    private val browserForeground: () -> Boolean = {
+        com.aiphone.assistant.browser.BrowserDriver.isForeground()
+    },
+) {
 
     /**
      * 操作目标在哪块屏上、动作从哪儿走。
@@ -174,7 +186,7 @@ class ChannelController(private val context: Context) {
         // 用户看到的是安装器，模型看到的还是那张下载页，两边对不上，任务就卡死。
         // 所以每轮取界面之前先问一句"网页还在最前面吗"，不在就切回无障碍。
         if (mode == Mode.BROWSER &&
-            !com.aiphone.assistant.browser.BrowserDriver.isForeground()
+            !browserForeground()
         ) {
             android.util.Log.i("ChannelController", "浏览器不在前台了，切回主通道")
             exitBrowser()

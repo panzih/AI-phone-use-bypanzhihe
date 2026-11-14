@@ -69,8 +69,12 @@ class BrowserHandoffTest {
     // 接到 ChannelController 上：执行后确实离开了浏览器模式
     // ---------------------------------------------------------------
 
-    private fun controller(): ChannelController =
-        ChannelController(RuntimeEnvironment.getApplication() as Context)
+    private fun controller(foreground: Boolean? = null): ChannelController {
+        val app = RuntimeEnvironment.getApplication() as Context
+        // 显式给判定时固定“浏览器在前台”；默认走生产逻辑（Robolectric 无窗口 → false）。
+        return if (foreground == null) ChannelController(app)
+        else ChannelController(app, browserForeground = { foreground })
+    }
 
     @Test
     fun `浏览器模式下 open_app 执行后切回主通道而不是报浏览器不负责`() = runBlocking {
@@ -97,7 +101,7 @@ class BrowserHandoffTest {
 
     @Test
     fun `浏览器模式下普通点击仍然留在浏览器`() = runBlocking {
-        val c = controller()
+        val c = controller(foreground = true)
         c.enterBrowser()
 
         c.execute(TouchAction(TouchKind.TAP, x = 10, y = 10))
