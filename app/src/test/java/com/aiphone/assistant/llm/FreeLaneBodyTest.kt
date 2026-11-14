@@ -1,5 +1,6 @@
 package com.aiphone.assistant.llm
 
+import com.aiphone.assistant.data.FreeLane
 import com.aiphone.assistant.data.ThinkingMode
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -273,5 +274,53 @@ class FreeLaneBodyTest {
     fun `自定义档在免费通道也照发_填了才发`() {
         val b = body(useFree = true, thinking = ThinkingMode.CUSTOM, customEffort = "low")
         assertEquals("low", b.getString("reasoning_effort"))
+    }
+
+    // ---- Kilo 免密免费池 ----
+
+    private fun kiloBody(
+        thinking: ThinkingMode,
+        model: String = "kilo-auto/free",
+        customEffort: String = "",
+    ): JSONObject = LlmClient(
+        LlmConfig(
+            baseUrl = "https://api.example.com/v1",
+            apiKey = "",
+            model = model,
+            useFreeModel = true,
+            freeLane = FreeLane.KILO,
+            thinking = thinking,
+            customEffort = customEffort,
+        )
+    ).buildBody("你是一个助手", listOf(ChatTurn(ChatTurn.USER, "打开设置")))
+
+    @Test
+    fun `Kilo免费通道_不注入官方提示和工具`() {
+        val b = kiloBody(ThinkingMode.DEFAULT)
+        assertTrue("Kilo 走流式", b.getBoolean("stream"))
+        assertFalse("Kilo 不需要官方 13 工具", b.has("tools"))
+        assertFalse("Kilo 不需要 stream_options", b.has("stream_options"))
+        val system = b.getJSONArray("messages").getJSONObject(0).getString("content")
+        assertEquals("Kilo 的 system 必须原样", "你是一个助手", system)
+        assertFalse("不能把 OpenCode 的官方提示塞进 Kilo", system.contains(FreeLaneWire.OFFICIAL_PROMPT_MARKER))
+    }
+
+    @Test
+    fun `Kilo免费通道_思考走reasoning对象`() {
+        val b = kiloBody(ThinkingMode.HIGH)
+        assertEquals("high", b.getJSONObject("reasoning").getString("effort"))
+        assertFalse("Kilo 不能发 reasoning_effort", b.has("reasoning_effort"))
+    }
+
+    @Test
+    fun `Kilo免费通道_自动路由不支持关闭思考`() {
+        val b = kiloBody(ThinkingMode.OFF, model = "kilo-auto/free")
+        assertFalse("自动路由忽略关闭请求，别发 enabled=false：$b", b.has("reasoning"))
+    }
+
+    @Test
+    fun `Kilo免费通道_普通模型可以关闭思考`() {
+        val b = kiloBody(ThinkingMode.OFF, model = "cohere/north-mini-code:free")
+        assertEquals(false, b.getJSONObject("reasoning").getBoolean("enabled"))
     }
 }

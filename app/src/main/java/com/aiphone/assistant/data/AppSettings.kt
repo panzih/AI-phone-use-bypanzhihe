@@ -1,6 +1,30 @@
 package com.aiphone.assistant.data
 
 /**
+ * 免密免费通道。
+ *
+ * 上游插件内置两条不需要账号/Key 的车道：
+ *   - OpenCode：opencode.ai 公共池，报文有客户端指纹闸门；
+ *   - Kilo：Kilo AI 公共网关的 `isFree` 免费池，无需任何凭据。
+ *
+ * 两者的模型 id、报文形状和限流语义都不同，所以分开建模；`useFreeModel`
+ * 仍是总开关，这个枚举决定走哪一条。
+ */
+enum class FreeLane(
+    val id: String,
+    val label: String,
+    /** 设置的供应商下拉里显示的名字 */
+    val providerName: String,
+) {
+    OPENCODE("opencode", "OpenCode", "免费模型 · OpenCode（无需 Key）"),
+    KILO("kilo", "Kilo", "免费模型 · Kilo（无需 Key）");
+
+    companion object {
+        fun fromId(id: String?): FreeLane = entries.firstOrNull { it.id == id } ?: OPENCODE
+    }
+}
+
+/**
  * 操作方式。
  *
  * 两条路都是真的能跑的，区别只在**动作和截图从哪儿走**：
@@ -352,6 +376,9 @@ data class AppSettings(
      * 必须看过 [freeLaneNoticeAccepted] 对应的风险说明。
      */
     val useFreeModel: Boolean = false,
+
+    /** 免费通道走哪一条（OpenCode / Kilo）。只在 [useFreeModel] 为 true 时有意义。 */
+    val freeLane: FreeLane = FreeLane.OPENCODE,
 
     /**
      * 是否已经确认过免费通道的风险说明。

@@ -51,11 +51,13 @@ import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.data.AppSettings
 import com.aiphone.assistant.data.ContextPolicy
+import com.aiphone.assistant.data.FreeLane
 import com.aiphone.assistant.data.TapReviewMode
 import com.aiphone.assistant.data.ThinkingMode
 import com.aiphone.assistant.llm.EndpointSafety
 import com.aiphone.assistant.llm.FreeLaneWire
 import com.aiphone.assistant.llm.FreeModelCatalog
+import com.aiphone.assistant.llm.KiloWire
 import com.aiphone.assistant.llm.ModelListFetcher
 import com.aiphone.assistant.llm.ModelProviderCatalog
 import com.aiphone.assistant.ui.design.ActionRow
@@ -376,6 +378,9 @@ private fun SettingsOverview(s: AppSettings, modifier: Modifier = Modifier) {
  *   - 「获取模型列表」放在最下面，点一次就用当前地址+Key（免费通道不要 Key）
  *     拉实时目录。
  */
+private fun freeModelsFor(lane: FreeLane): List<String> =
+    if (lane == FreeLane.OPENCODE) FreeModelCatalog.ids() else FreeModelCatalog.kiloIds()
+
 @Composable
 private fun ModelSection(
     s: AppSettings,
@@ -386,47 +391,59 @@ private fun ModelSection(
     val context = LocalContext.current
     val providers = remember { ModelProviderCatalog.load(context) }
 
-    // 把免费池做成供应商下拉里的一项（排在最前）。选中它就切到免密通道：
-    // 不发 Key，请求走 opencode.ai，模型清单从网关实时读取。
-    val freeProvider = remember {
-        ModelProviderCatalog.Provider(
-            id = "our-free-model",
-            name = "免费模型（无需 Key）",
-            baseUrl = FreeLaneWire.BASE_URL,
-            category = "free",
-            models = FreeModelCatalog.ids(),
-        )
+    // 两条免密免费池都做进供应商下拉（排在最前）：OpenCode 与 Kilo。
+    // 选中后不需要 Key，接口地址由车道决定，模型清单从各自网关实时读取。
+    val freeProviders = remember {
+        FreeLane.entries.map { lane ->
+            ModelProviderCatalog.Provider(
+                id = "free-${lane.id}",
+                name = lane.providerName,
+                baseUrl = if (lane == FreeLane.OPENCODE) FreeLaneWire.BASE_URL else KiloWire.BASE_URL,
+                category = "free",
+                models = freeModelsFor(lane),
+            )
+        }
     }
-
-    val selectedProvider = if (s.useFreeModel) freeProvider
-    else ModelProviderCatalog.find(providers, s.baseUrl)
+    val selectedProvider = if (s.useFreeModel) {
+        freeProviders.firstOrNull { it.id == "free-${s.freeLane.id}" } ?: freeProviders.first()
+    } else {
+        ModelProviderCatalog.find(providers, s.baseUrl)
+    }
 
     var fetching by remember { mutableStateOf(false) }
     var models by remember {
         mutableStateOf(
-            if (s.useFreeModel) FreeModelCatalog.ids() else selectedProvider?.models ?: emptyList()
+            if (s.useFreeModel) freeModelsFor(s.freeLane) else selectedProvider?.models ?: emptyList()
         )
     }
     var fetchError by remember { mutableStateOf<String?>(null) }
     var showFreeNotice by remember { mutableStateOf(false) }
+    var pendingLane by remember { mutableStateOf(FreeLane.OPENCODE) }
 
-    fun enableFree(accepted: Boolean) {
-        val known = FreeModelCatalog.ids()
+    fun enableFree(lane: FreeLane, accepted: Boolean) {
+        val known = freeModelsFor(lane)
         models = known
         onChange(
             s.copy(
                 useFreeModel = true,
+                freeLane = lane,
                 freeLaneNoticeAccepted = s.freeLaneNoticeAccepted || accepted,
                 modelName = s.modelName.takeIf { it in known } ?: known.first(),
             )
         )
     }
 
-    // 切到免费通道时拉一次实时目录；失败就保留内置名单，不打断操作。
-    LaunchedEffect(s.useFreeModel) {
+    // 切到免费通道（或换车道）时拉一次实时目录；失败就保留内置名单。
+    LaunchedEffect(s.useFreeModel, s.freeLane) {
         if (!s.useFreeModel) return@LaunchedEffect
-        if (models.isEmpty()) models = FreeModelCatalog.ids()
-        val result = withContext(Dispatchers.IO) { runCatching { ModelListFetcher.fetchFree() } }
+        val known = freeModelsFor(s.freeLane)
+        if (models.isEmpty() || models.none { it in known }) models = known
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                if (s.freeLane == FreeLane.KILO) ModelListFetcher.fetchKiloFree()
+                else ModelListFetcher.fetchFree()
+            }
+        }
         result.onSuccess { if (it.isNotEmpty()) models = it }
     }
 
@@ -437,17 +454,25 @@ private fun ModelSection(
                     title = "模型供应商",
                     subtitle = "选中后自动填入接口地址和常用模型",
                     current = selectedProvider,
-                    options = listOf<ModelProviderCatalog.Provider?>(null, freeProvider) + providers,
+                    options = listOf<ModelProviderCatalog.Provider?>(null) + freeProviders + providers,
                     optionLabel = { it?.name ?: "自定义接口" },
                     onSelect = { provider ->
+                        val lane = provider?.let { p ->
+                            FreeLane.entries.firstOrNull { p.id == "free-${it.id}" }
+                        }
                         when {
                             provider == null -> {
                                 models = emptyList()
                                 onChange(s.copy(useFreeModel = false))
                             }
-                            provider.id == freeProvider.id -> {
+                            lane != null -> {
                                 // 免费通道首次开启前先过风险说明；已确认过就直接切。
-                                if (s.freeLaneNoticeAccepted) enableFree(false) else showFreeNotice = true
+                                if (s.freeLaneNoticeAccepted) {
+                                    enableFree(lane, false)
+                                } else {
+                                    pendingLane = lane
+                                    showFreeNotice = true
+                                }
                             }
                             else -> {
                                 models = provider.models
@@ -467,8 +492,13 @@ private fun ModelSection(
 
                 if (s.useFreeModel) {
                     HintText(
-                        "免费通道不需要填接口地址和 API Key，请求直连 opencode.ai 的公共免费池。" +
-                            "屏幕控件树、截图和输入的文字会发送到该第三方网关。"
+                        "免费通道（${s.freeLane.label}）不需要填接口地址和 API Key。" +
+                            "屏幕控件树、截图和输入的文字会发送到该第三方网关。" +
+                            if (s.freeLane == FreeLane.KILO) {
+                                "Kilo 免费池的 prompt 可能被上游记录并用于改进服务，不要发送敏感内容。"
+                            } else {
+                                ""
+                            }
                     )
                 } else {
                     AppTextField(
@@ -535,7 +565,11 @@ private fun ModelSection(
                             val result = withContext(Dispatchers.IO) {
                                 runCatching {
                                     if (s.useFreeModel) {
-                                        ModelListFetcher.fetchFree()
+                                        if (s.freeLane == FreeLane.KILO) {
+                                            ModelListFetcher.fetchKiloFree()
+                                        } else {
+                                            ModelListFetcher.fetchFree()
+                                        }
                                     } else {
                                         ModelListFetcher.fetch(
                                             s.baseUrl,
@@ -577,9 +611,9 @@ private fun ModelSection(
                 HintText(
                     when {
                         s.useFreeModel && models.isEmpty() ->
-                            "免费池暂时没读到模型；点「获取模型列表」重试"
+                            "${s.freeLane.label} 免费池暂时没读到模型；点「获取模型列表」重试"
                         s.useFreeModel ->
-                            "免费池已载入 ${models.size} 个模型，点模型名右侧箭头选择，也可直接输入"
+                            "${s.freeLane.label} 免费池已载入 ${models.size} 个模型，点模型名右侧箭头选择，也可直接输入"
                         models.isEmpty() ->
                             "点「获取模型列表」后，模型名右侧会出现可选项"
                         else ->
@@ -609,7 +643,7 @@ private fun ModelSection(
             confirmText = stringResource(R.string.settings_model_free_notice_accept),
             onConfirm = {
                 showFreeNotice = false
-                enableFree(true)
+                enableFree(pendingLane, true)
             },
             onDismiss = { showFreeNotice = false },
             dismissText = stringResource(R.string.settings_model_free_notice_decline),

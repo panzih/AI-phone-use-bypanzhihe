@@ -27,6 +27,7 @@ class SettingsStore(
         apiKey = loadApiKey(),
         modelName = sp.getString(KEY_MODEL, null) ?: DEFAULT.modelName,
         useFreeModel = sp.getBoolean(KEY_FREE_MODEL, DEFAULT.useFreeModel),
+        freeLane = FreeLane.fromId(sp.getString(KEY_FREE_LANE, null)),
         recordingEntry = sp.getBoolean(KEY_RECORDING_ENTRY, DEFAULT.recordingEntry),
         onboardingDone = sp.getBoolean(KEY_ONBOARDING_DONE, DEFAULT.onboardingDone),
         freeLaneNoticeAccepted = sp.getBoolean(KEY_FREE_NOTICE, DEFAULT.freeLaneNoticeAccepted),
@@ -73,6 +74,7 @@ class SettingsStore(
             )
             .putString(KEY_MODEL, s.modelName)
             .putBoolean(KEY_FREE_MODEL, s.useFreeModel)
+            .putString(KEY_FREE_LANE, s.freeLane.id)
             .putBoolean(KEY_FREE_NOTICE, s.freeLaneNoticeAccepted)
             .putBoolean(KEY_ALLOW_PUBLIC_CLEARTEXT, s.allowPublicCleartext)
             .putString(KEY_THINKING, s.thinking.id)
@@ -123,6 +125,9 @@ class SettingsStore(
         const val KEY_API_KEY = "api_key"
         const val KEY_MODEL = "model_name"
         const val KEY_FREE_MODEL = "use_free_model"
+
+        /** 免费通道选哪一条（见 AppSettings.freeLane） */
+        const val KEY_FREE_LANE = "free_lane"
 
         /** 免费通道风险说明是否已确认（见 AppSettings.freeLaneNoticeAccepted） */
         const val KEY_FREE_NOTICE = "free_lane_notice_accepted"

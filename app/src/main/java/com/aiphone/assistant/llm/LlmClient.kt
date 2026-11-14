@@ -1,5 +1,6 @@
 package com.aiphone.assistant.llm
 
+import com.aiphone.assistant.data.FreeLane
 import com.aiphone.assistant.data.ThinkingMode
 import android.util.Log
 import org.json.JSONArray
@@ -27,6 +28,8 @@ data class LlmConfig(
      * 开启后忽略 baseUrl/apiKey，自动用 Bearer public + 伪造客户端指纹。
      */
     val useFreeModel: Boolean = false,
+    /** 免费模式走哪一条免密车道（OpenCode / Kilo）。 */
+    val freeLane: FreeLane = FreeLane.OPENCODE,
     /**
      * 允许向公网明文 HTTP 地址发请求。
      *
@@ -242,6 +245,14 @@ class LlmClient(private val cfg: LlmConfig) {
      */
     private val freeSessionId = FreeLaneWire.session()
 
+    /** 当前是否走 OpenCode 免密池（需要 v2 指纹整形）。 */
+    private val opencodeLane: Boolean
+        get() = cfg.useFreeModel && cfg.freeLane == FreeLane.OPENCODE
+
+    /** 当前是否走 Kilo 免密池（无鉴权、无指纹闸门）。 */
+    private val kiloLane: Boolean
+        get() = cfg.useFreeModel && cfg.freeLane == FreeLane.KILO
+
     /** 外部叫停（急停按钮 / 任务被停止）。置上之后不再重发 */
     private val abortFlag = AtomicBoolean(false)
 
@@ -264,7 +275,7 @@ class LlmClient(private val cfg: LlmConfig) {
         class Ok(val result: LlmResult.Ok) : Try()
 
         /** [why] 要短，它会出现在"第 2 次重发（HTTP 503）"这种给用户看的文案里 */
-        class Retry(val why: String) : Try()
+        class Retry(val why: String, val rateLimited: Boolean = false) : Try()
 
         /** [message] 是可以直接显示的中文原因；重发没有意义 */
         class Fatal(val message: String) : Try()
@@ -395,12 +406,13 @@ class LlmClient(private val cfg: LlmConfig) {
         // 请求体只构造一次，重发时**逐字节复用同一份**。
         // 服务端要求完整匹配缓存前缀单元，重发同一份内容才保得住已有单元；
         // 重新构造（哪怕内容完全等价）就没这个保证了。
-        val body = buildBody(system, history)
+        var body = buildBody(system, history)
 
         val startedAt = System.currentTimeMillis()
         val deadline = startedAt + RETRY_TOTAL_BUDGET_MS
         val maxAttempts = cfg.maxAttempts.coerceAtLeast(1)
         var attempts = 0
+        var kiloFallbackUsed = false
 
         while (true) {
             if (isAborted() || shouldAbort?.invoke() == true) {
@@ -422,6 +434,26 @@ class LlmClient(private val cfg: LlmConfig) {
                 is Try.Fatal -> return LlmResult.Fail(outcome.message)
 
                 is Try.Retry -> {
+                    // Kilo 的 429 是「模型 × 每日」限额，重发同一模型没用；
+                    // 先自动换到会轮换的 kilo-auto/free，换完还 429 才如实失败。
+                    if (outcome.rateLimited && kiloLane) {
+                        if (!kiloFallbackUsed) {
+                            kiloFallbackUsed = true
+                            body = buildBody(
+                                system,
+                                history,
+                                model = KiloWire.FALLBACK_MODEL,
+                                stripImages = true,
+                            )
+                            Log.w(TAG, "Kilo 模型被日限额挡住，自动换 ${KiloWire.FALLBACK_MODEL} 重试")
+                            continue
+                        }
+                        return LlmResult.Fail(
+                            "Kilo 免费池当前被上游限流了（连自动路由也返回 429）。\n" +
+                                "过几分钟再试，或者在「设置 → 模型」换一个 Kilo 模型 / " +
+                                "切回 OpenCode 免费池。",
+                        )
+                    }
                     Log.w(TAG, "第 $attempts 次请求没成：${outcome.why}")
                     if (attempts >= maxAttempts) {
                         return giveUp(attempts, outcome.why, startedAt)
@@ -460,11 +492,14 @@ class LlmClient(private val cfg: LlmConfig) {
             readTimeout = cfg.timeoutMs
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            if (cfg.useFreeModel) {
-                // 免费通道：整套 v2 指纹（UA / 四个 session 头 / project=global）见
+            if (opencodeLane) {
+                // 免费通道：整套 v2 指纹（UA / 四个 session 头 / project / trace）见
                 // FreeLaneWire.applyHeaders。⚠️ 绝不要在这里补 x-opencode-request ——
                 // 那是 v1 专用头，v2 收到就回 403。
                 FreeLaneWire.applyHeaders(this, freeSessionId, stream = true)
+            } else if (kiloLane) {
+                // Kilo 免费池不要任何凭据，只带归属头。
+                KiloWire.applyHeaders(this, stream = true)
             } else {
                 // 自定义通道：普通 OpenAI 兼容请求，Accept 用 application/json
                 setRequestProperty("Accept", "application/json")
@@ -592,6 +627,10 @@ class LlmClient(private val cfg: LlmConfig) {
             }
             if (!delta.isNull("reasoning_content")) {
                 delta.optString("reasoning_content").takeIf { it.isNotEmpty() }?.let { reasoning.append(it) }
+            }
+            // Kilo / OpenRouter 系的思考字段叫 reasoning（不是 reasoning_content）。
+            if (!delta.isNull("reasoning")) {
+                delta.optString("reasoning").takeIf { it.isNotEmpty() }?.let { reasoning.append(it) }
             }
         }
         val answer = content.toString().ifBlank { reasoning.toString() }
@@ -758,7 +797,7 @@ class LlmClient(private val cfg: LlmConfig) {
         }
         val wav = AudioProbe.silentWav()
         val b64 = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
-        val body: ByteArray = if (cfg.useFreeModel) {
+        val body: ByteArray = if (opencodeLane) {
             // 免费通道的探针报文必须过同一道 v2 闸门：官方 13 工具与
             // 官方系统提示缺一个都是 403/429。不补齐的话探针
             // 永远报"通道拒绝"，看起来像"不收音频"，其实是报文没进门。
@@ -789,10 +828,12 @@ class LlmClient(private val cfg: LlmConfig) {
                 readTimeout = 30_000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                if (cfg.useFreeModel) {
+                if (opencodeLane) {
                     // 探针也走同一套 v2 指纹：少一个 session 头就是 403，
                     // 那样探针会错报"不支持语音"（其实是没进去门）
                     FreeLaneWire.applyHeaders(this, freeSessionId, stream = false, accept = "application/json")
+                } else if (kiloLane) {
+                    KiloWire.applyHeaders(this, stream = false, accept = "application/json")
                 } else {
                     setRequestProperty("Accept", "application/json")
                     setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
@@ -822,7 +863,8 @@ class LlmClient(private val cfg: LlmConfig) {
     private fun endpoint(): String {
         // 免费通道走 /inference/openai/v1（2.1 客户端的族路径；旧扁平
         // /inference/v1 仍可用）。端点与请求头的全部常量在 FreeLaneWire。
-        if (cfg.useFreeModel) return FreeLaneWire.chatUrl()
+        if (opencodeLane) return FreeLaneWire.chatUrl()
+        if (kiloLane) return KiloWire.chatUrl()
         val base = cfg.baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) return "https://api.deepseek.com/v1/chat/completions"
         return when {
@@ -862,6 +904,10 @@ class LlmClient(private val cfg: LlmConfig) {
     internal fun buildBody(
         system: String,
         history: List<ChatTurn>,
+        /** 覆盖模型名（Kilo 日限额时切到自动路由）；默认用配置里的模型。 */
+        model: String = cfg.model,
+        /** 强制去掉所有截图（自动路由可能不吃图）。 */
+        stripImages: Boolean = false,
     ): JSONObject {
         val messages = JSONArray()
 
@@ -870,13 +916,13 @@ class LlmClient(private val cfg: LlmConfig) {
         //      "returned 429 without it and PONG with it"，缺了就是额度错误的样子；
         //   2. 占位说明 —— 官方 13 工具是网关门禁逼着声明的**真工具**，
         //      不打招呼模型真的会去调 shell 跑命令。
-        val systemContent = if (cfg.useFreeModel) {
+        val systemContent = if (opencodeLane) {
             // 官方 CLI 全量提示（base prompt + <env> + skills）是 v2 闸门的硬要求：
             // 工具与请求头全对、IP 干净，缺它仍然 429（2026-10-28 单变量实测）。
             val withPrompt = if (FreeLaneWire.carriesOfficialPrompt(system)) {
                 system
             } else {
-                FreeLaneWire.officialSystemPrompt(cfg.model, "/sdcard") + "\n\n" + system
+                FreeLaneWire.officialSystemPrompt(model, "/sdcard") + "\n\n" + system
             }
             "$withPrompt\n\n${FreeLaneWire.PLACEHOLDER_NOTE}"
         } else {
@@ -897,7 +943,7 @@ class LlmClient(private val cfg: LlmConfig) {
                     // 免费通道里不是每个模型都看图：nemotron-lightning / jev / beam /
                     // flint 收图片会直接报错。这里按模型能力把图**摘掉**，只发文字 ——
                     // 与其让整轮 400，不如让它在纯控件树模式下继续跑。
-                    val image = if (cfg.useFreeModel && !FreeModelCatalog.supportsImages(cfg.model)) {
+                    val image = if (stripImages || (cfg.useFreeModel && !FreeModelCatalog.supportsImages(model))) {
                         null
                     } else {
                         turn.imageBytes
@@ -943,7 +989,7 @@ class LlmClient(private val cfg: LlmConfig) {
         }
 
         return JSONObject().apply {
-            put("model", cfg.model)
+            put("model", model)
             put("messages", messages)
             // 思考模式下服务端会忽略 temperature（官方：不报错，也不生效），
             // 那就干脆不传 —— 免得用户以为调了它有用
@@ -986,10 +1032,22 @@ class LlmClient(private val cfg: LlmConfig) {
             // （nemotron-super 不认 max、jev 完全没有推理），发错了是
             // 400 invalid_value —— 网关会校验这个字段，不是忽略。
             val effort = ThinkingMode.effortOf(cfg.thinking, cfg.customEffort)
-            if (cfg.useFreeModel) {
-                FreeModelCatalog.resolveEffort(cfg.model, effort)?.let { put("reasoning_effort", it) }
-            } else {
-                effort?.let { put("reasoning_effort", it) }
+            when {
+                opencodeLane ->
+                    FreeModelCatalog.resolveEffort(model, effort)?.let { put("reasoning_effort", it) }
+                kiloLane -> {
+                    // Kilo 走统一的 reasoning 对象，不是 reasoning_effort。
+                    val reasoning = when {
+                        cfg.thinking == ThinkingMode.OFF ->
+                            if (FreeModelCatalog.kiloCanDisableThinking(model)) {
+                                JSONObject().put("enabled", false)
+                            } else null
+                        effort == null -> null
+                        else -> FreeModelCatalog.kiloEffort(effort)?.let { JSONObject().put("effort", it) }
+                    }
+                    reasoning?.let { put("reasoning", it) }
+                }
+                else -> effort?.let { put("reasoning_effort", it) }
             }
             // 免费通道（opencode.ai 免费池）的报文，**逐项抄上游插件 src/upstream.js**：
             //   1. 端点 /inference/openai/v1/chat/completions（endpointFor）
@@ -1000,7 +1058,7 @@ class LlmClient(private val cfg: LlmConfig) {
             //   5. system 里必须有官方 CLI 提示（含 <env>），缺它就是 429
             //   6. 请求头由 FreeLaneWire.applyHeaders 负责（含 Bearer public / project / trace）
             // 断言在 FreeLaneBodyTest 里钉着，改这条链路先跑它。
-            if (cfg.useFreeModel) {
+            if (opencodeLane) {
                 put("stream", true)
                 put("tools", FreeLaneWire.toolsJson())
                 // 2.x 客户端另带的两个常量字段：流式 usage 帧 + 默认输出上限。
@@ -1008,6 +1066,9 @@ class LlmClient(private val cfg: LlmConfig) {
                 if (!has("max_completion_tokens") && !has("max_tokens")) {
                     put("max_completion_tokens", FreeLaneWire.V2_COMPLETION_LIMIT)
                 }
+            } else if (kiloLane) {
+                // Kilo 没有指纹闸门，也不需要官方提示/工具；只要求流式。
+                put("stream", true)
             } else {
                 // 自定义通道保持非流式，响应是单个 JSON
                 put("stream", false)
@@ -1140,13 +1201,20 @@ class LlmClient(private val cfg: LlmConfig) {
         }.getOrNull().orEmpty().ifBlank { body.take(200) }
         Log.w(TAG, "HTTP $code：$detail")
 
-        // ---- 免费通道的三种专用失败 ----
+        // ---- Kilo 的日限额 ----
+        // 按「模型 × 每日」记账，不是 IP 配额；重发同一模型没用，交给 chat()
+        // 自动换 kilo-auto/free。
+        if (kiloLane && (code == 429 || KiloWire.rateLimited(body))) {
+            return Try.Retry("Kilo 免费池日限额（HTTP $code）", rateLimited = true)
+        }
+
+        // ---- OpenCode 免费池的三种专用失败 ----
         // 必须分开说，因为三种的"用户能做什么"完全不同：
         //   额度用完 → 等，或者换自己的 Key
         //   指纹被拒 → 什么都做不了，等 App 更新
         //   地区锁   → 换个模型
         // 混成一句"请求太频繁或额度用完了"，用户只会去反复点发送。
-        if (cfg.useFreeModel) {
+        if (opencodeLane) {
             when {
                 FreeLaneWire.freeQuotaExhausted(body) -> return Try.Fatal(
                     buildString {

@@ -305,6 +305,7 @@ internal class AgentSession(
                 apiKey = settings.apiKey,
                 model = settings.modelName,
                 useFreeModel = settings.useFreeModel,
+                freeLane = settings.freeLane,
                 allowPublicCleartext = settings.allowPublicCleartext,
                 thinking = settings.thinking,
                 customEffort = settings.customEffort,

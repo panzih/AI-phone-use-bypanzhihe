@@ -101,4 +101,19 @@ class FreeLaneHeadersTest {
         val id = FreeLaneWire.newSessionId()
         assertTrue("新铸的 session 必须通过时间可接受性检查：$id", FreeLaneWire.isOfficialSession(id))
     }
+
+    @Test
+    fun `Kilo_端点与免密头`() {
+        assertEquals(
+            "https://ai-gateway.kilo.ai/api/v1/chat/completions",
+            KiloWire.chatUrl(),
+        )
+        assertEquals("https://ai-gateway.kilo.ai/api/v1/models", KiloWire.modelsUrl())
+        val h = KiloWire.headersFor(stream = true).mapKeys { it.key.lowercase() }
+        assertEquals("Kilo 免费池不能带鉴权", null, h["authorization"])
+        assertEquals("dsh-our-free-model", h["user-agent"])
+        assertEquals("text/event-stream", h["accept"])
+        assertEquals("https://kilo.ai/", h["http-referer"])
+        assertEquals("Our Free Model", h["x-title"])
+    }
 }

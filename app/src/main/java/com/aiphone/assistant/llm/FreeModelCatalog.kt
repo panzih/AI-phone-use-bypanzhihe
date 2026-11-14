@@ -174,10 +174,29 @@ object FreeModelCatalog {
             maxOutput = 65_536,
             efforts = listOf("low", "medium", "high", "xhigh", "max"),
         ),
+
+        // ---- Kilo 免密免费池（2026-11-14 网关 /models 的 isFree 行）----
+        FreeModelSpec("kilo-auto/free", "Kilo Auto Free", false, true, 256_000, 32_768, null),
+        FreeModelSpec("openrouter/free", "OpenRouter Free Router", true, true, 200_000, 32_768, null),
+        FreeModelSpec("nvidia/nemotron-3.5-super-vl:free", "Nemotron 3.5 Super VL", true, true, 1_000_000, 131_072, null),
+        FreeModelSpec("stealth/glyph-cluster", "Glyph Cluster", false, true, 256_000, 256_000, null),
+        FreeModelSpec("inclusionai/ling-3.2-flash:free", "Ling 3.2 Flash", true, true, 1_048_576, 262_144, null),
+        FreeModelSpec("baidu/ernie-5.5-flash-preview:free", "ERNIE 5.5 Flash Preview", false, true, 1_024_000, 921_600, null),
+        FreeModelSpec("liquid/lfm-3-1.7b:free", "LFM3 1.7B", false, true, 262_144, 8_192, null),
+        FreeModelSpec("particle-ai/particle-1:free", "Particle-1", true, true, 1_048_576, 131_072, null),
+        FreeModelSpec("dots-studio/dots-3-note-preview:free", "Dots3 Note Preview", true, true, 512_000, 460_800, null),
+        FreeModelSpec("nvidia/nemotron-3.5-lightning:free", "Nemotron 3.5 Lightning", false, true, 1_000_000, 65_536, null),
+        FreeModelSpec("cohere/north-mini-code:free", "North Mini Code", false, true, 256_000, 64_000, null),
+        FreeModelSpec("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra", false, true, 1_000_000, 65_536, null),
+        FreeModelSpec("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "Nemotron 3 Nano Omni", true, true, 256_000, 65_536, null),
+        FreeModelSpec("reflection/beam-free", "Beam 1.0", false, true, 1_048_576, 131_072, null),
     ).associateBy { it.id }
 
     /** 已知的免费模型 id，按上面的声明顺序 —— 实时目录拉不到时的兜底。 */
-    fun ids(): List<String> = EXACT.keys.toList()
+    fun ids(): List<String> = EXACT.keys.filter { !it.contains("/") }
+
+    /** Kilo 免费池的 id（含 `org/model:free` 与两个自动路由）。 */
+    fun kiloIds(): List<String> = EXACT.keys.filter { it.contains("/") }
 
     /**
      * 表里没有的 id 用这套保守值。
@@ -227,6 +246,32 @@ object FreeModelCatalog {
 
     /** 这个模型能不能吃截图 */
     fun supportsImages(modelId: String): Boolean = specFor(modelId).vision
+
+    // ------------------------------------------------------------------
+    // Kilo 的思考控制
+    // ------------------------------------------------------------------
+
+    /**
+     * Kilo 的关闭档能不能发 `reasoning.enabled=false`。
+     *
+     * liquid / stepfun / thinkingmachines 的端点强制思考（实测返回 400），
+     * 两个自动路由会忽略关闭请求，所以这些模型不提供 OFF 档。
+     */
+    fun kiloCanDisableThinking(modelId: String): Boolean {
+        val id = baseId(modelId)
+        if (id.startsWith("liquid/") || id.startsWith("stepfun/") || id.startsWith("thinkingmachines/")) {
+            return false
+        }
+        return id != "kilo-auto/free" && id != "openrouter/free"
+    }
+
+    /** 把 App 的档位映射到 Kilo 的 `reasoning.effort`（低/中/高），认不出就不发。 */
+    fun kiloEffort(wanted: String?): String? = when (wanted?.trim()?.lowercase()) {
+        "low", "minimal" -> "low"
+        "medium" -> "medium"
+        "high", "xhigh", "max" -> "high"
+        else -> null
+    }
 
     /** 去掉 `(level)` 这类后缀，和上游 baseModelId 一致 */
     private fun baseId(modelId: String): String =

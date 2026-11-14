@@ -133,6 +133,49 @@ object ModelListFetcher {
     }
 
     /**
+     * Kilo 免密免费池：`GET /models` 里 `isFree: true` 的行。
+     *
+     * 不需要任何凭据；付费 id 在免密请求下会 401，所以只把免费池广播给用户。
+     */
+    fun fetchKiloFree(): List<String> {
+        val conn = (URL(KiloWire.modelsUrl()).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15_000
+            readTimeout = 15_000
+            KiloWire.headersFor(stream = false, accept = "application/json").forEach { (name, value) ->
+                setRequestProperty(name, value)
+            }
+        }
+
+        try {
+            val code = conn.responseCode
+            val body = if (code in 200..299) {
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                throw IllegalStateException("HTTP $code：${err.take(200)}")
+            }
+
+            val data = JSONObject(body).optJSONArray("data")
+                ?: throw IllegalStateException("返回里没有 data 字段")
+
+            val ids = mutableListOf<String>()
+            for (i in 0 until data.length()) {
+                val row = data.optJSONObject(i) ?: continue
+                if (!row.optBoolean("isFree", false)) continue
+                val id = row.optString("id", "")
+                if (id.isNotBlank()) ids.add(id)
+            }
+            ids.sort()
+            if (ids.isEmpty()) throw IllegalStateException("接口里没有可用的 Kilo 免费模型")
+            Log.i(TAG, "Kilo 免费模型 ${ids.size} 个：${ids.joinToString()}")
+            return ids
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
      * 网关目录里 85 个条目既含免费池、也含**付费目录**（claude / gpt / gemini /
      * kimi / grok …）。免费通道只能选免费的那批：     *   - `-free` 后缀的（"deepseek-v4.1-flash-free"、"glm-5.3-flash-free" …）
      *   - 少数不带后缀但属于免费池的（"big-pickle"）
