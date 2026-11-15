@@ -1,0 +1,96 @@
+# 手动点一下，验证 Actions Secrets 里的正式签名密钥配对了没有。
+#
+# 为什么需要它：GitHub 不回显 Secret 的值，配错只能等发版时才炸。这个
+# workflow 只做一件事 —— 把密钥还原出来，用 keytool 解一次，把证书指纹
+# 打出来。几十秒跑完，不出包、不碰 Release。
+#
+# 用法：Actions → Signing Check → Run workflow（默认分支上点就行）。
+#
+# 判定标准（不看具体指纹，只看该成立的约束）：
+#   * 四个 Secret 都在；
+#   * 口令能解开 keystore，别名能对上；
+#   * 证书指纹**不是**那把公开的开发者密钥 —— 是的话说明还在用旧密钥，
+#     正式线等于没换。
+#
+# 证书指纹是公开信息（它就印在每个装过的包里），打出来不构成泄露。
+name: Signing Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 校验 Secrets 里的正式签名密钥
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          STORE_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          missing=""
+          [ -n "${KEYSTORE_B64:-}" ] || missing="$missing RELEASE_KEYSTORE_B64"
+          [ -n "${STORE_PASS:-}" ]   || missing="$missing RELEASE_STORE_PASSWORD"
+          [ -n "${KEY_ALIAS:-}" ]    || missing="$missing RELEASE_KEY_ALIAS"
+          [ -n "${KEY_PASS:-}" ]     || missing="$missing RELEASE_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error title=Secret 没配全::缺：$missing"
+            exit 1
+          fi
+          echo "四个 Secret 都在"
+
+          KS="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
+          echo "密钥还原：$(wc -c < "$KS") 字节"
+
+          # 口令或别名不对时 keytool 会报错。手动贴 base64 最常见的事故是
+          # **被截断**（keytool 报 EOFException），所以这里要单独给个可读的提示。
+          if ! OUT=$(keytool -list -v -keystore "$KS" -alias "$KEY_ALIAS" \
+                       -storepass "$STORE_PASS" 2>&1); then
+            echo "$OUT" | tail -n 5
+            echo "::error title=密钥打不开::口令/别名不对，或 base64 不完整（手动复制粘贴很容易截断，改用 base64 -i ... | pbcopy）"
+            exit 1
+          fi
+          echo "$OUT" | grep -E "Alias name|别名|Valid|SHA256|SHA-256" || true
+
+          # keytool 的输出是本地化的（中文环境打「证书指纹」），但 SHA256 那行的
+          # 形制固定：`SHA256: XX:XX:...`。用 grep -E 定位再剥前缀，别依赖 GNU
+          # sed 的 `\|` 交替 —— macOS 的 BSD sed 不支持。
+          CERT=$(printf '%s\n' "$OUT" | grep -E 'SHA-?256:' | head -n1 \
+                   | sed -E 's/.*SHA-?256:[[:space:]]*//' | tr -d ': ' | tr 'A-Z' 'a-z')
+          if [ -z "$CERT" ]; then
+            echo "::error title=读不出证书指纹::keytool 没输出 SHA-256，密钥文件可能是被截断的 base64"
+            exit 1
+          fi
+
+          # 仓库里 keystore/debug.keystore 的指纹，私钥是公开的
+          LEGACY_CERT=e2876ac3252f61067c74fc0d74bc60be47fb0c2a083c783c40295f0b4353903d
+
+          echo "证书指纹：$CERT"
+          if [ "$CERT" = "$LEGACY_CERT" ]; then
+            echo "::error title=用的还是公开的开发者密钥::这是默认那把，任何人都能签同签名的包，请换成正式的 release.keystore"
+            exit 1
+          fi
+
+          if ! keytool -certreq -keystore "$KS" -alias "$KEY_ALIAS" \
+                 -storepass "$STORE_PASS" -keypass "$KEY_PASS" >/dev/null 2>&1; then
+            echo "::error title=keyPassword 不对::keystore 能打开，但用这个口令取不出私钥"
+            exit 1
+          fi
+
+          echo "::notice title=签名密钥配置正常::指纹 $CERT，和本地 keystore/release.keystore 对一下是否一致"
