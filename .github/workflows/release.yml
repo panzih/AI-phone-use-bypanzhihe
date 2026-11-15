@@ -43,7 +43,8 @@ jobs:
   release:
     # 与 CI 保持一致，别让镜像漂移影响出包
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # 两个 variant 各要跑一遍 R8 和 lintVital，比单包时代慢不少，留足余量
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
