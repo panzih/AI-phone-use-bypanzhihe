@@ -3,7 +3,14 @@
 # 触发：往远端推一个 v* 标签（git push origin v0.12.5，或 git push --follow-tags）。
 #      推分支本身不会触发这里 —— Release 只跟标签走，普通 push 只跑 CI。
 #
-# 干的事：assembleRelease 出包 → 挑更新说明 → 建 Release 并把 APK 挂上去。
+# 干的事：出两个包 → 挑更新说明 → 建 Release 并把两个 APK 都挂上去。
+#
+# 两个包（同一个 applicationId，只能装一个，装哪个就沿哪条线升级）：
+#   *-official.apk  assembleRelease，正式密钥签名。新用户装这个。
+#   *-legacy.apk    assembleLegacy，沿用仓库里那把开发者密钥。老用户原地升级用。
+#
+# 为什么要有 legacy：0.12.5 及更早的包全是开发者密钥签的，换正式密钥后
+# 那些用户无法覆盖安装。留一条兼容线让用户自己选，等迁移完就能删掉。
 #
 # 更新说明从哪儿来（按优先级）：
 #   1. release-notes/<tag>.md      例如 release-notes/v0.12.5.md
@@ -13,9 +20,11 @@
 #   5. 都没有就让 GitHub 按提交自动生成
 # 所以日常发版只要把 md 写好推进去就行，不用去网页上粘。
 #
-# 签名：仓库里没有 keystore.properties 时，build.gradle.kts 会回退到仓库内
-# 的 debug keystore（CN=Android Debug），出来的包能装、能覆盖旧版，但不是
-# 正式签名。要用正式签名，把 keystore 四要素放进 Actions Secrets 再放开。
+# ⚠️ 正式签名密钥从 Actions Secrets 还原，四个都要配，缺一个直接失败：
+#     RELEASE_KEYSTORE_B64     base64 -i keystore/release.keystore | tr -d '\n'
+#     RELEASE_STORE_PASSWORD   生成时打印的那个口令
+#     RELEASE_KEY_ALIAS        别名
+#     RELEASE_KEY_PASSWORD     口令
 name: Release
 
 on:
@@ -48,6 +57,36 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # 正式签名密钥只在 Secrets 里。少任何一个都直接失败 ——
+      # 宁可不出包，也不要拿开发者签名冒充正式版。
+      - name: 还原发布签名密钥
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          STORE_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${KEYSTORE_B64:-}" ] || missing="$missing RELEASE_KEYSTORE_B64"
+          [ -n "${STORE_PASS:-}" ]   || missing="$missing RELEASE_STORE_PASSWORD"
+          [ -n "${KEY_ALIAS:-}" ]    || missing="$missing RELEASE_KEY_ALIAS"
+          [ -n "${KEY_PASS:-}" ]     || missing="$missing RELEASE_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error title=缺少发布签名密钥::未配置：$missing"
+            exit 1
+          fi
+          mkdir -p keystore
+          printf '%s' "$KEYSTORE_B64" | base64 -d > keystore/release.keystore
+          chmod 600 keystore/release.keystore
+          {
+            echo "storeFile=keystore/release.keystore"
+            echo "storePassword=$STORE_PASS"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > keystore.properties
+          echo "已还原正式密钥，别名 $KEY_ALIAS"
+
       # 提醒：tag 和包里的 versionName 不一致时给个警告，避免"标签叫 0.12.5、
       # 装上去是 0.12.4"这种低级错
       - name: 检查版本号是否对得上
@@ -60,8 +99,48 @@ jobs:
             echo "::warning title=版本号不一致::标签是 ${VER}，build.gradle.kts 里是 ${NAME}；确认无误再发"
           fi
 
-      - name: 构建 Release APK
-        run: ./gradlew :app:assembleRelease --stacktrace
+      - name: 构建两个安装包
+        run: ./gradlew :app:assembleRelease :app:assembleLegacy --stacktrace
+
+      # 出包之后验一遍指纹。这一步是整套方案的地基：
+      #   official 必须**不是**开发者签名（否则正式线等于没换）；
+      #   legacy 必须**是**开发者签名（否则老用户装不上）。
+      # 任何一条不成立就停，别把包发出去。
+      - name: 校验签名指纹
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* | sort -V | tail -n1)
+          OFFICIAL=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+          LEGACY=$(ls app/build/outputs/apk/legacy/*.apk | head -n1)
+
+          digest() {
+            "$BUILD_TOOLS/apksigner" verify --print-certs "$1" \
+              | sed -n 's/.*certificate SHA-256 digest: //p' \
+              | head -n1 | tr -d ':' | tr 'A-Z' 'a-z'
+          }
+
+          OFF=$(digest "$OFFICIAL")
+          LEG=$(digest "$LEGACY")
+          echo "official: $OFF"
+          echo "legacy:   $LEG"
+
+          # 仓库里 keystore/debug.keystore 的证书指纹，也是 0.12.5 及更早的包的指纹
+          LEGACY_CERT=e2876ac3252f61067c74fc0d74bc60be47fb0c2a083c783c40295f0b4353903d
+
+          if [ "$LEG" != "$LEGACY_CERT" ]; then
+            echo "::error title=兼容包签名不对::legacy 包的指纹是 $LEG，不是历史签名 $LEGACY_CERT，老用户装不上"
+            exit 1
+          fi
+          if [ -z "$OFF" ]; then
+            echo "::error title=正式包没签上::apksigner 读不出 official 包的证书"
+            exit 1
+          fi
+          if [ "$OFF" = "$LEGACY_CERT" ]; then
+            echo "::error title=正式包用了开发者签名::official 包和 legacy 同指纹，说明 Secrets 没生效，不能发布"
+            exit 1
+          fi
+          echo "指纹校验通过"
 
       # 选出这次要用的说明文件，写进 step output
       - name: 准备更新说明
@@ -99,16 +178,41 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NOTES_PATH: ${{ steps.notes.outputs.path }}
         run: |
-          set -e
+          set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
-          ASSET="AI-phone-${TAG}.apk"
+          OFFICIAL=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+          LEGACY=$(ls app/build/outputs/apk/legacy/*.apk | head -n1)
+
           # 附件名用 ASCII：GitHub 会把非 ASCII 字符清洗掉（实测
           # 「AI手机-v0.12.5.apk」变成了「AI.-v0.12.5.apk」）。
           # gh 的 `path#name` 写法在不同版本上也不都会改名，所以先复制成
           # 目标文件名再上传，附件名才稳定。
-          STAGE="${RUNNER_TEMP}/${ASSET}"
-          cp "$APK" "$STAGE"
+          STAGE_OFFICIAL="${RUNNER_TEMP}/AI-phone-${TAG}-official.apk"
+          STAGE_LEGACY="${RUNNER_TEMP}/AI-phone-${TAG}-legacy.apk"
+          cp "$OFFICIAL" "$STAGE_OFFICIAL"
+          cp "$LEGACY" "$STAGE_LEGACY"
+
+          # 两个包摆在一起，用户不看说明就会装错，而装错得卸载才能换。
+          # 所以这段固定排在更新说明最前面。
+          NOTES="${RUNNER_TEMP}/release-notes.md"
+          cat > "$NOTES" <<'MD'
+          ## 装哪个包
+
+          | 附件 | 谁该装 |
+          |---|---|
+          | `-official.apk` | 全新安装，或愿意卸载重装一次的老用户。正式签名，以后升级不断档。 |
+          | `-legacy.apk` | 已经在用旧版的用户。**直接覆盖安装，数据保留**。 |
+
+          两个包的应用 ID 相同，手机上**只能装一个**；想从 legacy 换成 official
+          必须先卸载（本地数据会丢）。
+          MD
+          printf '\n' >> "$NOTES"
+          if [ -n "${NOTES_PATH:-}" ]; then
+            cat "$NOTES_PATH" >> "$NOTES"
+          else
+            echo "本版说明未单独编写，改动见提交记录。" >> "$NOTES"
+          fi
+
           PRE=""
           case "$TAG" in
             *-beta*|*-rc*|*-alpha*) PRE="--prerelease" ;;
@@ -120,12 +224,7 @@ jobs:
             gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY"
           fi
 
-          if [ -n "$NOTES_PATH" ]; then
-            gh release create "$TAG" "$STAGE" \
-              --title "$TAG" --notes-file "$NOTES_PATH" $PRE --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$TAG" "$STAGE" \
-              --title "$TAG" --generate-notes $PRE --repo "$GITHUB_REPOSITORY"
-          fi
+          gh release create "$TAG" "$STAGE_OFFICIAL" "$STAGE_LEGACY" \
+            --title "$TAG" --notes-file "$NOTES" $PRE --repo "$GITHUB_REPOSITORY"
 
           echo "发布完成：https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

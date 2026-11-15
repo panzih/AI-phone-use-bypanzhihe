@@ -30,8 +30,21 @@ const DEFAULT_PACKAGE = 'com.aiphone.assistant'
 const MAX_APK = 300 * 1024 * 1024
 const SESSION_DAYS = 7
 
-/** 只允许这两个渠道，避免任意字符串进统计表 */
-const CHANNELS = new Set(['stable', 'beta'])
+/**
+ * 只允许这几个渠道，避免任意字符串进统计表。
+ *
+ * 两个渠道对应两条签名线，客户端按**自己的签名证书**决定报哪个（见
+ * UpdateChecker.channelOf）：
+ *
+ *   stable    兼容签名线。0.12.5 及更早的包全报这个，继续沿用同一个名字，
+ *             老用户才收得到「能覆盖安装」的更新。发版时上传 legacy 包。
+ *   official  正式签名线。只有换成正式密钥签的包才会报这个，
+ *             发版时上传 official 包。
+ *   beta      正式签名线的测试通道。
+ *
+ * ⚠️ 两条线不能串：把 official 包发到 stable，老用户下载后签名不匹配，装不上。
+ */
+const CHANNELS = new Set(['stable', 'beta', 'official'])
 
 // ─────────────────────────────────────────────────────────── 小工具
 

@@ -2,6 +2,7 @@ package com.aiphone.assistant.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -24,13 +25,30 @@ import java.security.MessageDigest
  * 几个和更新站相关的硬约束，改的时候别踩：
  *   - 托管平台的分享码 `sharecode` **每个请求都要带**，否则网关直接 403；
  *   - 返回的 `downloadUrl` 已经带好了分享码，直接用，不要自己拼；
+ *   - 渠道（channel）按**自己的签名证书**判断，不能用编译期常量，见 `channelOf`；
  *   - 只在这里用 `HttpURLConnection` + `org.json`（项目不引第三方运行时依赖）。
  */
 object UpdateChecker {
 
     private const val ENDPOINT = "https://paperbox-update.app.workbuddy.host/api/v1/update"
     private const val SHARE_CODE = "3NBIVEHROW"
-    private const val CHANNEL = "stable"
+
+    /** 正式签名线。新用户装这个，以后升级不断档 */
+    private const val CHANNEL_OFFICIAL = "official"
+
+    /**
+     * 兼容签名线。渠道名沿用历史上的 `stable`：0.12.5 及更早的包全都自报
+     * `stable`，这条线继续用同一个名字，老用户才收得到能装上的更新。
+     */
+    private const val CHANNEL_LEGACY = "stable"
+
+    /**
+     * 历史上对外发布过的签名证书（仓库里那把开发者密钥）的 SHA-256。
+     *
+     * 只用来回答「我这个包属于哪条签名线」，不是秘密 —— 它本来就随包公开。
+     */
+    private const val LEGACY_CERT_SHA256 =
+        "e2876ac3252f61067c74fc0d74bc60be47fb0c2a083c783c40295f0b4353903d"
 
     private const val CONNECT_TIMEOUT = 8_000
     private const val READ_TIMEOUT = 12_000
@@ -86,6 +104,31 @@ object UpdateChecker {
     }
 
     /**
+     * 这个包该走哪条更新渠道。
+     *
+     * **不能用编译期常量**：本机没配正式密钥时 `assembleRelease` 会退回开发者
+     * 签名出一个能装的包，那种包要是自报 official，就会去拉正式签名的新版本，
+     * 装的时候签名不匹配直接失败。读自己的证书永远是准的。
+     */
+    private fun channelOf(context: Context): String {
+        val digest = ownCertSha256(context) ?: return CHANNEL_OFFICIAL
+        return if (digest == LEGACY_CERT_SHA256) CHANNEL_LEGACY else CHANNEL_OFFICIAL
+    }
+
+    /** 本包签名证书的 SHA-256（小写十六进制）。拿不到就返回 null */
+    private fun ownCertSha256(context: Context): String? = runCatching {
+        val signer = context.packageManager
+            .getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+            .signingInfo
+            ?.apkContentsSigners
+            ?.firstOrNull()
+            ?: return@runCatching null
+        MessageDigest.getInstance("SHA-256")
+            .digest(signer.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+    }.getOrNull()
+
+    /**
      * 查一次。**没有新版返回 null，网络/解析失败返回 failure** ——
      * 调用方要能把「已经是最新」和「没查成」分开显示。
      */
@@ -100,7 +143,7 @@ object UpdateChecker {
 
             val url = URL(
                 "$ENDPOINT?package=${enc(context.packageName)}" +
-                    "&channel=$CHANNEL&sharecode=$SHARE_CODE" +
+                    "&channel=${channelOf(context)}&sharecode=$SHARE_CODE" +
                     "&versionCode=${BuildConfig.VERSION_CODE}" +
                     "&versionName=${enc(BuildConfig.VERSION_NAME)}" +
                     "&deviceId=${enc(deviceId)}",

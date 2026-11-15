@@ -61,7 +61,19 @@
 
 ## 安装
 
-1. 从 [Releases](https://github.com/panzih/AI-phone-use-bypanzhihe/releases) 下载最新 APK
+每个版本的 Release 里有两个包，**同一个应用，只能装一个**：
+
+| 附件 | 谁该装 |
+|---|---|
+| `-official.apk` | 全新安装，或者愿意卸载重装一次的老用户。正式签名，以后升级不断档 |
+| `-legacy.apk` | 已经在用 0.12.5 及更早版本的用户。**直接覆盖安装，数据保留** |
+
+2026 年 11 月之前的版本都是开发者签名（私钥随仓库公开），任何人都能签出同签名
+的包来冒充覆盖安装，所以正式线换成了独立密钥。代价是装 `-official` 必须先卸载
+旧版——卸载会清掉本地数据（对话、记忆、设置），要保留就装 `-legacy`。
+从 legacy 换到 official 同样要卸载一次。
+
+1. 从 [Releases](https://github.com/panzih/AI-phone-use-bypanzhihe/releases) 下载对应那个包
 2. 允许"安装未知来源应用"
 3. 打开 App，按引导开无障碍权限
 4. 默认在「设置 → 模型」填你自己的 Key；也可以显式切到「免费模型」，首次开启需确认风险说明
@@ -126,7 +138,13 @@ app/src/main/java/com/aiphone/assistant/
 ./gradlew :app:testDebugUnitTest   # JVM 单测（Robolectric，不需要设备）
 ./gradlew :app:lintDebug           # lint（CI 会挡住 error）
 ./gradlew :app:assembleDebug       # 构建 debug APK
+./gradlew :app:assembleRelease     # 正式签名包（要 keystore.properties，没有就退回开发者签名）
+./gradlew :app:assembleLegacy      # 兼容签名包（用仓库自带的开发者密钥，老用户升级用）
 ```
+
+两条签名线各走各的更新渠道，客户端按**自己那张证书的指纹**决定报 `stable`
+（兼容线）还是 `official`（正式线），见 `UpdateChecker.channelOf`。所以本机没配
+密钥时 `assembleRelease` 出的包会自动认作兼容线，不会被自己的更新器推成装不上的包。
 
 设备冒烟测试（无障碍连接、悬浮条、日志 zip）需要真机/模拟器，运行方式和前提见
 [docs/testing-device.md](docs/testing-device.md)。CI 不跑设备测试，只跑单测、lint 和 debug 构建。

@@ -55,9 +55,23 @@ RLS 对 `anon` 开放读写 —— 读写都由 Node 进程发起，key 只在�
 | 参数 | 说明 |
 |---|---|
 | `package` | 默认 `com.aiphone.assistant` |
-| `channel` | `stable`（默认）/ `beta`，其他值返回 400 |
+| `channel` | `stable`（默认）/ `beta` / `official`，其他值返回 400 |
 | `versionCode` | 当前客户端版本号；非整数返回 400 |
 | `versionName` / `deviceId` | 只用于统计，`deviceId` 只存哈希 |
+
+### 渠道对应两条签名线（⚠️ 发版时别放错）
+
+App 按**自己签名证书的指纹**决定报哪个渠道（`UpdateChecker.channelOf`），
+两个包的应用 ID 一样、签名不同，装错渠道的包会因签名不匹配装不上：
+
+| 渠道 | 谁在用 | 该发哪个包 |
+|---|---|---|
+| `stable` | 0.12.5 及更早（开发者签名）+ 新的 legacy 包 | `*-legacy.apk` |
+| `official` | 正式签名线新包 | `*-official.apk` |
+| `beta` | 正式签名线的测试版 | `*-official.apk`（预发布） |
+
+`stable` 这个名字是历史包袱：它已经从「正式」变成「兼容签名线」，但**不能改名** ——
+所有旧客户端硬编码报的是这个字符串，改名等于让它们收不到更新。
 
 返回 `hasUpdate`、`force`、`latest.{versionCode,versionName,size,sha256,changelog,downloadUrl}`。
 `downloadUrl` 已带好分享码，客户端直接用。

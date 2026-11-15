@@ -71,8 +71,11 @@ android {
      *      "Unable to create debug keystore ... because it is not writable"。
      *
      * 口令就是 Android 调试密钥的公开默认值（android / androiddebugkey），
-     * 这**不是秘密也不能当秘密用** —— 调试密钥只用于本地安装，
-     * 绝不能拿它签发布包。
+     * 这**不是秘密也不能当秘密用** —— 私钥就躺在仓库里，谁都能签出同签名的包。
+     *
+     * 唯一被允许拿它签发布包的地方是下面的 `legacy` 兼容线：2026-11 之前
+     * 对外发的所有版本都是这把签的，为了让老用户能原地升级只能继续用。
+     * **新用户应该装正式签名的包**，见下方 buildTypes 说明。
      */
     signingConfigs {
         getByName("debug") {
@@ -102,6 +105,17 @@ android {
         }
     }
 
+    /**
+     * 两条并行的发布签名线。**同一个 applicationId，只能装其中一个**，
+     * 装哪个就沿哪条线升级 —— 所以两条线各走各的更新渠道（见 UpdateChecker）。
+     *
+     *   release  → 正式密钥签名。`assembleRelease`
+     *   legacy   → 历史上那把开发者密钥签名，兼容老用户原地升级。`assembleLegacy`
+     *
+     * 之所以要并行一段时间：0.12.5 及更早的包全是开发者密钥签的，直接换正式
+     * 密钥会让所有老用户无法覆盖安装。留一条兼容线，让用户自己选「保留数据」
+     * 还是「换成正式签名」。
+     */
     buildTypes {
         release {
             // 启用 R8（优化+裁剪）。proguard-rules.pro 里目前加了 -dontobfuscate，
@@ -114,17 +128,32 @@ android {
             if (hasReleaseKey) {
                 signingConfig = signingConfigs.getByName("release")
             } else {
-                // 没有发布密钥时**退回开发者签名**（用户 2026-09-26 的明确要求：
-                // 不需要正式发布签名，用开发者签名即可）。
+                // 本机没配正式密钥时退回开发者签名，只为了让 `assembleRelease`
+                // 能出一个能装的包做冒烟测试。
                 //
-                // 这样 clone 下来的人 `assembleRelease` 就能拿到一个**能装**的包，
-                // 而不是 unsigned 产物 —— 后者对使用者毫无意义。
-                //
-                // ⚠️ 代价写在明面上：调试密钥签的包**不能覆盖安装**任何用别的密钥
-                // 签过的同名应用，也绝不能当"官方正式版"对外分发。
-                // 真要正式发版，配好 keystore.properties 即可自动切回 release 签名。
+                // ⚠️ 这个产物**不能对外发布**：CI 会用 apksigner 校验指纹，
+                // 发现「正式包其实是开发者签名」就直接失败。
                 signingConfig = signingConfigs.getByName("debug")
             }
+        }
+
+        /**
+         * 兼容签名线：沿用仓库里那把开发者密钥，和老版本同签名。
+         *
+         * 它存在的唯一目的是**让已经装了旧版的用户能原地升级、不丢数据**。
+         * 新用户不应该装这个包 —— 它的私钥是公开的，任何人都能签出同签名
+         * 的包来覆盖安装。
+         *
+         * 等旧版用户基本迁移完，这个 buildType 和仓库里的 debug keystore
+         * 就可以一起删掉。
+         */
+        create("legacy") {
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
