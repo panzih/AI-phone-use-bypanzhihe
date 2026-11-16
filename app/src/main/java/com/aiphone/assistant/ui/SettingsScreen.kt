@@ -187,6 +187,13 @@ fun SettingsScreen(
                     )
                     GroupDivider()
                     SwitchRow(
+                        title = stringResource(R.string.settings_voice_input),
+                        subtitle = stringResource(R.string.settings_voice_input_desc),
+                        checked = s.voiceInput,
+                        onCheckedChange = { onSettingsChange(s.copy(voiceInput = it)) },
+                    )
+                    GroupDivider()
+                    SwitchRow(
                         title = stringResource(R.string.settings_allow_high_risk),
                         subtitle = stringResource(R.string.settings_allow_high_risk_desc),
                         checked = s.allowHighRiskActions,

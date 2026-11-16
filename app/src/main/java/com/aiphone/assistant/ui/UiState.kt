@@ -1,6 +1,7 @@
 package com.aiphone.assistant.ui
 
 import com.aiphone.assistant.data.AppSettings
+import com.aiphone.assistant.voice.VoicePhase
 
 /**
  * 界面状态与数据模型。
@@ -90,6 +91,20 @@ data class MainUiState(
 
     /** 无障碍服务当前是否真的连着（不是"设置里开着"就算） */
     val authorized: Boolean = false,
+
+    /** 麦克风（RECORD_AUDIO）是否已授权。语音输入开关打开后才在「权限」页显示 */
+    val micGranted: Boolean = false,
+
+    // ---------- 语音输入 ----------
+
+    /** 语音输入当前处于哪一步（空闲 / 录音中 / 识别中） */
+    val voicePhase: VoicePhase = VoicePhase.IDLE,
+
+    /** 已录音秒数，显示在底部状态条上 */
+    val voiceSeconds: Int = 0,
+
+    /** 语音输入的一次性提示（识别失败、没录到声音等），几秒后自动消失 */
+    val voiceNotice: String? = null,
 
     /** 悬浮窗权限（SYSTEM_ALERT_WINDOW）。没有它就没有进度面板和急停按钮 */
     val overlayGranted: Boolean = false,

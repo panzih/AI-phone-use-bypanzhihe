@@ -122,6 +122,13 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `语音输入_默认关闭_打开后能存住`() {
+        assertFalse("麦克风是敏感能力，默认不露出入口", AppSettings().voiceInput)
+        store.save(AppSettings(voiceInput = true))
+        assertTrue("设置里打开后必须跨重启保留", store.load().voiceInput)
+    }
+
+    @Test
     fun `更新设置_默认不自动检查_且没跳过任何版本`() {
         val s = AppSettings()
         // 2026-10-27 整改：检查更新会发送 IP/UA/Android ID，默认改为关闭

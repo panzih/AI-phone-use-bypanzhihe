@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
@@ -99,6 +100,7 @@ import com.aiphone.assistant.ui.design.Space
 import com.aiphone.assistant.ui.design.StatusPill
 import com.aiphone.assistant.ui.design.Tone
 import com.aiphone.assistant.ui.design.interactiveSurface
+import com.aiphone.assistant.voice.VoicePhase
 import kotlinx.coroutines.launch
 
 /**
@@ -122,6 +124,7 @@ fun MainScreen(
     onSettingsClick: () -> Unit,
     onInputChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    onVoiceClick: () -> Unit,
     onStop: () -> Unit,
     onPauseToggle: () -> Unit,
     isPaused: Boolean,
@@ -180,6 +183,11 @@ fun MainScreen(
                     value = state.input,
                     onValueChange = onInputChange,
                     onSubmit = onSubmit,
+                    onVoiceClick = onVoiceClick,
+                    voiceEnabled = state.settings.voiceInput,
+                    voicePhase = state.voicePhase,
+                    voiceSeconds = state.voiceSeconds,
+                    voiceNotice = state.voiceNotice,
                     onStop = onStop,
                     onPauseToggle = onPauseToggle,
                     isRunning = state.isRunning,
@@ -845,6 +853,11 @@ private fun Composer(
     value: String,
     onValueChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    onVoiceClick: () -> Unit,
+    voiceEnabled: Boolean,
+    voicePhase: VoicePhase,
+    voiceSeconds: Int,
+    voiceNotice: String?,
     onStop: () -> Unit,
     onPauseToggle: () -> Unit,
     isRunning: Boolean,
@@ -874,6 +887,16 @@ private fun Composer(
                 .windowInsetsPadding(WindowInsets.displayCutout),
         ) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            // 语音状态条：正在听 / 正在识别 / 一次性错误。和运行状态带并列，
+            // 因为它俩可能同时发生（一边跑任务一边补充一句）。
+            if (voicePhase != VoicePhase.IDLE || voiceNotice != null) {
+                VoiceStrip(
+                    phase = voicePhase,
+                    seconds = voiceSeconds,
+                    notice = voiceNotice,
+                )
+            }
 
             if (isRunning) {
                 RunningStrip(
@@ -915,6 +938,10 @@ private fun Composer(
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { onSubmit() }),
                 )
                 Spacer(Modifier.width(Space.sm))
+                if (voiceEnabled) {
+                    VoiceButton(phase = voicePhase, onClick = onVoiceClick)
+                    Spacer(Modifier.width(Space.sm))
+                }
                 if (!isRunning || isPaused) {
                     FilledIconButton(
                         onClick = onSubmit,
@@ -935,6 +962,111 @@ private fun Composer(
             }
         }
     }
+}
+
+/**
+ * 麦克风按钮。
+ *
+ * 三态用颜色区分，而不是换三个按钮：
+ *   空闲     灰底麦克风
+ *   录音中   红底停止键（再点一下结束）
+ *   识别中   转圈，暂时点不动
+ */
+@Composable
+private fun VoiceButton(phase: VoicePhase, onClick: () -> Unit) {
+    val recording = phase == VoicePhase.RECORDING
+    FilledIconButton(
+        onClick = onClick,
+        enabled = phase != VoicePhase.TRANSCRIBING,
+        modifier = Modifier.size(Size.touchTarget),
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = if (recording) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = if (recording) MaterialTheme.colorScheme.onError
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+        ),
+    ) {
+        if (phase == VoicePhase.TRANSCRIBING) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Icon(
+                imageVector = if (recording) Icons.Filled.Stop else Icons.Filled.Mic,
+                contentDescription = stringResource(
+                    if (recording) R.string.input_voice_stop else R.string.input_voice_start
+                ),
+                modifier = Modifier.size(Size.iconMd),
+            )
+        }
+    }
+}
+
+/**
+ * 语音状态条：录音计时、识别中、一次性提示。
+ *
+ * 错误用红字停在输入框上方，而不是弹对话框 —— 语音识别失败大多改一下
+ * Key/网络就能重试，打断整个界面反而碍事。提示由控制器在 8 秒后自动清掉。
+ */
+@Composable
+private fun VoiceStrip(phase: VoicePhase, seconds: Int, notice: String?) {
+    val recording = phase == VoicePhase.RECORDING
+    val transcribing = phase == VoicePhase.TRANSCRIBING
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (recording) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                else AppTheme.accents.sunken
+            )
+            .padding(horizontal = Space.md, vertical = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when {
+            recording -> Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(MaterialTheme.colorScheme.error, CircleShape)
+            )
+
+            transcribing -> CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+
+            else -> Icon(
+                imageVector = Icons.Filled.Mic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(Size.iconSm),
+            )
+        }
+        Spacer(Modifier.width(Space.sm))
+        Text(
+            text = when {
+                recording -> "正在听… ${voiceTime(seconds)} · 点麦克风结束"
+                transcribing -> "正在识别…"
+                else -> notice.orEmpty()
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (!recording && !transcribing) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** 0:07、1:35 这种录音计时 */
+private fun voiceTime(total: Int): String {
+    val safe = total.coerceAtLeast(0)
+    return "${safe / 60}:" + (safe % 60).toString().padStart(2, '0')
 }
 
 /**

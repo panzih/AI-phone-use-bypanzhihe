@@ -464,6 +464,17 @@ data class AppSettings(
     val recordingEntry: Boolean = false,
 
     /**
+     * 语音输入开关（默认关）。
+     *
+     * 打开后输入框右侧出现麦克风：点一下开始录音，再点一下结束，
+     * 音频发给 DeepSeek 的 ASR 接口转成文字填进输入框。
+     *
+     * **默认关**的理由和录音权限一样：麦克风是敏感能力，不在用户主动
+     * 打开前露出入口；启用后首次点麦克风还要过一次系统运行时的录音授权。
+     */
+    val voiceInput: Boolean = false,
+
+    /**
      * 首次安装的权限引导看过了没有（ROADMAP §3）。
      *
      * README 写"按引导开无障碍"，实际应用里从来没有这个引导 —— 权限入口

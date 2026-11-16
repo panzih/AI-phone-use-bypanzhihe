@@ -44,6 +44,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
+      语音输入：录音后发到 DeepSeek 的 ASR 接口转成文字。
+
+      这是**运行时权限**，首次点麦克风时由「权限」页申请；没授权时功能
+      给一句可读的提示，不会静默失败。设置里默认关闭语音输入，
+      打开后才会露出麦克风和这一项权限。
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
       包可见性声明（Android 11 / API 30 起必需）。
 
       从 Android 11 开始，queryIntentActivities() 这类"查别人装了什么"的

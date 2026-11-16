@@ -52,8 +52,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 85      // 0.13.0：发布签名换成独立密钥，双签名线并行（official / legacy）
-        versionName = "0.13.0"
+        versionCode = 86      // 0.14.0：语音输入（DeepSeek ASR），设置里开关
+        versionName = "0.14.0"
         // 设备冒烟测试：androidTest 用 AndroidJUnitRunner 跑
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 自动更新总开关（见文件开头 enableUpdate 的说明）

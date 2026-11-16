@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.Icon
@@ -81,6 +82,7 @@ fun PermissionsScreen(
     onRequestNotification: () -> Unit,
     onRequestExactAlarm: () -> Unit,
     onShizukuClick: () -> Unit,
+    onRequestMicrophone: () -> Unit,
 ) {
     val s = state.settings
     val snackbar = remember { SnackbarHostState() }
@@ -211,6 +213,20 @@ fun PermissionsScreen(
                         grantedText = stringResource(R.string.permissions_granted),
                         onAction = onRequestExactAlarm,
                     )
+                    // 麦克风是可选能力：只在「设置 → 行为」打开语音输入后出现，
+                    // 不让不用语音的人误以为它是必开项，也不占顶部 4 项的总数。
+                    if (s.voiceInput) {
+                        GroupDivider()
+                        PermissionRow(
+                            icon = Icons.Filled.Mic,
+                            title = stringResource(R.string.permissions_mic_label),
+                            desc = stringResource(R.string.permissions_mic_desc),
+                            granted = state.micGranted,
+                            actionText = stringResource(R.string.permissions_grant),
+                            grantedText = stringResource(R.string.permissions_granted),
+                            onAction = onRequestMicrophone,
+                        )
+                    }
                 }
             }
 

@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -92,6 +93,9 @@ import com.aiphone.assistant.ui.design.AppAlertDialog
 import com.aiphone.assistant.update.ApkInstaller
 import com.aiphone.assistant.update.UpdateChecker
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
+import com.aiphone.assistant.voice.VoiceConfig
+import com.aiphone.assistant.voice.VoiceInputController
+import com.aiphone.assistant.voice.VoicePhase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -488,6 +492,55 @@ private fun AppRoot(
         )
     }
 
+    // ---- 语音输入 ----
+    //
+    // 录音线程、计时、ASR 请求都收到 VoiceInputController 里；这里只负责
+    // 三件界面相关的事：读/写按钮状态、申请麦克风权限、把结果填进输入框。
+    val voiceScope = rememberCoroutineScope()
+    var micGranted by remember {
+        mutableStateOf(
+            context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val voice = remember {
+        VoiceInputController(
+            context = context.applicationContext,
+            scope = voiceScope,
+            onText = { transcript ->
+                // 输入框里已有草稿时接着往后写，不覆盖用户已经打的字
+                input = if (input.isBlank()) transcript
+                else input.trimEnd() + " " + transcript
+            },
+            onEvent = { addLog(LogKind.ERROR, it, "语音输入") },
+        )
+    }
+    val voiceConfig = {
+        VoiceConfig(
+            baseUrl = settings.baseUrl,
+            apiKey = settings.apiKey,
+            allowPublicCleartext = settings.allowPublicCleartext,
+            useFreeModel = settings.useFreeModel,
+        )
+    }
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        micGranted = granted
+        if (!granted) {
+            addLog(
+                LogKind.ERROR,
+                "麦克风权限被拒绝，语音输入用不了。可以到系统设置里重新允许。",
+                "语音输入",
+            )
+        }
+    }
+    // 关掉开关就丢弃正在进行的录音，不让麦克风在后台继续开着
+    LaunchedEffect(settings.voiceInput) {
+        if (!settings.voiceInput) voice.cancel()
+    }
+    DisposableEffect(Unit) { onDispose { voice.cancel() } }
+
     // 因提示词版本变化作废旧上下文时，往 run.log 也记一笔
     LaunchedEffect(diskContext, savedContext) {
         if (savedContext == null && diskContext?.entries?.isNotEmpty() == true &&
@@ -814,6 +867,9 @@ private fun AppRoot(
         overlayGranted = Settings.canDrawOverlays(context)
         notifGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        // 录音权限可以被用户在系统设置里随时撤销，回前台也重查一次
+        micGranted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         refreshStats()
 
@@ -1720,6 +1776,10 @@ private fun AppRoot(
                 settings = settings,
                 authorized = authorized,
                 overlayGranted = overlayGranted,
+                micGranted = micGranted,
+                voicePhase = voice.phase,
+                voiceSeconds = voice.seconds,
+                voiceNotice = voice.notice,
                 logStats = logStats,
                 memoryStats = memoryStats,
                 autoCapStats = autoCapStats,
@@ -1738,6 +1798,29 @@ private fun AppRoot(
             onAboutClick = { screen = Screen.ABOUT },
             onInputChange = { input = it },
             onSubmit = { submit() },
+            onVoiceClick = {
+                when (voice.phase) {
+                    VoicePhase.RECORDING -> voice.stop()
+                    VoicePhase.TRANSCRIBING -> Unit
+                    VoicePhase.IDLE -> {
+                        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED
+                        ) {
+                            micGranted = true
+                            voice.start(voiceConfig())
+                        } else {
+                            // 和全应用的约定一致：权限只在「权限」页申请。
+                            // 这里把用户带过去，开完回来再点麦克风即可。
+                            addLog(
+                                LogKind.SYSTEM,
+                                "语音输入需要麦克风权限：在「权限」页开启后再点麦克风。",
+                                "语音输入",
+                            )
+                            screen = Screen.PERMISSIONS
+                        }
+                    }
+                }
+            },
             onStop = {
                 // 真急停：单向结束这一趟。Agent 在每个动作前、每次请求前都查，
                 // 正在等的那次请求由它自己的看门狗掀掉连接。
@@ -1800,6 +1883,7 @@ private fun AppRoot(
                 authorized = authorized,
                 overlayGranted = overlayGranted,
                 notifGranted = notifGranted,
+                micGranted = micGranted,
                 shizukuState = shizukuState,
                 shizukuReady = shizukuReady,
                 exactAlarmGranted = exactAlarmGranted,
@@ -1819,6 +1903,9 @@ private fun AppRoot(
                 }
             },
             onRequestExactAlarm = onRequestExactAlarm,
+            onRequestMicrophone = {
+                micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            },
             // 副屏状态行：按 Shizuku 当前状态处理（未授权才弹授权框，
             // 另外三个分支只是提示怎么装/怎么启动 —— 整段一起搬过来，
             // 只搬 requestPermission() 会丢掉那些提示）

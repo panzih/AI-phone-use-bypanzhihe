@@ -36,6 +36,12 @@
     <string name="input_pause">暂停</string>
     <string name="input_resume">继续</string>
     <string name="input_hint_paused">补充一句，发送后会并进下一轮</string>
+    <string name="input_voice_start">语音输入</string>
+    <string name="input_voice_stop">结束录音</string>
+    <string name="settings_voice_input">语音输入</string>
+    <string name="settings_voice_input_desc">在输入框旁显示麦克风：说一段话，识别成文字填进输入框，确认后再发送。录音会发到 DeepSeek 的语音识别接口（最长 120 秒，按音频时长计费），需要「模型」里填一个 DeepSeek API Key；免费通道不含语音识别。</string>
+    <string name="permissions_mic_label">麦克风</string>
+    <string name="permissions_mic_desc">语音输入用。录音只在你点麦克风时进行，结束即停止；识别时音频会发送到 DeepSeek。</string>
     <string name="running_paused_hint">已暂停 · 输入框可以继续说话，点继续恢复</string>
     <string name="running_hint">AI 正在执行 ...</string>
     <string name="settings_title">设置</string>

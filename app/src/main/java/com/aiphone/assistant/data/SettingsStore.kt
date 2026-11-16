@@ -29,6 +29,7 @@ class SettingsStore(
         useFreeModel = sp.getBoolean(KEY_FREE_MODEL, DEFAULT.useFreeModel),
         freeLane = FreeLane.fromId(sp.getString(KEY_FREE_LANE, null)),
         recordingEntry = sp.getBoolean(KEY_RECORDING_ENTRY, DEFAULT.recordingEntry),
+        voiceInput = sp.getBoolean(KEY_VOICE_INPUT, DEFAULT.voiceInput),
         onboardingDone = sp.getBoolean(KEY_ONBOARDING_DONE, DEFAULT.onboardingDone),
         freeLaneNoticeAccepted = sp.getBoolean(KEY_FREE_NOTICE, DEFAULT.freeLaneNoticeAccepted),
         allowPublicCleartext = sp.getBoolean(KEY_ALLOW_PUBLIC_CLEARTEXT, DEFAULT.allowPublicCleartext),
@@ -84,6 +85,7 @@ class SettingsStore(
             .putBoolean(KEY_ALLOW_HIGH_RISK, s.allowHighRiskActions)
             .putBoolean(KEY_ALLOW_BROWSER_EVAL, s.allowBrowserEval)
             .putBoolean(KEY_RECORDING_ENTRY, s.recordingEntry)
+            .putBoolean(KEY_VOICE_INPUT, s.voiceInput)
             .putBoolean(KEY_ONBOARDING_DONE, s.onboardingDone)
             .putString(KEY_MODE, s.mode.id)
             .putInt(KEY_MAX_STEPS, s.maxSteps)
@@ -153,6 +155,9 @@ class SettingsStore(
 
         /** 「操作记录」入口开关（默认关，见 AppSettings.recordingEntry） */
         const val KEY_RECORDING_ENTRY = "recording_entry"
+
+        /** 语音输入开关（默认关，见 AppSettings.voiceInput） */
+        const val KEY_VOICE_INPUT = "voice_input"
 
         /** 首次安装的权限引导是否看过（见 AppSettings.onboardingDone） */
         const val KEY_ONBOARDING_DONE = "onboarding_done"
