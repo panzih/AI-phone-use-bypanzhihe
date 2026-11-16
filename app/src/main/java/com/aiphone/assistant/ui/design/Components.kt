@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -117,7 +116,7 @@ fun AppScaffold(
                     if (onBack != null) {
                         Surface(
                             onClick = onBack,
-                            shape = CircleShape,
+                            shape = RoundedCornerShape(Radius.sm),
                             color = MaterialTheme.colorScheme.surface,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.size(40.dp),
@@ -236,7 +235,7 @@ fun GroupCard(
             .clip(shape)
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-            .padding(vertical = Space.xs),
+            .padding(vertical = 6.dp),
         content = content,
     )
 }
@@ -263,7 +262,7 @@ fun GroupDivider(modifier: Modifier = Modifier, indent: Int = 20) {
 @Composable
 fun Modifier.interactiveSurface(
     enabled: Boolean = true,
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(Radius.md),
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(Radius.sm),
     onClick: (() -> Unit)? = null,
 ): Modifier {
     val interaction = remember { MutableInteractionSource() }
@@ -329,7 +328,7 @@ fun SettingRow(
             .heightIn(min = Size.rowMinHeight)
             .interactiveSurface(
                 enabled = enabled && onClick != null,
-                shape = RoundedCornerShape(Radius.md),
+                shape = RoundedCornerShape(Radius.sm),
                 onClick = onClick,
             )
             .padding(horizontal = Space.lg, vertical = Space.md),
@@ -421,7 +420,7 @@ fun ActionRow(
             .heightIn(min = Size.rowMinHeight)
             .interactiveSurface(
                 enabled = enabled,
-                shape = RoundedCornerShape(Radius.md),
+                shape = RoundedCornerShape(Radius.sm),
                 onClick = onClick,
             )
             .padding(horizontal = Space.lg, vertical = Space.md),
@@ -623,8 +622,8 @@ fun AppButton(
     loading: Boolean = false,
     icon: ImageVector? = null,
 ) {
-    val shape = RoundedCornerShape(Radius.md)
-    val contentPadding = PaddingValues(horizontal = Space.xl, vertical = Space.md)
+    val shape = RoundedCornerShape(Radius.pill)
+    val contentPadding = PaddingValues(horizontal = Space.xxl, vertical = Space.md)
     val effectiveEnabled = enabled && !loading
 
     val body: @Composable RowScope.() -> Unit = {
@@ -649,6 +648,11 @@ fun AppButton(
             shape = shape,
             contentPadding = contentPadding,
             modifier = modifier.heightIn(min = Size.buttonHeight),
+            elevation = ButtonDefaults.buttonElevation(
+                defaultElevation = 1.dp,
+                pressedElevation = 0.dp,
+                disabledElevation = 0.dp,
+            ),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -675,7 +679,7 @@ fun AppButton(
         ButtonVariant.Ghost -> TextButton(
             onClick = onClick,
             enabled = effectiveEnabled,
-            shape = shape,
+            shape = RoundedCornerShape(Radius.sm),
             contentPadding = PaddingValues(horizontal = Space.md, vertical = Space.sm),
             modifier = modifier.heightIn(min = Size.touchTarget),
             colors = ButtonDefaults.textButtonColors(
@@ -691,7 +695,7 @@ fun AppButton(
             shape = shape,
             contentPadding = contentPadding,
             modifier = modifier.heightIn(min = Size.buttonHeight),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = MaterialTheme.colorScheme.error,
                 disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
@@ -803,7 +807,7 @@ fun EmptyState(
     }
 }
 
-/** 圆形图标底：给行、空状态、权限页一个统一的"图标位" */
+/** 图标底：给行、空状态、权限页一个统一的"图标位"（圆角随尺寸等比，像一枚软胶标） */
 @Composable
 fun IconBadge(
     icon: ImageVector,
@@ -811,12 +815,13 @@ fun IconBadge(
     tone: Tone = Tone.Neutral,
     size: androidx.compose.ui.unit.Dp = Size.badge,
 ) {
+    val shape = RoundedCornerShape(size * 0.32f)
     Box(
         modifier = modifier
             .size(size)
-            .clip(CircleShape)
+            .clip(shape)
             .background(tone.container())
-            .border(1.dp, tone.color().copy(alpha = 0.12f), CircleShape),
+            .border(1.dp, tone.color().copy(alpha = 0.12f), shape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

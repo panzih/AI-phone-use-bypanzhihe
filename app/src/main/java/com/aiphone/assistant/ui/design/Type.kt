@@ -36,22 +36,22 @@ val AppTypography = Typography(
     displaySmall = cjk(26f, 36f, FontWeight.Medium),
 
     // ---- 页面标题 ----
-    headlineLarge = cjk(28f, 38f, FontWeight.Medium),
-    headlineMedium = cjk(24f, 34f, FontWeight.Medium),
-    headlineSmall = cjk(20f, 30f, FontWeight.Medium),
+    headlineLarge = cjk(27f, 37f, FontWeight.Medium),
+    headlineMedium = cjk(25f, 35f, FontWeight.Medium),
+    headlineSmall = cjk(20f, 29f, FontWeight.Medium),
 
     // ---- 区块 / 行标题 ----
-    titleLarge = cjk(19f, 28f, FontWeight.Medium),
-    titleMedium = cjk(17f, 26f, FontWeight.Medium),
-    titleSmall = cjk(15f, 23f, FontWeight.Medium),
+    titleLarge = cjk(20f, 28f, FontWeight.Medium),
+    titleMedium = cjk(17f, 25f, FontWeight.Medium),
+    titleSmall = cjk(15f, 22f, FontWeight.Medium),
 
     // ---- 正文 ----
-    bodyLarge = cjk(16f, 25f),
-    bodyMedium = cjk(14.5f, 22f),
+    bodyLarge = cjk(16f, 26f),
+    bodyMedium = cjk(15f, 23f),
     bodySmall = cjk(13f, 20f),
 
     // ---- 标签 / 按钮 / 角标 ----
-    labelLarge = cjk(15f, 21f, FontWeight.Medium),
+    labelLarge = cjk(15f, 20f, FontWeight.Medium),
     labelMedium = cjk(13f, 18f, FontWeight.Medium),
-    labelSmall = cjk(11.5f, 17f, FontWeight.Medium),
+    labelSmall = cjk(12f, 17f, FontWeight.Medium),
 )

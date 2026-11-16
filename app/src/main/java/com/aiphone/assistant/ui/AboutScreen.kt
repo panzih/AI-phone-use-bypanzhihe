@@ -257,7 +257,7 @@ private fun BrandCard(appVersion: String, modifier: Modifier = Modifier) {
         Box(
             modifier = Modifier
                 .size(72.dp)
-                .background(MaterialTheme.colorScheme.surface, CircleShape),
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(Radius.lg)),
             contentAlignment = Alignment.Center,
         ) {
             Image(

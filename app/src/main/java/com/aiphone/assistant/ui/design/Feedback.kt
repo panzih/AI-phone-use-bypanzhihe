@@ -94,7 +94,7 @@ fun Banner(
     ) {
         Box(
             modifier = Modifier
-                .width(3.dp)
+                .width(4.dp)
                 .fillMaxHeight()
                 .background(tone.color(), shape),
         )
@@ -144,7 +144,7 @@ fun StatusPill(
     Row(
         modifier = modifier
             .background(tone.container(), RoundedCornerShape(Radius.pill))
-            .padding(horizontal = Space.sm, vertical = 3.dp),
+            .padding(horizontal = Space.sm, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (dot) {
@@ -297,7 +297,7 @@ fun SliderSetting(
                         MaterialTheme.colorScheme.primaryContainer,
                         RoundedCornerShape(Radius.pill),
                     )
-                    .padding(horizontal = Space.md, vertical = 3.dp),
+                    .padding(horizontal = Space.md, vertical = 4.dp),
             )
         }
 

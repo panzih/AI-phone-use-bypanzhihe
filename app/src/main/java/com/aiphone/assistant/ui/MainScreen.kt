@@ -257,9 +257,9 @@ private fun MainTopBar(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .background(MaterialTheme.colorScheme.surface, CircleShape)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                    .interactiveSurface(shape = CircleShape, onClick = onMenu),
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(Radius.sm))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Radius.sm))
+                    .interactiveSurface(shape = RoundedCornerShape(Radius.sm), onClick = onMenu),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -488,7 +488,7 @@ private fun AppDrawer(
                 Box(
                     modifier = Modifier
                         .size(44.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(Radius.md)),
+                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(Radius.sm)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Image(
@@ -569,7 +569,7 @@ private fun DrawerItem(icon: ImageVector, title: String, onClick: () -> Unit, en
             .fillMaxWidth()
             .interactiveSurface(
                 enabled = enabled,
-                shape = RoundedCornerShape(Radius.md),
+                shape = RoundedCornerShape(Radius.sm),
                 onClick = onClick,
             )
             .height(Size.touchTarget + 4.dp)
@@ -1138,10 +1138,10 @@ private fun RunAction(
     val bg = if (danger) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface
     Row(
         modifier = Modifier
-            .height(32.dp)
+            .height(34.dp)
             .background(bg, RoundedCornerShape(Radius.pill))
             .interactiveSurface(shape = RoundedCornerShape(Radius.pill), onClick = onClick)
-            .padding(horizontal = Space.sm),
+            .padding(horizontal = Space.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
