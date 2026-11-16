@@ -1,7 +1,7 @@
 # v2 · 90 秒解说版（源码与素材）
 
-成片在上一级：`docs/promo/纸盒-宣传片-90秒解说版.mp4`
-制作说明：`docs/promo/宣传片-90秒版-制作方案.md`
+成片：`promo/legacy/90s/纸盒-宣传片-90秒解说版.mp4`
+制作说明：`promo/legacy/90s/宣传片-90秒版-制作方案.md`
 
 ## 文件
 
@@ -19,12 +19,12 @@
 ## 一条命令重做
 
 ```bash
-cd docs/promo/v2
+cd promo/legacy/90s
 python3 make_timeline.py
 swiftc -O -o /tmp/promo2 render2.swift && /tmp/promo2
 swiftc -O -o /tmp/promomix mix.swift && /tmp/promomix
 swiftc -O -o /tmp/promux mux2.swift && \
-  /tmp/promux paperbox-promo-v2.mp4 /tmp/promo2.wav ../纸盒-宣传片-90秒解说版.mp4
+  /tmp/promux paperbox-promo-v2.mp4 /tmp/promo2.wav 纸盒-宣传片-90秒解说版.mp4
 ```
 
 ## raw/ 里的东西是哪来的

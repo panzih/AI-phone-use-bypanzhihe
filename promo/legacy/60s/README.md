@@ -48,7 +48,7 @@
 需要 macOS + Xcode 命令行工具（CoreGraphics / CoreText / AVFoundation / Vision，无第三方依赖）。
 
 ```bash
-cd docs/promo
+cd promo/legacy/60s
 swiftc -O -o /tmp/promorender render.swift && /tmp/promorender       # 画面 → paperbox-promo-video.mp4（无声）
 swiftc -O -o /tmp/audiogen  audio.swift   && /tmp/audiogen          # 配乐 → /tmp/promo.wav
 swiftc -O -o /tmp/mux mux.swift && /tmp/mux paperbox-promo-video.mp4 /tmp/promo.wav 纸盒-宣传片.mp4

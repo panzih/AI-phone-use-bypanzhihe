@@ -11,7 +11,7 @@
 import Foundation
 import AVFoundation
 
-let BASE = "/Users/panzhihe/DSH/AI手机/docs/promo/v2"
+let BASE = "/Users/panzhihe/DSH/AI手机/promo/legacy/90s"
 let SR = 44100.0
 
 // ---------- 时间线 ----------

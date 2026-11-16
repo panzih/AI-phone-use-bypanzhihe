@@ -101,25 +101,43 @@ local.properties
 *.zip
 *.tar.gz
 
-# ---------- 发布包：只留本机，不上传 ----------
-# release/ 里是打好的安装包、更新说明和校验记录，属于本地发布物料。
-# 仓库只放源码；需要发布包时在本地构建，或由维护者另行分发。
-release/
+# ---------- 发布物料：只留本机，不上传 ----------
+# 仓库只放源码与脚本：APK 由 CI / 本机构建，二进制产物不提交。
+# 历史版本由 GitHub Releases / update-site 分发，本机不再保留 release/ 目录。
+# 每个版本的更新说明放在 docs/release-notes/，随源码入库。
 
 # 宣传素材（音频 / 封面 / 成片）只留本机，不入库；脚本与说明照常入库
 promo/*.wav
 promo/*.png
 promo/*.mp4
+# Python 虚拟环境（宣传片渲染用）
+promo/.venv/
 
-# 宣传片：成片两个 mp4 各 55MB（GitHub 单文件上限 100MB，但两个一起 111MB 没必要）；
-# raw/ 是录制原素材。脚本（render/audio/mux.swift）、README、封面图可入库。
-# 物料都在本机 docs/promo/，要发布时从本机取。
-docs/promo/*.mp4
-docs/promo/raw/
-# v2（90 秒解说版）同理：素材、中间产物、每段解说音频都不入库，源码与说明入库
-docs/promo/v2/raw/
-docs/promo/v2/audio/
-docs/promo/v2/*.mp4
+# 旧版宣传片（promo/legacy/）：成片、录制原素材、解说音轨不入库；
+# 脚本、README、封面图入库。
+# 早期 15 秒 Python 版
+promo/legacy/15s-python/*.mp4
+promo/legacy/15s-python/*.wav
+promo/legacy/15s-python/*.png
+promo/legacy/15s-python/frames/
+# 60 秒版
+promo/legacy/60s/*.mp4
+promo/legacy/60s/raw/
+# 90 秒解说版
+promo/legacy/90s/*.mp4
+promo/legacy/90s/raw/
+promo/legacy/90s/audio/
+# onetake 一镜到底版
+promo/legacy/onetake/*.mp4
+promo/legacy/onetake/sfx.wav
+promo/legacy/onetake/motion.js
+promo/legacy/onetake/probe/
+promo/legacy/onetake/vo/
+promo/legacy/onetake/_frames/
+
+# 新版成片（v3 / 体积对比片）
+promo/v3/*.mp4
+promo/compare/*.mp4
 
 # 本机备份的完整开发历史（见 else/README.md）
 *.bundle
@@ -140,10 +158,3 @@ update-site/node_modules/
 
 # WorkBuddy 的应用标记（里面是本机绝对路径，入库没意义）
 .wbapp_*.genie
-# onetake 版宣传片：成片与素材不入库（源码 comp.html / sound.py / README 入库）
-docs/promo/onetake/*.mp4
-docs/promo/onetake/sfx.wav
-docs/promo/onetake/motion.js
-docs/promo/onetake/probe/
-docs/promo/onetake/vo/
-docs/promo/onetake/_frames/

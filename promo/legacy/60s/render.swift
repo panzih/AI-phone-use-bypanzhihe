@@ -11,8 +11,8 @@ let W: CGFloat = 1080
 let H: CGFloat = 1920
 let FPS: Double = 30
 let DURATION: Double = 60.0
-let RAW = "/Users/panzhihe/DSH/AI手机/docs/promo/raw"
-let OUT_DIR = "/Users/panzhihe/DSH/AI手机/docs/promo"
+let RAW = "/Users/panzhihe/DSH/AI手机/promo/legacy/60s/raw"
+let OUT_DIR = "/Users/panzhihe/DSH/AI手机/promo/legacy/60s"
 
 // ---------- 颜色 ----------
 func col(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {

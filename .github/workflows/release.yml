@@ -12,8 +12,8 @@
 # 不能覆盖安装：需要先卸载旧版，再装正式签名包（本地数据会清空）。
 #
 # 更新说明从哪儿来（按优先级）：
-#   1. release-notes/<tag>.md      例如 release-notes/v0.12.5.md
-#   2. release-notes/<版本>.md     例如 release-notes/0.12.5.md
+#   1. docs/release-notes/<tag>.md      例如 docs/release-notes/v0.12.5.md
+#   2. docs/release-notes/<版本>.md     例如 docs/release-notes/0.12.5.md
 #   3. CHANGELOG.md 里 "## 0.12.5" 这一节（自动截取到下一个 ## 之前）
 #   4. 标签自己的注释（git tag -a 的 -m 内容）
 #   5. 都没有就让 GitHub 按提交自动生成
@@ -142,7 +142,7 @@ jobs:
           VER="${TAG#v}"
           NOTES=""
 
-          for f in "release-notes/${TAG}.md" "release-notes/${VER}.md"; do
+          for f in "docs/release-notes/${TAG}.md" "docs/release-notes/${VER}.md"; do
             if [ -f "$f" ]; then NOTES="$f"; break; fi
           done
 

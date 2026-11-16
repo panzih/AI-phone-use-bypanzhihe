@@ -61,8 +61,8 @@
 
 ```bash
 git clone https://github.com/feitangyuan/onetake.git /tmp/onetake
-cp /tmp/onetake/lib/motion.js docs/promo/onetake/
-cd docs/promo/onetake
+cp /tmp/onetake/lib/motion.js promo/legacy/onetake/
+cd promo/legacy/onetake
 python3 sound.py                                                        # → sfx.wav
 python3 /tmp/onetake/scripts/render.py comp.html --out film.mp4 --sfx sfx.wav --workers 5
 python3 /tmp/onetake/scripts/verify_promo.py film.mp4 --comp comp.html \

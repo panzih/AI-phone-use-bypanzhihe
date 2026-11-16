@@ -19,7 +19,7 @@ import VideoToolbox
 let W: CGFloat = 1080
 let H: CGFloat = 1920
 let FPS: Double = 30
-let BASE = "/Users/panzhihe/DSH/AI手机/docs/promo/v2"
+let BASE = "/Users/panzhihe/DSH/AI手机/promo/legacy/90s"
 let RAW = BASE + "/raw"
 let OUT = BASE + "/paperbox-promo-v2.mp4"
 
