@@ -1,0 +1,6 @@
+# 成片与中间产物不入库
+fonts/
+audio/
+out/
+qa/
+assets/

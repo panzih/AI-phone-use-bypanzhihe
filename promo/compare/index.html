@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>纸盒 · 体积对比</title>
+<style>
+  @font-face { font-family: "Display"; src: url(fonts/SmileySans.ttf) format("truetype"); }
+  @font-face { font-family: "Text";    src: url(fonts/WenKai.ttf)     format("truetype"); }
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module" src="./preview.js"></script>
+<script type="module">
+import { DUR, CUES, SHOTS, b } from './timeline.js';
+import { seg, lerp, ease, pulse, stageSize, setupCanvas, loadFonts } from './motion.js';
+
+const { W, H } = stageSize();
+const ctx = setupCanvas(document.getElementById('c'), W, H);
+const U = H / 1080;
+
+// ---------------------------------------------------------------- 数据
+// 全部有出处，改数字只改这里
+const DATA = {
+  apk:    { ours: 3.6,   theirs: 220.7, ratio: '61 倍',  unit: 'MB' },
+  space:  { ours: 3.6,   theirs: 1024,  ratio: '280 倍', unit: 'MB' },  // theirs = 约 1 GB
+  prompt: { chars: '5,589', lines: '178', },
+};
+
+const C = {
+  paper: '#F2EFE8',
+  ink: '#171A18',
+  dim: 'rgba(23,26,24,.52)',
+  faint: 'rgba(23,26,24,.12)',
+  green: '#3E6B4A',
+  gray: '#A9A49A',
+  grayInk: '#6F6A60',
+};
+const F_DISP = s => `400 ${s}px "Display", "PingFang SC", sans-serif`;
+const F_TEXT = s => `400 ${s}px "Text", "PingFang SC", serif`;
+
+const shot = id => SHOTS.find(s => s.id === id);
+const hit = sfx => CUES.filter(c => c.sfx === sfx).map(c => c.t);
+
+function txt(s, x, y, font, color, align = 'left', sp = 0) {
+  ctx.save();
+  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  if (sp) ctx.letterSpacing = sp + 'px';
+  const w = ctx.measureText(s).width;
+  let dx = x;
+  if (align === 'center') dx = x - w / 2;
+  if (align === 'right') dx = x - w;
+  ctx.fillText(s, dx, y);
+  ctx.restore();
+  return w;
+}
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// 纸盒的立方体（同 ic_box_logo.xml 的斜二测几何）
+function logo(cx, cy, size, color, lw, prog = 1) {
+  const s = size / 108;
+  const P = (x, y) => [cx + (x - 54) * s, cy + (y - 54) * s];
+  const out = [[20, 88], [20, 46], [46, 20], [88, 20], [88, 62], [62, 88], [20, 88]].map(p => P(...p));
+  const inner = [[[20, 46], [62, 46]], [[62, 46], [62, 88]], [[62, 46], [88, 20]]].map(e => e.map(p => P(...p)));
+  ctx.save();
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = color; ctx.lineWidth = lw;
+  const per = []; let total = 0;
+  for (let i = 0; i < out.length - 1; i++) {
+    const d = Math.hypot(out[i + 1][0] - out[i][0], out[i + 1][1] - out[i][1]);
+    per.push(d); total += d;
+  }
+  let left = total * Math.min(1, Math.max(0, prog));
+  ctx.beginPath(); ctx.moveTo(...out[0]);
+  for (let i = 0; i < per.length && left > 0; i++) {
+    const k = Math.min(1, left / per[i]);
+    ctx.lineTo(lerp(out[i][0], out[i + 1][0], k), lerp(out[i][1], out[i + 1][1], k));
+    left -= per[i];
+  }
+  ctx.stroke();
+  if (prog > 0.98) {
+    ctx.beginPath();
+    for (const e of inner) { ctx.moveTo(...e[0]); ctx.lineTo(...e[1]); }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+const GRAIN = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 160;
+  const g = c.getContext('2d');
+  const d = g.createImageData(160, 160);
+  let s = 20261116;
+  for (let i = 0; i < d.data.length; i += 4) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    const v = (s >> 16) & 255;
+    d.data[i] = d.data[i + 1] = d.data[i + 2] = v;
+    d.data[i + 3] = 15;
+  }
+  g.putImageData(d, 0, 0);
+  return c;
+})();
+
+// 一次对比的两个数字 + 两条比例尺
+// 关键：两条尺子用同一个刻度。纸盒那条只剩一道竖线，正是要给人看的
+function compare({ t, t0, label, ours, theirs, unit, ratio, note, oName, tName }) {
+  const p = ease.outCubic(seg(t, t0 + 0.10, t0 + 0.75));
+  const pBar = ease.outCubic(seg(t, t0 + 0.40, t0 + 1.25));
+  const pNote = ease.outCubic(seg(t, t0 + 1.05, t0 + 1.55));
+
+  // 标签
+  txt(label, 120, 200, F_TEXT(42), C.dim, 'left', 2);
+  ctx.fillStyle = C.faint;
+  ctx.fillRect(120, 226, 1680, 1.5);
+
+  // 左：纸盒
+  txt(oName, 120, 330, F_TEXT(38), C.green, 'left', 1);
+  ctx.save();
+  ctx.globalAlpha = p;
+  const oTxt = txt(ours, 116, 560, F_DISP(210), C.green);
+  txt(unit, 116 + oTxt + 24, 560, F_DISP(86), C.green);
+  ctx.restore();
+
+  // 右：对手
+  txt(tName, W - 120, 330, F_TEXT(38), C.grayInk, 'right', 1);
+  ctx.save();
+  ctx.globalAlpha = p;
+  ctx.font = F_DISP(210);
+  const tW = ctx.measureText(theirs).width;
+  const uW = 86 * 0.6;
+  const blockW = tW + 24 + uW;
+  txt(theirs, W - 120 - blockW, 560, F_DISP(210), C.grayInk);
+  txt(unit, W - 120 - uW + 6, 560, F_DISP(86), C.grayInk);
+  ctx.restore();
+
+  // 条：同一刻度，max = theirs
+  const barY = 660, barH = 26, x0 = 120, maxW = W - 240;
+  const oW = Math.max(12, maxW * (ours / theirs));
+  ctx.save();
+  ctx.globalAlpha = 0.95;
+  // 底槽
+  ctx.fillStyle = 'rgba(23,26,24,.05)';
+  rr(x0, barY, maxW, barH, 13); ctx.fill();
+  // 对手先画，垫在下面
+  ctx.fillStyle = C.gray;
+  rr(x0, barY, Math.max(4, maxW * Math.min(1, pBar)), barH, 13); ctx.fill();
+  // 纸盒后画：一道比槽更高的绿柱，压在上面才看得见它真的存在
+  ctx.fillStyle = C.green;
+  const ow = Math.max(14, oW * Math.min(1, pBar));
+  rr(x0, barY - 10, ow, barH + 20, 5); ctx.fill();
+  ctx.restore();
+
+  // 倍数
+  ctx.save();
+  ctx.globalAlpha = pNote;
+  txt('差 ' + ratio, W - 120, 820, F_DISP(72), C.ink, 'right');
+  if (note) txt(note, 120, 820, F_TEXT(32), C.dim, 'left', 1);
+  ctx.restore();
+}
+
+window.DUR = DUR;
+
+(async () => {
+  await loadFonts([F_DISP(210), F_TEXT(42)]);
+  const S = { hook: shot('hook'), apk: shot('apk'), space: shot('space'), prompt: shot('prompt'), end: shot('end') };
+  const flashT = [...hit('snap'), ...hit('impact')].sort((a, z) => a - z);
+
+  window.render = t => {
+    ctx.save();
+
+    ctx.fillStyle = C.paper;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(23,26,24,.028)';
+    ctx.lineWidth = 1;
+    for (let y = 0; y < H; y += 54 * U) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+    // 每个镜头都在极缓地推，避免"数字摆上去就不动了"的死画面
+    const shotNow = SHOTS.find(s => t >= s.t0 && t < s.t1) || SHOTS[SHOTS.length - 1];
+    const cam = 1 + 0.022 * ease.inOutCubic(seg(t, shotNow.t0, shotNow.t1));
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(cam, cam);
+    ctx.translate(-W / 2, -H / 2);
+
+    // ------------------------------------------------ 01 问题
+    if (t < S.apk.t0) {
+      const a1 = ease.outCubic(seg(t, 0.15, 0.75));
+      const a2 = ease.outCubic(seg(t, 0.75, 1.35));
+      const a3 = ease.outCubic(seg(t, 1.35, 1.95));
+
+      logo(W / 2, 250, 120, C.ink, 5.5, ease.outCubic(seg(t, 0.05, 0.9)));
+
+      ctx.save(); ctx.globalAlpha = a1;
+      txt('同样能替你操作手机', W / 2, 470, F_TEXT(56), C.dim, 'center', 3);
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = a2;
+      // 一整句居中，后半句换绿
+      const f = F_DISP(148);
+      ctx.font = f;
+      const w1 = ctx.measureText('装进去').width;
+      const w2 = ctx.measureText('要多大？').width;
+      const x0 = W / 2 - (w1 + w2) / 2;
+      txt('装进去', x0, 640, f, C.ink);
+      ctx.globalAlpha = a3;
+      txt('要多大？', x0 + w1 + 6, 640, f, C.green);
+      ctx.restore();
+
+      ctx.save(); ctx.globalAlpha = ease.outCubic(seg(t, 2.0, 2.5));
+      txt('纸盒 0.13  vs  DSH Go 1.1', W / 2, 760, F_TEXT(36), C.dim, 'center', 2);
+      ctx.restore();
+    }
+
+    // ------------------------------------------------ 02 安装包
+    if (t >= S.apk.t0 && t < S.space.t0) {
+      compare({
+        t, t0: S.apk.t0,
+        label: '01 · 安装包',
+        ours: '3.6', theirs: '220.7', unit: 'MB', ratio: DATA.apk.ratio,
+        oName: '纸盒', tName: 'DSH Go',
+        note: '同一张 Release 页上的 arm64 包',
+      });
+    }
+
+    // ------------------------------------------------ 03 占用空间
+    if (t >= S.space.t0 && t < S.prompt.t0) {
+      compare({
+        t, t0: S.space.t0,
+        label: '02 · 装好之后',
+        ours: '3.6', theirs: '1024', unit: 'MB', ratio: DATA.space.ratio,
+        oName: '纸盒', tName: 'DSH Go（本机模式）',
+        note: '它要在手机里装一整套 Linux 运行时，官方 README 写「预留约 1 GB」',
+      });
+    }
+
+    // ------------------------------------------------ 04 提示词
+    if (t >= S.prompt.t0 && t < S.end.t0) {
+      const t0 = S.prompt.t0;
+      const p = ease.outCubic(seg(t, t0 + 0.10, t0 + 0.75));
+
+      txt('03 · 系统提示词', 120, 200, F_TEXT(42), C.dim, 'left', 2);
+      ctx.fillStyle = C.faint;
+      ctx.fillRect(120, 226, 1680, 1.5);
+
+      txt('纸盒', 120, 330, F_TEXT(38), C.green, 'left', 1);
+      ctx.save();
+      ctx.globalAlpha = p;
+      const w = txt(DATA.prompt.chars, 116, 560, F_DISP(210), C.green);
+      txt('字', 116 + w + 24, 560, F_DISP(86), C.green);
+      txt('／ ' + DATA.prompt.lines + ' 行', 116 + w + 150, 560, F_DISP(72), C.green);
+      ctx.restore();
+
+      // 右边：一叠纸，示意"整套引擎的提示与工具定义"
+      const bx = 1180, by = 300;
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, t0 + 0.45, t0 + 1.3));
+      for (let i = 7; i >= 0; i--) {
+        const px = bx + i * 16, py = by - i * 12;
+        ctx.fillStyle = i === 0 ? '#FFFFFF' : 'rgba(255,255,255,' + (0.95 - i * 0.06) + ')';
+        rr(px, py, 430, 290, 6);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(23,26,24,.16)';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        // 每页上几道横线，让人看出这是"文字"
+        if (i < 3) {
+          ctx.strokeStyle = 'rgba(23,26,24,.10)';
+          ctx.lineWidth = 1;
+          for (let k = 1; k <= 6; k++) {
+            ctx.beginPath();
+            ctx.moveTo(px + 34, py + 40 + k * 36);
+            ctx.lineTo(px + 396 - (k % 3) * 46, py + 40 + k * 36);
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, t0 + 1.0, t0 + 1.6));
+      txt('DSH Go', W - 120, 210, F_TEXT(38), C.grayInk, 'right', 1);
+      txt('整套 DSH 引擎的提示与工具定义', W - 120, 760, F_TEXT(34), C.grayInk, 'right', 1);
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, t0 + 1.35, t0 + 1.9));
+      txt('它要把「会写代码」也教会模型；纸盒只教一件事：这一屏该点哪。', 120, 820, F_TEXT(32), C.dim, 'left', 1);
+      ctx.restore();
+    }
+
+    // ------------------------------------------------ 05 落版
+    if (t >= S.end.t0) {
+      const a0 = ease.outCubic(seg(t, S.end.t0, S.end.t0 + 0.34));
+      const lp = ease.outCubic(seg(t, S.end.t0 + 0.02, S.end.t0 + 0.6));
+
+      const L = 230 * U, wordSize = 158 * U;
+      ctx.save();
+      ctx.font = F_DISP(wordSize);
+      const ww = ctx.measureText('纸盒').width + 12 * U;
+      ctx.restore();
+      const gap = 50 * U;
+      const total = L + gap + ww;
+      const left = W / 2 - total / 2;
+      const midY = 470 * U;
+
+      ctx.save();
+      ctx.globalAlpha = a0;
+      logo(left + L / 2, midY, L, C.ink, 5.4 * U, lp);
+      txt('纸盒', left + L + gap, midY + wordSize * 0.36, F_DISP(wordSize), C.ink, 'left', 6);
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, S.end.t0 + 0.30, S.end.t0 + 0.64));
+      txt('轻，才装得进日常', W / 2, 630 * U, F_TEXT(46 * U), C.dim, 'center', 3);
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, S.end.t0 + 0.46, S.end.t0 + 0.80));
+      const u = 'github.com/panzih/AI-phone-use-bypanzhihe';
+      ctx.font = F_TEXT(34 * U);
+      const uw = ctx.measureText(u).width;
+      const bw = uw + 84 * U;
+      ctx.fillStyle = 'rgba(62,107,74,.13)';
+      rr(W / 2 - bw / 2, 700 * U, bw, 70 * U, 35 * U);
+      ctx.fill();
+      txt(u, W / 2, 747 * U, F_TEXT(34 * U), C.green, 'center');
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = ease.outCubic(seg(t, S.end.t0 + 0.62, S.end.t0 + 0.94));
+      txt('数字取自各自的 Release 页面与本机实测 · 2026-11', W / 2, 840 * U, F_TEXT(26 * U), 'rgba(23,26,24,.34)', 'center', 1);
+      ctx.restore();
+    }
+
+    ctx.restore();   // 结束缓推
+
+    // ------------------------------------------------ 切点闪白
+    let fl = 0;
+    for (const h of flashT) fl = Math.max(fl, pulse(t, h, 0.07, 0.006) * 0.12);
+    if (fl > 0.004) {
+      ctx.save(); ctx.globalAlpha = fl; ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, W, H); ctx.restore();
+    }
+
+    // ------------------------------------------------ 进度条
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.fillStyle = 'rgba(23,26,24,.10)';
+    ctx.fillRect(0, H - 5 * U, W, 5 * U);
+    ctx.fillStyle = C.green;
+    ctx.fillRect(0, H - 5 * U, W * Math.min(1, t / DUR), 5 * U);
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = ctx.createPattern(GRAIN, 'repeat');
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+
+    ctx.restore();
+  };
+
+  window.READY = true;
+})().catch(e => { console.error('启动失败：', e); });
+</script>
+</body>
+</html>
