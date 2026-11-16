@@ -26,7 +26,7 @@
 
 ## 约定
 
-- **发布说明**按 `release-notes/v<版本>.md` 命名，例如 `v0.14.1.md`；
+- **发布说明**按 `docs/release-notes/v<版本>.md` 命名，例如 `v0.15.0.md`；
   发版时推一个 `v<版本>` 标签，workflow 会自动取用。
 - 状态类内容只写一处：版本号、待办状态以 `ROADMAP.md` / `CHANGELOG.md` 为准。
 - 历史评估与计划只读，不要当作现状。
