@@ -1,5 +1,25 @@
 # 更新日志
 
+## 0.14.1
+
+> **发布流程调整：只发正式签名包。** 功能与 0.14.0 一致，改的是出包方式。
+
+### 发布
+
+- GitHub Actions 的 Release 工作流只执行 `assembleRelease`，只上传一个
+  正式签名 APK；不再构建、也不再发布 `legacy`（开发者 Debug 签名）包。
+- 删除了 Gradle 里的 `legacy` buildType。本机没配 `keystore.properties` 时，
+  `assembleRelease` 产出 unsigned 包，不再退回仓库里那把公开的开发者密钥。
+- `apksigner` 指纹校验保留：正式包如果和 `keystore/debug.keystore` 同指纹，
+  workflow 直接失败，不会把包发出去。
+- 旧 legacy 用户签名不同，无法覆盖安装：需要先卸载旧版，再装正式签名包；
+  卸载会清空本地设置、对话和记忆。0.13.0 及更早版本同理。
+
+### 验证
+
+- `./gradlew :app:testDebugUnitTest`、`:app:lintDebug`、`:app:assembleDebug`：通过。
+- Release workflow 只构建 `:app:assembleRelease`，并校验证书指纹。
+
 ## 0.14.0
 
 > **可以说话了。** 设置里打开「语音输入」，输入框右边多一个麦克风：

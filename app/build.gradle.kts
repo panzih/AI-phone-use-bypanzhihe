@@ -52,8 +52,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 86      // 0.14.0：语音输入（DeepSeek ASR），设置里开关
-        versionName = "0.14.0"
+        versionCode = 87      // 0.14.1：发布只保留正式签名包，取消 legacy / Debug 签名线
+        versionName = "0.14.1"
         // 设备冒烟测试：androidTest 用 AndroidJUnitRunner 跑
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 自动更新总开关（见文件开头 enableUpdate 的说明）
@@ -73,9 +73,8 @@ android {
      * 口令就是 Android 调试密钥的公开默认值（android / androiddebugkey），
      * 这**不是秘密也不能当秘密用** —— 私钥就躺在仓库里，谁都能签出同签名的包。
      *
-     * 唯一被允许拿它签发布包的地方是下面的 `legacy` 兼容线：2026-11 之前
-     * 对外发的所有版本都是这把签的，为了让老用户能原地升级只能继续用。
-     * **新用户应该装正式签名的包**，见下方 buildTypes 说明。
+     * 它只用于 `debug` 构建。**发布包必须用正式密钥**，CI 会用 apksigner
+     * 校验指纹，发现正式包其实是这把开发者密钥签的就直接失败。
      */
     signingConfigs {
         getByName("debug") {
@@ -91,9 +90,9 @@ android {
          * 密钥和口令**不进仓库** —— 从 `keystore.properties` 读，那个文件在
          * .gitignore 里。跑一次 `bash setup_release_keystore.sh` 生成。
          *
-         * 文件不存在时**不报错**，而是在下方 release 构建类型中回退到
-         * 仓库内公开的 debug keystore。这样 clone 下来的人也能构建可安装包，
-         * 但该包不具备正式发布签名的升级连续性。
+         * 文件不存在时**不报错**：正式包会变成 unsigned 产物，用来提醒
+         * "这台机器不具备发布条件"。**不会**退回公开的 debug keystore ——
+         * 那样出的包任何人都能伪造，不能代表官方发布。
          */
         if (hasReleaseKey) {
             create("release") {
@@ -106,15 +105,11 @@ android {
     }
 
     /**
-     * 两条并行的发布签名线。**同一个 applicationId，只能装其中一个**，
-     * 装哪个就沿哪条线升级 —— 所以两条线各走各的更新渠道（见 UpdateChecker）。
+     * 只有一条发布线：`release`，用正式密钥签名。
      *
-     *   release  → 正式密钥签名。`assembleRelease`
-     *   legacy   → 历史上那把开发者密钥签名，兼容老用户原地升级。`assembleLegacy`
-     *
-     * 之所以要并行一段时间：0.12.5 及更早的包全是开发者密钥签的，直接换正式
-     * 密钥会让所有老用户无法覆盖安装。留一条兼容线，让用户自己选「保留数据」
-     * 还是「换成正式签名」。
+     * 0.14.1 起取消了 `legacy`（开发者 Debug 签名）兼容线 —— 那把私钥随仓库
+     * 公开，任何人都能签出同签名的包来覆盖安装，不能代表官方发布。
+     * 旧 legacy 用户需要卸载后安装正式签名包（本地数据会清空）。
      */
     buildTypes {
         release {
@@ -125,35 +120,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // 没配正式密钥时不签名（产物是 unsigned），**不再退回开发者密钥**。
+            // CI 会先还原 Secrets 里的密钥，再用 apksigner 校验；两步缺一步就失败。
             if (hasReleaseKey) {
                 signingConfig = signingConfigs.getByName("release")
-            } else {
-                // 本机没配正式密钥时退回开发者签名，只为了让 `assembleRelease`
-                // 能出一个能装的包做冒烟测试。
-                //
-                // ⚠️ 这个产物**不能对外发布**：CI 会用 apksigner 校验指纹，
-                // 发现「正式包其实是开发者签名」就直接失败。
-                signingConfig = signingConfigs.getByName("debug")
             }
-        }
-
-        /**
-         * 兼容签名线：沿用仓库里那把开发者密钥，和老版本同签名。
-         *
-         * 它存在的唯一目的是**让已经装了旧版的用户能原地升级、不丢数据**。
-         * 新用户不应该装这个包 —— 它的私钥是公开的，任何人都能签出同签名
-         * 的包来覆盖安装。
-         *
-         * 等旧版用户基本迁移完，这个 buildType 和仓库里的 debug keystore
-         * 就可以一起删掉。
-         */
-        create("legacy") {
-            isMinifyEnabled = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

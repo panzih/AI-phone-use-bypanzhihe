@@ -3,14 +3,13 @@
 # 触发：往远端推一个 v* 标签（git push origin v0.12.5，或 git push --follow-tags）。
 #      推分支本身不会触发这里 —— Release 只跟标签走，普通 push 只跑 CI。
 #
-# 干的事：出两个包 → 挑更新说明 → 建 Release 并把两个 APK 都挂上去。
+# 干的事：出一个正式签名包 → 挑更新说明 → 建 Release 并挂上 APK。
 #
-# 两个包（同一个 applicationId，只能装一个，装哪个就沿哪条线升级）：
-#   *-official.apk  assembleRelease，正式密钥签名。新用户装这个。
-#   *-legacy.apk    assembleLegacy，沿用仓库里那把开发者密钥。老用户原地升级用。
+# 只发一个包：
+#   *-official.apk  assembleRelease，正式密钥签名。
 #
-# 为什么要有 legacy：0.12.5 及更早的包全是开发者密钥签的，换正式密钥后
-# 那些用户无法覆盖安装。留一条兼容线让用户自己选，等迁移完就能删掉。
+# 0.14.1 起不再发布 legacy（开发者 Debug 签名）包。历史 legacy 用户签名不同，
+# 不能覆盖安装：需要先卸载旧版，再装正式签名包（本地数据会清空）。
 #
 # 更新说明从哪儿来（按优先级）：
 #   1. release-notes/<tag>.md      例如 release-notes/v0.12.5.md
@@ -43,7 +42,7 @@ jobs:
   release:
     # 与 CI 保持一致，别让镜像漂移影响出包
     runs-on: ubuntu-24.04
-    # 两个 variant 各要跑一遍 R8 和 lintVital，比单包时代慢不少，留足余量
+    # 单个 variant，R8 和 lintVital 各跑一遍；留足余量
     timeout-minutes: 60
 
     steps:
@@ -100,20 +99,17 @@ jobs:
             echo "::warning title=版本号不一致::标签是 ${VER}，build.gradle.kts 里是 ${NAME}；确认无误再发"
           fi
 
-      - name: 构建两个安装包
-        run: ./gradlew :app:assembleRelease :app:assembleLegacy --stacktrace
+      - name: 构建正式签名安装包
+        run: ./gradlew :app:assembleRelease --stacktrace
 
-      # 出包之后验一遍指纹。这一步是整套方案的地基：
-      #   official 必须**不是**开发者签名（否则正式线等于没换）；
-      #   legacy 必须**是**开发者签名（否则老用户装不上）。
-      # 任何一条不成立就停，别把包发出去。
+      # 出包之后验一遍指纹：正式包必须**不是**仓库里那把公开的开发者密钥。
+      # 是的话说明 Secrets 没生效，绝不能发出去。
       - name: 校验签名指纹
         run: |
           set -euo pipefail
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* | sort -V | tail -n1)
           OFFICIAL=$(ls app/build/outputs/apk/release/*.apk | head -n1)
-          LEGACY=$(ls app/build/outputs/apk/legacy/*.apk | head -n1)
 
           digest() {
             "$BUILD_TOOLS/apksigner" verify --print-certs "$1" \
@@ -122,23 +118,17 @@ jobs:
           }
 
           OFF=$(digest "$OFFICIAL")
-          LEG=$(digest "$LEGACY")
           echo "official: $OFF"
-          echo "legacy:   $LEG"
 
-          # 仓库里 keystore/debug.keystore 的证书指纹，也是 0.12.5 及更早的包的指纹
+          # 仓库里 keystore/debug.keystore 的证书指纹，私钥是公开的
           LEGACY_CERT=e2876ac3252f61067c74fc0d74bc60be47fb0c2a083c783c40295f0b4353903d
 
-          if [ "$LEG" != "$LEGACY_CERT" ]; then
-            echo "::error title=兼容包签名不对::legacy 包的指纹是 $LEG，不是历史签名 $LEGACY_CERT，老用户装不上"
-            exit 1
-          fi
           if [ -z "$OFF" ]; then
-            echo "::error title=正式包没签上::apksigner 读不出 official 包的证书"
+            echo "::error title=正式包没签上::apksigner 读不出正式包的证书"
             exit 1
           fi
           if [ "$OFF" = "$LEGACY_CERT" ]; then
-            echo "::error title=正式包用了开发者签名::official 包和 legacy 同指纹，说明 Secrets 没生效，不能发布"
+            echo "::error title=正式包用了开发者签名::指纹和仓库里的 debug.keystore 相同，说明 Secrets 没生效，不能发布"
             exit 1
           fi
           echo "指纹校验通过"
@@ -181,31 +171,27 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
-          OFFICIAL=$(ls app/build/outputs/apk/release/*.apk | head -n1)
-          LEGACY=$(ls app/build/outputs/apk/legacy/*.apk | head -n1)
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
 
           # 附件名用 ASCII：GitHub 会把非 ASCII 字符清洗掉（实测
           # 「AI手机-v0.12.5.apk」变成了「AI.-v0.12.5.apk」）。
           # gh 的 `path#name` 写法在不同版本上也不都会改名，所以先复制成
           # 目标文件名再上传，附件名才稳定。
-          STAGE_OFFICIAL="${RUNNER_TEMP}/AI-phone-${TAG}-official.apk"
-          STAGE_LEGACY="${RUNNER_TEMP}/AI-phone-${TAG}-legacy.apk"
-          cp "$OFFICIAL" "$STAGE_OFFICIAL"
-          cp "$LEGACY" "$STAGE_LEGACY"
+          STAGE="${RUNNER_TEMP}/AI-phone-${TAG}-official.apk"
+          cp "$APK" "$STAGE"
 
-          # 两个包摆在一起，用户不看说明就会装错，而装错得卸载才能换。
-          # 所以这段固定排在更新说明最前面。
+          # 只有一个包，但签名线换过，旧用户不能覆盖安装的事实要写在最前面
           NOTES="${RUNNER_TEMP}/release-notes.md"
           cat > "$NOTES" <<'MD'
-          ## 装哪个包
+          ## 安装包
 
-          | 附件 | 谁该装 |
-          |---|---|
-          | `-official.apk` | 全新安装，或愿意卸载重装一次的老用户。正式签名，以后升级不断档。 |
-          | `-legacy.apk` | 已经在用旧版的用户。**直接覆盖安装，数据保留**。 |
+          本 Release 只提供一个**正式签名**的安装包。
 
-          两个包的应用 ID 相同，手机上**只能装一个**；想从 legacy 换成 official
-          必须先卸载（本地数据会丢）。
+          - 新用户：直接安装。
+          - 还在用 0.13.0 及更早版本、或之前装过 `-legacy.apk` 的用户：
+            签名不同，**不能覆盖安装**。需要先卸载旧版，再装这个包；
+            卸载会清空本地设置、对话和记忆。
+          - 从 0.14.1 起不再发布 legacy（开发者签名）包。
           MD
           printf '\n' >> "$NOTES"
           if [ -n "${NOTES_PATH:-}" ]; then
@@ -225,7 +211,7 @@ jobs:
             gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY"
           fi
 
-          gh release create "$TAG" "$STAGE_OFFICIAL" "$STAGE_LEGACY" \
+          gh release create "$TAG" "$STAGE" \
             --title "$TAG" --notes-file "$NOTES" $PRE --repo "$GITHUB_REPOSITORY"
 
           echo "发布完成：https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
