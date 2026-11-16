@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>纸盒 · 封面 4:3</title>
+<style>
+  @font-face { font-family: "Display"; src: url(../fonts/SmileySans.ttf) format("truetype"); }
+  @font-face { font-family: "Text";    src: url(../fonts/WenKai.ttf)     format("truetype"); }
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+// 首页 / 分区列表用的 4:3 封面 —— 缩略图最小，字要占到最大
+const W = 1600, H = 1200;
+const c = document.getElementById('c');
+c.width = W; c.height = H;
+const ctx = c.getContext('2d');
+window.DUR = 1;
+window.render = () => {};
+
+const C = { paper: '#F2EFE8', ink: '#171A18', dim: 'rgba(23,26,24,.55)',
+            faint: 'rgba(23,26,24,.14)', green: '#3E6B4A', gray: '#A9A49A', grayInk: '#6F6A60' };
+const F_DISP = s => `400 ${s}px "Display", "PingFang SC", sans-serif`;
+const F_TEXT = s => `400 ${s}px "Text", "PingFang SC", serif`;
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function txt(s, x, y, font, color, align = 'left', sp = 0) {
+  ctx.save();
+  ctx.font = font; ctx.fillStyle = color; ctx.textBaseline = 'alphabetic';
+  if (sp) ctx.letterSpacing = sp + 'px';
+  const w = ctx.measureText(s).width;
+  let dx = x;
+  if (align === 'center') dx = x - w / 2;
+  if (align === 'right') dx = x - w;
+  ctx.fillText(s, dx, y);
+  ctx.restore();
+  return w;
+}
+function logo(cx, cy, size, color, lw) {
+  const s = size / 108;
+  const P = (x, y) => [cx + (x - 54) * s, cy + (y - 54) * s];
+  const out = [[20, 88], [20, 46], [46, 20], [88, 20], [88, 62], [62, 88], [20, 88]].map(p => P(...p));
+  const inner = [[[20, 46], [62, 46]], [[62, 46], [62, 88]], [[62, 46], [88, 20]]].map(e => e.map(p => P(...p)));
+  ctx.save();
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = color; ctx.lineWidth = lw;
+  ctx.beginPath(); ctx.moveTo(...out[0]);
+  for (let i = 1; i < out.length; i++) ctx.lineTo(...out[i]);
+  ctx.stroke();
+  ctx.beginPath();
+  for (const e of inner) { ctx.moveTo(...e[0]); ctx.lineTo(...e[1]); }
+  ctx.stroke();
+  ctx.restore();
+}
+
+(async () => {
+  await Promise.all([document.fonts.load(F_DISP(180)), document.fonts.load(F_TEXT(40))]);
+
+  ctx.fillStyle = C.paper;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(23,26,24,.028)';
+  ctx.lineWidth = 1;
+  for (let y = 0; y < H; y += 54) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  logo(112, 122, 70, C.ink, 4.6);
+  txt('纸盒', 160, 146, F_DISP(46), C.ink, 'left', 4);
+  const ktag = 'AI手机';
+  ctx.font = F_DISP(32);
+  const ktw = ctx.measureText(ktag).width + 48;
+  ctx.fillStyle = C.green;
+  rr(282, 96, ktw, 56, 28); ctx.fill();
+  txt(ktag, 282 + ktw / 2, 136, F_DISP(32), C.paper, 'center', 2);
+
+  // 主张：这行是本片唯一的论点，放到最大
+  txt('都能操作手机', 104, 430, F_DISP(126), C.ink, 'left', 4);
+  txt('效果一样', 100, 620, F_DISP(198), C.green, 'left', 8);
+
+  ctx.fillStyle = C.faint;
+  ctx.fillRect(104, 690, W - 208, 1.5);
+
+  // 两个数字
+  const baseY = 890;
+  txt('纸盒', 104, 736, F_TEXT(36), C.green, 'left', 1);
+  const w = txt('3.6', 100, baseY, F_DISP(168), C.green);
+  txt('MB', 100 + w + 18, baseY, F_DISP(68), C.green);
+
+  txt('DSH Go', W - 104, 736, F_TEXT(36), C.grayInk, 'right', 1);
+  ctx.font = F_DISP(168);
+  const tW = ctx.measureText('220.7').width;
+  txt('220.7', W - 104 - (tW + 18 + 46), baseY, F_DISP(168), C.grayInk);
+  txt('MB', W - 104 - 46, baseY, F_DISP(68), C.grayInk);
+
+  // 同一刻度的两条比例尺
+  const barY = 936, barH = 22, x0 = 104, maxW = W - 208;
+  ctx.fillStyle = 'rgba(23,26,24,.06)';
+  rr(x0, barY, maxW, barH, 11); ctx.fill();
+  ctx.fillStyle = C.gray;
+  rr(x0, barY, maxW, barH, 11); ctx.fill();
+  ctx.fillStyle = C.green;
+  rr(x0, barY - 8, Math.max(16, maxW * 3.62 / 220.7), barH + 16, 4); ctx.fill();
+
+  txt('差 61 倍', W - 104, 1082, F_DISP(88), C.ink, 'right');
+  txt('数字取自两边 Release 页与本机实测 · 2026-11', 104, 1072, F_TEXT(27), 'rgba(23,26,24,.34)', 'left', 1);
+
+  window.READY = true;
+})().catch(e => console.error(e));
+</script>
+</body>
+</html>
