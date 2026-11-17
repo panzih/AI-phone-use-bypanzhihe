@@ -621,7 +621,7 @@ class LlmClient(private val cfg: LlmConfig) {
             // ⚠️ 必须先 isNull 再取：Android org.json 对值为 JSON null 的字段
             // optString 返回的是字符串 "null"（不是空串），直接拼会把字面
             // "nullnull…" 混进回答里 —— 推理模型的 delta 常带 "content": null。
-            // UpdateChecker.parseInfo 对 downloadUrl 记过同一个坑。
+            // 更新站的 parseInfo 当年对 downloadUrl 记过同一个坑（功能已于 0.17.0 删除）。
             if (!delta.isNull("content")) {
                 delta.optString("content").takeIf { it.isNotEmpty() }?.let { content.append(it) }
             }

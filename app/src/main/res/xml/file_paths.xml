@@ -15,16 +15,8 @@
         path="exports/" />
 
     <!--
-      下载好的更新包。直接 file:// 传给系统安装器在 Android 7 以上会抛
-      FileUriExposedException，所以走 FileProvider 换成 content://。
-    -->
-    <cache-path
-        name="updates"
-        path="updates/" />
-
-    <!--
-      内置浏览器里点网页上的下载链接，落在这里。和上面的更新包分开：
-      更新包每次只留一个、会被清掉，网页下载不该被它误删。
+      内置浏览器里点网页上的下载链接，落在这里。
+      0.17.0 起不再有应用内更新，原来那个 `updates/` 目录已经去掉。
     -->
     <cache-path
         name="downloads"

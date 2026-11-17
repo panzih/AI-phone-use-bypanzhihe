@@ -428,10 +428,11 @@ data class AppSettings(
     /**
      * 点击前复核。见 [TapReviewMode]。
      *
-     * 默认关：复核是一次**额外的模型请求**（还带一张局部截图），会拖慢每一步。
-     * 用户明确要求时才开。
+     * 默认「只复核坐标点击」（0.17.0）：模型按编号点本来就会落到控件中心，
+     * 不需要再花一次请求；只有它自己估 x/y 时才复核一次落点局部截图。
+     * 想完全关掉或改成全复核，在设置里调。
      */
-    val tapReview: TapReviewMode = TapReviewMode.OFF,
+    val tapReview: TapReviewMode = TapReviewMode.COORDINATES,
 
     /**
      * 允许 AI 执行高风险操作（支付、转账、删除、发送、授权、验证码等）。
@@ -464,15 +465,15 @@ data class AppSettings(
     val recordingEntry: Boolean = false,
 
     /**
-     * 语音输入开关（默认关）。
+     * 语音输入开关（默认**开**，0.17.0 用户要求）。
      *
-     * 打开后输入框右侧出现麦克风：点一下开始录音，再点一下结束，
+     * 开着时输入框右侧出现麦克风：点一下开始录音，再点一下结束，
      * 音频发给 DeepSeek 的 ASR 接口转成文字填进输入框。
      *
-     * **默认关**的理由和录音权限一样：麦克风是敏感能力，不在用户主动
-     * 打开前露出入口；启用后首次点麦克风还要过一次系统运行时的录音授权。
+     * 使用前仍要过一次系统运行时的录音授权；没填 DeepSeek Key 时
+     * 点了会明确提示（免费通道不含 ASR）。
      */
-    val voiceInput: Boolean = false,
+    val voiceInput: Boolean = true,
 
     /**
      * 首次安装的权限引导看过了没有（ROADMAP §3）。
@@ -493,25 +494,28 @@ data class AppSettings(
      *
      * 这不是"防死循环"（那个由 Agent 里的控件树指纹和重复动作检测负责），
      * 是**给成本兜底** —— 每步都要调一次模型，步数直接等于花多少钱。
-     * 30 步对绝大多数任务够了；卡住的时候加步数不如把任务拆小。
+     * 0.17.0 起默认 99（用户要求）：复杂界面里 30 步经常不够走完一个
+     * 「打开设置 → 找入口 → 改两处」的流程，中间被截断反而更费钱。
      *
      * **0 表示不限。** 设置页的滑块拉到最右就是这个值。不限不等于失控：
      * 模型自己判断做完/做不下去会主动收尾（finished / failed），
      * 而且上下文接近模型窗口上限时 Agent 会强制停下。
      */
-    val maxSteps: Int = 30,
+    val maxSteps: Int = 99,
 
     /** 上下文什么时候重开。见 [ContextPolicy] */
     val contextPolicy: ContextPolicy = ContextPolicy.H24,
 
     /**
-     * 记忆开关。
+     * 记忆开关（默认**开**，0.17.0 用户要求）。
      *
      * 开了就**每次任务结束后让 AI 归纳一条洞察，追加到记忆文件末尾**，
      * 关掉就完全不写。只有一个开关 —— 用户不需要理解"归纳"和"不丢"
      * 的区别，那是实现细节。
+     *
+     * 代价是每次任务多一次纯文字的模型调用；新开上下文时会自动带上记忆。
      */
-    val memoryEnabled: Boolean = false,
+    val memoryEnabled: Boolean = true,
 
     /** 每次任务写 run.log */
     val saveLogs: Boolean = true,
@@ -535,23 +539,6 @@ data class AppSettings(
      * 端侧连建议都不给（见 LocalRuleEngine）。
      */
     val localDialogDismiss: Boolean = true,
-
-    /**
-     * 启动时自动检查更新。
-     *
-     * **默认关**：检查更新会把 IP（服务器必然能看到）、HTTP User-Agent、
-     * 设备标识（Android ID）、包名和版本号发给更新站。用户没主动要求联网时
-     * 不替他做这个决定；「关于」页仍有手动检查。
-     */
-    val autoCheckUpdate: Boolean = false,
-
-    /**
-     * 用户点过「跳过这个版本」的 versionCode。
-     *
-     * 只跳过**这一版**：下一版仍会提示。这是「跳过」不是「关掉更新」，
-     * 后者由 [autoCheckUpdate] 负责。
-     */
-    val skippedUpdateCode: Int = 0,
 ) {
     /** 界面上显示用的打码 Key，中间用星号 */
     val maskedApiKey: String

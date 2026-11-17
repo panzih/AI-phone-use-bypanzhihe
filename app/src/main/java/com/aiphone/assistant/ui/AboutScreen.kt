@@ -22,7 +22,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
@@ -44,9 +43,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.aiphone.assistant.R
 import com.aiphone.assistant.data.AppInfo
-import com.aiphone.assistant.ui.design.AppButton
 import com.aiphone.assistant.ui.design.AppScaffold
-import com.aiphone.assistant.ui.design.ButtonVariant
 import com.aiphone.assistant.ui.design.GroupCard
 import com.aiphone.assistant.ui.design.GroupDivider
 import com.aiphone.assistant.ui.design.HintText
@@ -56,26 +53,22 @@ import com.aiphone.assistant.ui.design.SettingRow
 import com.aiphone.assistant.ui.design.Size
 import com.aiphone.assistant.ui.design.Space
 import com.aiphone.assistant.ui.design.StatusPill
-import com.aiphone.assistant.ui.design.SwitchRow
 import com.aiphone.assistant.ui.design.Tone
 
 /**
  * 关于页。
  *
- * 三段：品牌（我是谁、什么版本）→ 更新（唯一的「做事」区）→ 隐私与许可。
+ * 三段：品牌（我是谁、什么版本）→ 隐私与许可。
  *
  * 品牌区做成一张**带渐变的卡片**，是全应用唯一有"海报感"的地方 ——
  * 它没有任务，只有陈述，读起来像名片而不是表单。
+ *
+ * 0.17.0 起**关于页不再有任何更新入口**（用户要求：删掉所有检查更新的入口）。
+ * 版本号仍然显示，但只能看、不能查。
  */
 @Composable
 fun AboutScreen(
     appVersion: String,
-    updateEnabled: Boolean,
-    autoCheck: Boolean,
-    checking: Boolean,
-    checkHint: String,
-    onAutoCheckChange: (Boolean) -> Unit,
-    onCheckUpdate: () -> Unit,
     onBack: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
@@ -84,7 +77,7 @@ fun AboutScreen(
 
     AppScaffold(
         title = stringResource(R.string.about_title),
-        subtitle = if (updateEnabled) "版本、更新与开源许可" else "版本与开源许可",
+        subtitle = "版本与开源许可",
         onBack = onBack,
         backLabel = stringResource(R.string.settings_back),
     ) { inner ->
@@ -102,36 +95,6 @@ fun AboutScreen(
                 )
             }
 
-            // 更新功能由编译期开关控制（默认关，见 build.gradle.kts）。
-            // 关闭时整个区块不渲染，源码仍在工程里。
-            if (updateEnabled) {
-                item { SectionTitle(text = "更新", icon = Icons.Filled.Download) }
-                item {
-                    GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
-                        SettingRow(
-                            title = "检查新版本",
-                            subtitle = if (checkHint.isNotBlank()) checkHint else "会去仓库读最新版本的说明",
-                            trailing = {
-                                AppButton(
-                                    text = if (checking) "检查中" else "检查",
-                                    onClick = onCheckUpdate,
-                                    variant = ButtonVariant.Ghost,
-                                    loading = checking,
-                                    enabled = !checking,
-                                )
-                            },
-                        )
-                        GroupDivider()
-                        SwitchRow(
-                            title = "启动时自动检查",
-                            subtitle = "默认关闭。开启后每次启动会向更新站发送 IP、User-Agent、设备标识（Android ID）、包名和版本号，用于版本分发与统计；关掉也能在这里手动查。",
-                            checked = autoCheck,
-                            onCheckedChange = onAutoCheckChange,
-                        )
-                    }
-                }
-            }
-
             item { SectionTitle(text = "隐私说明", icon = Icons.Filled.Lock) }
             item {
                 HintText(
@@ -141,13 +104,6 @@ fun AboutScreen(
             }
             item {
                 GroupCard(modifier = Modifier.padding(horizontal = Space.lg)) {
-                    if (updateEnabled) {
-                        SettingRow(
-                            title = "更新检查",
-                            subtitle = "手动检查或开启自动检查时，会向更新站发送 IP、User-Agent、Android ID、包名和版本号。服务端保存设备哈希以及检查/下载统计，用于版本分发。",
-                        )
-                        GroupDivider()
-                    }
                     SettingRow(
                         title = "模型请求",
                         subtitle = "屏幕控件树、截图和你输入的文字会发送给你选择的模型接口。免费通道是社区非官方网关，首次开启前会单独告知风险。",

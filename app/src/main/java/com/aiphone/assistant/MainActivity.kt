@@ -88,10 +88,7 @@ import com.aiphone.assistant.ui.PermissionsScreen
 import com.aiphone.assistant.ui.RecordingScreen
 import com.aiphone.assistant.ui.ScheduleScreen
 import com.aiphone.assistant.ui.SettingsScreen
-import com.aiphone.assistant.ui.UpdateDialog
 import com.aiphone.assistant.ui.design.AppAlertDialog
-import com.aiphone.assistant.update.ApkInstaller
-import com.aiphone.assistant.update.UpdateChecker
 import com.aiphone.assistant.ui.theme.AiPhoneTheme
 import com.aiphone.assistant.voice.VoiceConfig
 import com.aiphone.assistant.voice.VoiceInputController
@@ -1681,93 +1678,6 @@ private fun AppRoot(
     //
     // 弹窗（设置页的确认框等）走 Compose Dialog，它自己会先消费返回事件，
     // 不会误触发这里的翻页。
-    // ---- 自动更新 ----
-    //
-    // 检查放在冷启动一次（用户可以在「关于」里关掉或手动触发）。
-    // 三条路径共用一个弹窗：启动时静默查到、关于页手动点、下载中/失败。
-    var updateInfo by remember { mutableStateOf<UpdateChecker.Info?>(null) }
-    var updateProgress by remember { mutableStateOf<Int?>(null) }
-    var updating by remember { mutableStateOf(false) }
-    var updateError by remember { mutableStateOf<String?>(null) }
-    var checkingUpdate by remember { mutableStateOf(false) }
-    var updateCheckHint by remember { mutableStateOf("") }
-
-    fun startUpdate() {
-        // 编译期开关关闭时，整条更新路径都不执行（源码保留，见 build.gradle.kts）
-        if (!BuildConfig.ENABLE_UPDATE) return
-        val info = updateInfo ?: return
-        // Android 8+ 装 APK 要用户先允许「安装未知应用」，没开就直接拉安装器
-        // 只会得到一句「应用未安装」，所以先查再把人带过去
-        if (!ApkInstaller.canInstall(context)) {
-            ApkInstaller.requestInstallPermission(context)
-            toast = "请允许纸盒安装应用，回来再点一次「立即更新」"
-            return
-        }
-        updating = true
-        updateError = null
-        updateProgress = null
-        scope.launch {
-            try {
-                val file = UpdateChecker.download(context, info) { pct ->
-                    // 进度回调在 IO 线程，切回主线程改状态
-                    scope.launch { updateProgress = pct }
-                }
-                updating = false
-                updateInfo = null
-                ApkInstaller.install(context, file)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                updating = false
-                updateProgress = null
-                updateError = e.message ?: "下载失败，请重试"
-            }
-        }
-    }
-
-    fun skipUpdate() {
-        val info = updateInfo ?: return
-        // 只跳过这一版：记下 versionCode，下一版仍然会提示
-        settings = settings.copy(skippedUpdateCode = info.versionCode)
-        store.save(settings)
-        updateInfo = null
-        updateError = null
-        toast = "已跳过 ${info.versionName}，下个版本还会提示"
-    }
-
-    fun checkUpdateManually() {
-        if (!BuildConfig.ENABLE_UPDATE) return
-        if (checkingUpdate) return
-        checkingUpdate = true
-        updateCheckHint = "正在检查…"
-        scope.launch {
-            val result = UpdateChecker.check(context)
-            checkingUpdate = false
-            result.fold(
-                onSuccess = { info ->
-                    if (info == null) {
-                        updateCheckHint = "已经是最新版本"
-                    } else {
-                        // 手动点的就不看「跳过」了 —— 用户自己要查，就该看到结果
-                        updateCheckHint = ""
-                        updateInfo = info
-                    }
-                },
-                onFailure = { e ->
-                    updateCheckHint = "检查失败：${e.message ?: "网络不通"}"
-                },
-            )
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        // 编译期开关关闭：启动时完全不联网检查更新
-        if (!BuildConfig.ENABLE_UPDATE) return@LaunchedEffect
-        if (!settings.autoCheckUpdate) return@LaunchedEffect
-        val info = UpdateChecker.check(context).getOrNull() ?: return@LaunchedEffect
-        if (info.versionCode == settings.skippedUpdateCode) return@LaunchedEffect
-        updateInfo = info
-    }
 
     BackHandler(enabled = screen != Screen.CONTROL) {
         screen = Screen.CONTROL
@@ -2004,34 +1914,8 @@ private fun AppRoot(
 
         Screen.ABOUT -> AboutScreen(
             appVersion = appVersion,
-            updateEnabled = BuildConfig.ENABLE_UPDATE,
-            autoCheck = settings.autoCheckUpdate,
-            checking = checkingUpdate,
-            checkHint = updateCheckHint,
-            onAutoCheckChange = { on ->
-                settings = settings.copy(autoCheckUpdate = on)
-                store.save(settings)
-            },
-            onCheckUpdate = { checkUpdateManually() },
             onBack = { screen = Screen.CONTROL },
         )
-    }
-
-    if (BuildConfig.ENABLE_UPDATE) {
-        updateInfo?.let { info ->
-            UpdateDialog(
-                info = info,
-                progress = updateProgress,
-                downloading = updating,
-                error = updateError,
-                onUpdate = { startUpdate() },
-                onLater = {
-                    updateInfo = null
-                    updateError = null
-                },
-                onSkip = { skipUpdate() },
-            )
-        }
     }
 
     // 老版本用户可能已经开着免费通道，但没有确认过风险说明。

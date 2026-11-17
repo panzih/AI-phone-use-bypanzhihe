@@ -122,28 +122,50 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun `语音输入_默认关闭_打开后能存住`() {
-        assertFalse("麦克风是敏感能力，默认不露出入口", AppSettings().voiceInput)
-        store.save(AppSettings(voiceInput = true))
-        assertTrue("设置里打开后必须跨重启保留", store.load().voiceInput)
+    fun `语音输入_默认打开_关掉后能存住`() {
+        // 0.17.0 用户要求：默认打开（点麦克风仍要过系统录音授权）
+        assertTrue("默认应该露出麦克风入口", AppSettings().voiceInput)
+        store.save(AppSettings(voiceInput = false))
+        assertFalse("设置里关掉后必须跨重启保留", store.load().voiceInput)
     }
 
     @Test
-    fun `更新设置_默认不自动检查_且没跳过任何版本`() {
+    fun `0_17_0_的默认值`() {
         val s = AppSettings()
-        // 2026-10-27 整改：检查更新会发送 IP/UA/Android ID，默认改为关闭
-        assertFalse("默认不该自动检查更新", s.autoCheckUpdate)
-        assertEquals("默认不该跳过任何版本", 0, s.skippedUpdateCode)
+        assertEquals("默认最大步数 99", 99, s.maxSteps)
+        assertTrue("默认开启记忆", s.memoryEnabled)
+        assertEquals("默认只复核坐标点击", TapReviewMode.COORDINATES, s.tapReview)
+        assertTrue("默认打开语音输入", s.voiceInput)
     }
 
     @Test
-    fun `跳过某个版本_重启后还记得`() {
-        store.save(AppSettings(skippedUpdateCode = 74))
-        assertEquals(74, store.load().skippedUpdateCode)
+    fun `老配置仍是旧默认值时_一次性升级到新默认`() {
+        // 模拟 0.16.x 用户盘上的样子：save() 会把旧默认全写进去
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
+            .putInt("max_steps", 30)
+            .putBoolean("memory_enabled", false)
+            .putBoolean("voice_input", false)
+            .putString("tap_review", "off")
+            .commit()
 
-        // 改别的字段不能把「已跳过」抹掉 —— 否则用户每次改设置都会被重新提示同一版
-        store.save(store.load().copy(maxSteps = 10))
-        assertEquals(74, store.load().skippedUpdateCode)
+        val s = store.load()
+        assertEquals(99, s.maxSteps)
+        assertTrue(s.memoryEnabled)
+        assertTrue(s.voiceInput)
+        assertEquals(TapReviewMode.COORDINATES, s.tapReview)
+
+        // 落盘了没有：换个 store 再读一次（迁移只跑一次，靠的是盘上的新值）
+        val again = SettingsStore(context, SecretCrypto(FakeCipher())).load()
+        assertEquals(99, again.maxSteps)
+        assertTrue(again.memoryEnabled)
+    }
+
+    @Test
+    fun `用户自己调过的步数不会被迁移覆盖`() {
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
+            .putInt("max_steps", 50)
+            .commit()
+        assertEquals("50 不是旧默认 30，不该被动", 50, store.load().maxSteps)
     }
 
     // ---------------------------------------------------------------

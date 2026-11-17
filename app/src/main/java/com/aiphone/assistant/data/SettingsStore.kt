@@ -48,9 +48,35 @@ class SettingsStore(
         saveLogs = sp.getBoolean(KEY_SAVE_LOGS, DEFAULT.saveLogs),
         saveScreenshots = sp.getBoolean(KEY_SAVE_SHOTS, DEFAULT.saveScreenshots),
         localDialogDismiss = sp.getBoolean(KEY_LOCAL_DISMISS, DEFAULT.localDialogDismiss),
-        autoCheckUpdate = sp.getBoolean(KEY_AUTO_UPDATE, DEFAULT.autoCheckUpdate),
-        skippedUpdateCode = sp.getInt(KEY_SKIP_VERSION, DEFAULT.skippedUpdateCode),
-    )
+    ).let { migrateDefaults(it) }
+
+    /**
+     * 一次性把**还是旧默认值**的配置项升级到 0.17.0 的新默认值。
+     *
+     * 为什么需要它：`save()` 会把每一项都写进 SharedPreferences，所以老用户
+     * 盘上一定存着"旧默认"（30 步 / 不记忆 / 不复核 / 语音关）。只改
+     * data class 的默认值对这种配置**完全不起作用** —— 装上新版一看还是老值，
+     * 会以为没改。
+     *
+     * 判据是"等于旧默认"：用户自己调过的值不动（比如他设了 50 步，就不是 30）。
+     * 只跑一次（[KEY_DEFAULTS_REV]），之后用户再改就是用户自己的选择。
+     */
+    private fun migrateDefaults(s: AppSettings): AppSettings {
+        if (sp.getInt(KEY_DEFAULTS_REV, 0) >= DEFAULTS_REV) return s
+        val upgraded = s.copy(
+            maxSteps = if (s.maxSteps == OLD_DEFAULT_MAX_STEPS) 99 else s.maxSteps,
+            // 这两项旧默认是 false，没法区分"没动过"和"故意关掉" ——
+            // 一次性打开，之后用户再关就是用户自己的选择。
+            memoryEnabled = true,
+            voiceInput = true,
+            tapReview = if (s.tapReview == TapReviewMode.OFF) TapReviewMode.COORDINATES else s.tapReview,
+        )
+        // **必须落盘**：只在内存里改的话，下次启动还是盘上的旧值，
+        // 而 rev 已经推进到 1，迁移不会再跑 —— 等于白改。
+        save(upgraded)
+        sp.edit().putInt(KEY_DEFAULTS_REV, DEFAULTS_REV).apply()
+        return upgraded
+    }
 
     /**
      * 保存设置。
@@ -94,8 +120,9 @@ class SettingsStore(
             .putBoolean(KEY_SAVE_LOGS, s.saveLogs)
             .putBoolean(KEY_SAVE_SHOTS, s.saveScreenshots)
             .putBoolean(KEY_LOCAL_DISMISS, s.localDialogDismiss)
-            .putBoolean(KEY_AUTO_UPDATE, s.autoCheckUpdate)
-            .putInt(KEY_SKIP_VERSION, s.skippedUpdateCode)
+            // 任何一次保存都说明"这份配置已经是新版写的"：打上迁移标记，
+            // 免得用户在新版里主动关掉语音/记忆之后，下次启动又被迁移打开。
+            .putInt(KEY_DEFAULTS_REV, DEFAULTS_REV)
             .apply()
         return warning
     }
@@ -156,7 +183,7 @@ class SettingsStore(
         /** 「操作记录」入口开关（默认关，见 AppSettings.recordingEntry） */
         const val KEY_RECORDING_ENTRY = "recording_entry"
 
-        /** 语音输入开关（默认关，见 AppSettings.voiceInput） */
+        /** 语音输入开关（0.17.0 起默认开，见 AppSettings.voiceInput） */
         const val KEY_VOICE_INPUT = "voice_input"
 
         /** 首次安装的权限引导是否看过（见 AppSettings.onboardingDone） */
@@ -172,10 +199,16 @@ class SettingsStore(
         const val KEY_SAVE_SHOTS = "save_screenshots"
         const val KEY_LOCAL_DISMISS = "local_dialog_dismiss"
 
-        /** 启动时检查更新（默认关，见 AppSettings.autoCheckUpdate） */
-        const val KEY_AUTO_UPDATE = "auto_check_update"
+        /**
+         * 默认值迁移版本。0 = 还没迁移过。
+         *
+         * 0.17.0 改了几项默认值（步数 30→99、开记忆、开语音、复核改中档），
+         * 老的 `save()` 把旧默认写进过盘，靠 [migrateDefaults] 一次性抬上来。
+         */
+        const val KEY_DEFAULTS_REV = "defaults_revision"
+        const val DEFAULTS_REV = 1
 
-        /** 「跳过这个版本」记下的 versionCode（0 = 没跳过任何版本） */
-        const val KEY_SKIP_VERSION = "skipped_update_code"
+        /** 0.17.0 之前的默认最大步数（迁移时用来判断"用户没动过"） */
+        const val OLD_DEFAULT_MAX_STEPS = 30
     }
 }
