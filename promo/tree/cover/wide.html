@@ -81,27 +81,27 @@ function logo(cx, cy, size, color, lw) {
   rr(330, 100, ktw, 58, 29); ctx.fill();
   txt(ktag, 330 + ktw / 2, 142, F_DISP(34), C.paper, 'center', 2);
 
-  txt('AI 不用看屏幕', 116, 352, F_DISP(112), C.ink, 'left', 4);
-  txt('它读的是控件树', 112, 536, F_DISP(180), C.green, 'left', 8);
+  txt('AI 不用看屏幕', 116, 316, F_DISP(112), C.ink, 'left', 4);
+  txt('它读的是控件树', 112, 590, F_DISP(168), C.green, 'left', 8);
 
   ctx.fillStyle = C.faint;
-  ctx.fillRect(116, 606, W - 232, 1.5);
+  ctx.fillRect(116, 642, W - 232, 1.5);
 
-  const baseY = 800;
-  txt('一屏控件树 · 25 个元素', 116, 668, F_TEXT(40), C.green, 'left', 1);
-  const w = txt('1', 112, baseY, F_DISP(170), C.green);
-  txt('KB', 112 + w + 22, 784, F_DISP(68), C.green);
-  txt('922 个字', 116, 880, F_TEXT(36), C.green, 'left', 1);
+  const baseY = 852;
+  txt('一屏控件树 · 25 个元素', 116, 686, F_TEXT(40), C.green, 'left', 1);
+  const w = txt('1', 112, baseY, F_DISP(152), C.green);
+  txt('KB', 112 + w + 22, 836, F_DISP(64), C.green);
+  txt('922 个字', 116, 918, F_TEXT(36), C.green, 'left', 1);
 
-  txt('同一屏的截图', W - 116, 668, F_TEXT(40), C.grayInk, 'right', 1);
-  ctx.font = F_DISP(170);
+  txt('同一屏的截图', W - 116, 686, F_TEXT(40), C.grayInk, 'right', 1);
+  ctx.font = F_DISP(152);
   const tW = ctx.measureText('689').width;
-  txt('689', W - 116 - (tW + 22 + 46), baseY, F_DISP(170), C.grayInk);
-  txt('KB', W - 116 - 46, 784, F_DISP(68), C.grayInk);
-  txt('PNG 转 base64 之后', W - 116, 880, F_TEXT(36), C.grayInk, 'right', 1);
+  txt('689', W - 116 - (tW + 22 + 46), baseY, F_DISP(152), C.grayInk);
+  txt('KB', W - 116 - 46, 836, F_DISP(64), C.grayInk);
+  txt('PNG 转 base64 之后', W - 116, 918, F_TEXT(36), C.grayInk, 'right', 1);
 
   // 同一刻度的两条比例尺
-  const barY = 930, barH = 20, x0 = 116, maxW = W - 232;
+  const barY = 956, barH = 20, x0 = 116, maxW = W - 232;
   ctx.fillStyle = 'rgba(23,26,24,.06)';
   rr(x0, barY, maxW, barH, 10); ctx.fill();
   ctx.fillStyle = C.gray;
@@ -109,7 +109,7 @@ function logo(cx, cy, size, color, lw) {
   ctx.fillStyle = C.green;
   rr(x0, barY - 8, 16, barH + 16, 4); ctx.fill();
 
-  txt('数字取自模拟器实测：Android 设置页的控件树，与同一屏的截图', 116, 1012, F_TEXT(26), 'rgba(23,26,24,.34)', 'left', 1);
+  txt('数字取自模拟器实测：Android 设置页的控件树，与同一屏的截图', 116, 1028, F_TEXT(26), 'rgba(23,26,24,.34)', 'left', 1);
 
   window.READY = true;
 })().catch(e => console.error(e));

@@ -81,24 +81,24 @@ function logo(cx, cy, size, color, lw) {
   rr(282, 96, ktw, 56, 28); ctx.fill();
   txt(ktag, 282 + ktw / 2, 136, F_DISP(32), C.paper, 'center', 2);
 
-  txt('AI 不用看屏幕', 104, 392, F_DISP(112), C.ink, 'left', 4);
+  txt('AI 不用看屏幕', 104, 366, F_DISP(112), C.ink, 'left', 4);
   txt('它读的是控件树', 100, 570, F_DISP(168), C.green, 'left', 8);
 
   ctx.fillStyle = C.faint;
   ctx.fillRect(104, 640, W - 208, 1.5);
 
-  const baseY = 862;
-  txt('一屏控件树 · 25 个元素', 104, 712, F_TEXT(40), C.green, 'left', 1);
-  const w = txt('1', 100, baseY, F_DISP(160), C.green);
-  txt('KB', 100 + w + 20, 848, F_DISP(64), C.green);
-  txt('922 个字', 104, 940, F_TEXT(36), C.green, 'left', 1);
+  const baseY = 878;
+  txt('一屏控件树 · 25 个元素', 104, 700, F_TEXT(40), C.green, 'left', 1);
+  const w = txt('1', 100, baseY, F_DISP(150), C.green);
+  txt('KB', 100 + w + 20, 862, F_DISP(62), C.green);
+  txt('922 个字', 104, 944, F_TEXT(36), C.green, 'left', 1);
 
-  txt('同一屏的截图', W - 104, 712, F_TEXT(40), C.grayInk, 'right', 1);
-  ctx.font = F_DISP(160);
+  txt('同一屏的截图', W - 104, 700, F_TEXT(40), C.grayInk, 'right', 1);
+  ctx.font = F_DISP(150);
   const tW = ctx.measureText('689').width;
-  txt('689', W - 104 - (tW + 20 + 44), baseY, F_DISP(160), C.grayInk);
-  txt('KB', W - 104 - 44, 848, F_DISP(64), C.grayInk);
-  txt('PNG 转 base64 之后', W - 104, 940, F_TEXT(36), C.grayInk, 'right', 1);
+  txt('689', W - 104 - (tW + 20 + 44), baseY, F_DISP(150), C.grayInk);
+  txt('KB', W - 104 - 44, 862, F_DISP(62), C.grayInk);
+  txt('PNG 转 base64 之后', W - 104, 944, F_TEXT(36), C.grayInk, 'right', 1);
 
   const barY = 1012, barH = 20, x0 = 104, maxW = W - 208;
   ctx.fillStyle = 'rgba(23,26,24,.06)';
