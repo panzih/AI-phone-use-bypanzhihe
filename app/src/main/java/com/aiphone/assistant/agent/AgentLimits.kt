@@ -15,6 +15,19 @@ internal object AgentLimits {
     val TAP_HOME = TouchAction(kind = TouchKind.KEY_HOME)
 
     /**
+     * 匹配中文词前先去掉零宽/双向控制符和空白。
+     *
+     * 页面可以把「支付」写成 `支\u200B付` 或 `支 付` 来绕过词表；控件文字
+     * 在解析层已经压过一行，但词表是最后一道，不能依赖上游。
+     */
+    private val MATCH_INVISIBLE =
+        Regex("[\\u061c\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]")
+    private val MATCH_WHITESPACE = Regex("\\s+")
+
+    private fun compactLabel(raw: String): String =
+        raw.replace(MATCH_INVISIBLE, "").replace(MATCH_WHITESPACE, "")
+
+    /**
      * 按钮文字里这些词表示“点了就有副作用”（发消息/付款/下单/授权…）。
      *
      * 动作后若界面没变化，命中这些词的按钮**只上报、不自动重试** ——
@@ -65,12 +78,13 @@ internal object AgentLimits {
         val raw = node.text.ifBlank { node.contentDesc }
         if (raw.isBlank()) return false
         val label = raw.lowercase()
-        // 中文词按子串（中文不靠空格分词）；英文词按整词 —— 否则 "ok" 会
-        // 误伤 book/look，让英文界面几乎不重试（功能静默失效）。
+        // 中文词按"去掉空白后"的子串（中文不靠空格分词，页面却能用空格/零宽
+        // 拆开「支付」来绕过）；英文词仍按整词 —— 否则 "ok" 会误伤 book/look。
+        val compact = compactLabel(label)
         val englishTokens = label.split(Regex("[^a-z]")).toHashSet()
         return SIDE_EFFECT_WORDS.any { word ->
             if (word.all { it in 'a'..'z' }) word in englishTokens
-            else label.contains(word)
+            else compact.contains(word)
         }
     }
 
@@ -139,12 +153,15 @@ internal object AgentLimits {
                     .map { it.text.ifBlank { it.contentDesc } }
                     .firstOrNull { it.isNotBlank() }
                     .orEmpty()
-                val text = action.text.trim()
+                // 去掉空白/零宽再判 4~8 位数字：页面可能诱导模型输入 "1 2 3 4 5 6"
+                val text = compactLabel(action.text)
                 if (OTP_LIKE.matches(text)) {
                     return "输入 4~8 位数字（可能是验证码/支付密码）"
                 }
-                if (targetLabel.contains("密码") || targetLabel.contains("验证码") ||
-                    targetLabel.contains("卡号") || targetLabel.contains("身份证")
+                // 标签同理：「密 码」「验\u200B证码」也要命中
+                val target = compactLabel(targetLabel)
+                if (target.contains("密码") || target.contains("验证码") ||
+                    target.contains("卡号") || target.contains("身份证")
                 ) {
                     return "在「${targetLabel.take(24)}」里输入敏感信息"
                 }
@@ -161,11 +178,12 @@ internal object AgentLimits {
     /** 标签命中的高风险词；`获取验证码` 这类"请求验证码"不算 */
     private fun highRiskWord(raw: String): String? {
         val label = raw.lowercase()
-        if (label.contains("获取验证码") || label.contains("发送验证码")) return null
+        val compact = compactLabel(label)
+        if (compact.contains("获取验证码") || compact.contains("发送验证码")) return null
         val englishTokens = label.split(Regex("[^a-z]")).toHashSet()
         return HIGH_RISK_WORDS.firstOrNull { word ->
             if (word.all { it in 'a'..'z' }) word in englishTokens
-            else label.contains(word)
+            else compact.contains(word)
         }
     }
 

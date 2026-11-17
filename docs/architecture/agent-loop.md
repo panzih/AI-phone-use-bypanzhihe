@@ -1,7 +1,7 @@
 # Agent 主循环
 
 > 对应代码：`app/src/main/java/com/aiphone/assistant/agent/`
-> 最后更新：2026-11-17 / 0.17.1
+> 最后更新：2026-11-17 / 0.17.2
 
 这篇文档只讲**一次任务从开始到收尾**在代码里怎么流动，以及每一步的权责边界。
 提示词协议、动作字段、坐标换算不在这里展开，见 `AgentPrompt` / `ActionParser` 的注释。
@@ -158,6 +158,7 @@ AgentSession.run(task)
 | 边界 | 默认 | 代码位置 |
 |---|---|---|
 | 高风险动作（支付/转账/删除/发送/授权/验证码） | 拦截 | `AgentActionExecutor` + `RiskReview` |
+| 页面文字注入（提示词注入） | 只当数据 + 控件文字一行化 + 记忆防污染 | `AgentPrompt` + `UiNode` + `Memory` |
 | `browser_eval` | 关闭 | `AgentActionExecutor` + `AppSettings.allowBrowserEval` |
 | `browser_open` 协议 | 只允许 http/https | `BrowserUrl` + `BrowserActivity` 导航层 |
 | 公网明文 HTTP API | 发送前拒绝 | `EndpointSafety` + `LlmClient` / `ModelListFetcher` |

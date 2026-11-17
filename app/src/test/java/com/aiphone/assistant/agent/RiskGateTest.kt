@@ -69,6 +69,17 @@ class RiskGateTest {
     }
 
     @Test
+    fun `中文高风险词被空白或零宽拆开也命中`() {
+        listOf("支 付", "转\n账", "删\u200B除", "发\u202E送").forEach { label ->
+            val (action, target) = tap(label)
+            assertNotNull(
+                "应命中：$label",
+                AgentLimits.highRiskReason(action, listOf(target), target),
+            )
+        }
+    }
+
+    @Test
     fun `输入 4 到 8 位数字按验证码处理`() {
         val target = node("验证码", index = 3)
         val action = TouchAction(kind = TouchKind.INPUT_TEXT, targetIndex = 3, text = "123456")
@@ -76,6 +87,17 @@ class RiskGateTest {
 
         val normal = TouchAction(kind = TouchKind.INPUT_TEXT, targetIndex = 3, text = "你好")
         assertNull(AgentLimits.highRiskReason(normal, listOf(target), target))
+    }
+
+    @Test
+    fun `验证码数字和密码标签被空白拆开也命中`() {
+        val target = node("密 码", index = 3)
+        val spacedOtp = TouchAction(
+            kind = TouchKind.INPUT_TEXT,
+            targetIndex = 3,
+            text = "1 2 3 4 5 6",
+        )
+        assertNotNull(AgentLimits.highRiskReason(spacedOtp, listOf(target), target))
     }
 
     @Test

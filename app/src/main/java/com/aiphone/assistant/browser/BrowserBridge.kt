@@ -391,7 +391,9 @@ object BrowserDom {
         val nodes = elements.mapIndexedNotNull { i, raw ->
             val m = raw as? Map<*, *> ?: return@mapIndexedNotNull null
             val tag = (m["tag"] as? String ?: "?").uppercase()
-            val text = (m["text"] as? String ?: "").trim()
+            // 页面文字是不可信输入：压成一行，避免伪造「# 用户补充的指令」
+            // 这类提示词结构（JS 侧只压了空白，控制符这里再兜一次）
+            val text = UiNode.sanitize(m["text"] as? String ?: "")
             val x = num(m["x"])
             val y = num(m["y"])
             // 宽高取绝对值再兜个底：个别元素 flex 布局下会报 0，直接丢掉会让
@@ -436,8 +438,9 @@ object BrowserDom {
      * 会让模型以为页面上只有 60 个元素，然后反复找不到某个按钮。
      */
     fun render(snapshot: Snapshot): String = buildString {
-        append("页面：").append(snapshot.url.ifBlank { "(空白页)" })
-        append(" ｜ 标题：").append(snapshot.title.ifBlank { "(无标题)" })
+        // 网址和标题也是页面说了算：同样压成一行，别让它们伪造表头
+        append("页面：").append(UiNode.sanitize(snapshot.url).ifBlank { "(空白页)" })
+        append(" ｜ 标题：").append(UiNode.sanitize(snapshot.title).ifBlank { "(无标题)" })
         append(" ｜ 元素 ").append(snapshot.total).append(" 个")
         if (snapshot.truncated) append("（已截断）")
         for (node in snapshot.nodes) {

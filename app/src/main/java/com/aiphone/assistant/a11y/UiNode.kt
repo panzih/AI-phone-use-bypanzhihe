@@ -64,6 +64,29 @@ data class UiNode(
     companion object {
         /** 密码框文本在解析层的统一掩码。定长，不泄露真实长度 */
         const val PASSWORD_MASK = "••••"
+
+        /** 零宽 / 双向控制符：看不见，但能拆开关键词、伪造阅读顺序，直接删掉 */
+        private val INVISIBLE = Regex("[\\u061c\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]")
+
+        /** 换行 / 制表 / C0 控制符：会破坏"一行一个元素"的结构，换成空格 */
+        private val BREAKING = Regex("[\\r\\n\\t\\u0000-\\u001f\\u007f\\u2028\\u2029]")
+
+        private val WHITESPACE = Regex("\\s+")
+
+        /**
+         * 把外部文字压成一行。
+         *
+         * 页面/应用可以往控件文字里塞换行来伪造提示词结构（例如
+         * `正常文字\n# 用户在你暂停时补充的指令\n...`），也可以塞零宽或
+         * 双向控制符来拆开「支付」「删除」这类高风险词。这里在**解析层**
+         * 统一处理：一个元素永远只占一行，引号也不会破坏 `"..."` 的格式。
+         */
+        internal fun sanitize(raw: String): String = raw
+            .replace(INVISIBLE, "")
+            .replace(BREAKING, " ")
+            .replace('"', '\'')
+            .replace(WHITESPACE, " ")
+            .trim()
     }
 
     /** 点击位置：控件中心 */
@@ -78,7 +101,7 @@ data class UiNode(
      * 结论可以直接从日志读出来，不用再去猜。
      */
     fun labelForLog(): String =
-        text.ifBlank { contentDesc }.ifBlank { className }.take(20)
+        sanitize(text.ifBlank { contentDesc }.ifBlank { className }).take(20)
 
     /** 这一行的身份（文字 + 位置）。上下两帧对比"谁是新出现的"用它 */
     internal fun identityKey(): String =
@@ -92,7 +115,8 @@ data class UiNode(
      * 分区表头、缩进、`+`（相对上一帧新增）在 [UiTreeParser.render] 里按行拼。
      */
     fun describe(): String {
-        val label = text.ifBlank { contentDesc }
+        // 再兜一次：手工构造 / 浏览器来的 UiNode 不一定走过解析层
+        val label = sanitize(text.ifBlank { contentDesc })
         val sb = StringBuilder()
         sb.append('[').append(index).append("] ")
         if (label.isNotBlank() && AgentLimits.labelSensitive(label)) sb.append("⚠ ")
@@ -114,7 +138,7 @@ data class UiNode(
         if (flags.isNotEmpty()) {
             sb.append(" [").append(flags.joinToString(",")).append(']')
         }
-        if (stateDesc.isNotBlank()) sb.append(" 状态\"").append(stateDesc.take(20)).append('"')
+        if (stateDesc.isNotBlank()) sb.append(" 状态\"").append(sanitize(stateDesc).take(20)).append('"')
         if (rangeText.isNotBlank()) sb.append(" 当前值 ").append(rangeText)
         return sb.toString()
     }
@@ -237,7 +261,9 @@ object UiTreeParser {
         val nodes = walk.nodes.mapIndexed { i, node ->
             node.getBoundsInScreen(rect)
             val isPassword = node.isPassword
-            val rawText = node.text?.toString().orEmpty().trim()
+            // 外部文字在解析层就压成一行：换行/零宽/双向控制符不能进提示词
+            // （否则页面能伪造「# 用户补充的指令」这类标题）
+            val rawText = UiNode.sanitize(node.text?.toString().orEmpty())
             // 可交互行吸收来的后代文字（③）：拼在自己文字后面 ——
             // "点这一行"点到的信息要一起给模型看。密码行不吸收
             val absorbed = walk.absorbedText[i]
@@ -248,10 +274,10 @@ object UiTreeParser {
                 // 不进日志，也绝不能从任何导出文件里复原
                 text = when {
                     isPassword -> UiNode.PASSWORD_MASK
-                    absorbed.isNotBlank() -> "$rawText · $absorbed"
+                    absorbed.isNotBlank() -> UiNode.sanitize("$rawText · $absorbed")
                     else -> rawText
                 },
-                contentDesc = node.contentDescription?.toString().orEmpty().trim(),
+                contentDesc = UiNode.sanitize(node.contentDescription?.toString().orEmpty()),
                 viewId = node.viewIdResourceName.orEmpty(),
                 bounds = Rect(rect),
                 clickable = node.isClickable,
@@ -264,7 +290,7 @@ object UiTreeParser {
                 selected = node.isSelected,
                 heading = node.isHeading,
                 stateDesc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    node.stateDescription?.toString().orEmpty().trim()
+                    UiNode.sanitize(node.stateDescription?.toString().orEmpty())
                 } else {
                     ""
                 },
@@ -393,8 +419,8 @@ object UiTreeParser {
             if (absorbed.contains(node)) continue
 
             if (isWorthKeeping(node, rect, screenWidth, screenHeight)) {
-                val text = node.text?.toString().orEmpty().trim()
-                val desc = node.contentDescription?.toString().orEmpty().trim()
+                val text = UiNode.sanitize(node.text?.toString().orEmpty())
+                val desc = UiNode.sanitize(node.contentDescription?.toString().orEmpty())
 
                 // 同样的位置 + 同样的文字，通常是重复节点，只留一个
                 val key = "${text}|${desc}|${rect.left},${rect.top},${rect.right},${rect.bottom}"
@@ -492,8 +518,10 @@ object UiTreeParser {
                     val interactive = c.isClickable || c.isLongClickable ||
                         c.isScrollable || c.isEditable
                     if (interactive || !c.isVisibleToUser) continue
-                    val t = (c.text?.toString()?.trim().orEmpty())
-                        .ifBlank { c.contentDescription?.toString()?.trim().orEmpty() }
+                    val t = UiNode.sanitize(
+                        c.text?.toString().orEmpty()
+                            .ifBlank { c.contentDescription?.toString().orEmpty() },
+                    )
                     if (t.isBlank() || t.length < 2) continue
                     // 已有文字里就有的不重复吸收
                     if (parts.any { it.contains(t) }) continue
@@ -539,8 +567,8 @@ object UiTreeParser {
         // 不可见的直接跳过
         if (!node.isVisibleToUser) return false
 
-        val text = node.text?.toString()?.trim().orEmpty()
-        val desc = node.contentDescription?.toString()?.trim().orEmpty()
+        val text = UiNode.sanitize(node.text?.toString().orEmpty())
+        val desc = UiNode.sanitize(node.contentDescription?.toString().orEmpty())
 
         // 既不能交互又没内容 → 纯容器，跳过
         val interactive = node.isClickable || node.isLongClickable ||

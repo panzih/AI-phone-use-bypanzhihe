@@ -36,11 +36,11 @@ class PromptFreezeTest {
         val hash = sha256(prompt)
         // 有意修改提示词后：跑一次测试，把失败信息里的实际哈希填回来，
         // 并把 AgentPrompt.VERSION 升一位（老上下文要按设计重开）。
-        // 上一版（0.17.0）：4bcf05b4888a3c473d5e2af76aaf694a7c4b53063cf2a12f0f7e45d487360a46
+        // 上一版（0.17.1）：3b0720b2d7529e9c44fc039ee3908a0dc154f058415c5dfdfc2e7c0762b413c8
         assertEquals(
             "系统提示词被改动了。若是有意的：更新下面的哈希并升级 AgentPrompt.VERSION；" +
                 "若是无意的：恢复原文。实际 SHA-256 = $hash",
-            "3b0720b2d7529e9c44fc039ee3908a0dc154f058415c5dfdfc2e7c0762b413c8",
+            "2c2b81321e6ec6802a47644f08d11c363665937bffca13b86dadebf4d4d11dbf",
             hash,
         )
     }
