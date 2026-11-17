@@ -192,7 +192,6 @@ fun MainScreen(
                     onPauseToggle = onPauseToggle,
                     isRunning = state.isRunning,
                     isPaused = isPaused,
-                    memorySummarizing = state.memorySummarizing,
                     supplementTick = supplementTick,
                     runningHint = state.progress.ifBlank { stringResource(R.string.running_hint) },
                 )
@@ -863,7 +862,6 @@ private fun Composer(
     onPauseToggle: () -> Unit,
     isRunning: Boolean,
     isPaused: Boolean,
-    memorySummarizing: Boolean,
     supplementTick: Long = 0L,
     runningHint: String,
 ) {
@@ -907,12 +905,6 @@ private fun Composer(
                     onPauseToggle = onPauseToggle,
                     onStop = onStop,
                 )
-            }
-
-            // 任务结束后还会调一次模型归纳记忆。任务已经结束、按钮也回到
-            // 「发送」，但后台还在跑 —— 这一行让用户知道它在干什么。
-            if (memorySummarizing) {
-                MemoryStrip()
             }
 
             Row(
@@ -1066,38 +1058,6 @@ private fun VoiceStrip(phase: VoicePhase, seconds: Int, notice: String?) {
             else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
             maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-/**
- * 记忆归纳状态条。
- *
- * 任务已经结束、按钮也回到「发送」，但后台还在跑一次模型调用；
- * 不显示的话用户只看到"什么都没发生"，却已经被计了一次费。
- */
-@Composable
-private fun MemoryStrip() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(AppTheme.accents.sunken)
-            .padding(horizontal = Space.md, vertical = Space.sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(14.dp),
-            strokeWidth = 2.dp,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.width(Space.sm))
-        Text(
-            text = "正在总结记忆…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }

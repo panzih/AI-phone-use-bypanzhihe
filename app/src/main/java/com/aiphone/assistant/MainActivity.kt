@@ -366,13 +366,6 @@ private fun AppRoot(
      */
     var taskTurnStart by host.taskTurnStartState
     var progress by host.progressState
-    /**
-     * 正在排队/进行中的记忆归纳数量。
-     *
-     * 用计数而不是布尔：任务可能连着结束两次，第二次写入会排队等第一次；
-     * 布尔会在第一次结束时提前把「正在总结记忆」关掉。
-     */
-    var memoryJobs by remember { mutableStateOf(0) }
     var toast by remember { mutableStateOf<String?>(null) }
 
     // ---- 操作记录 ----
@@ -485,15 +478,28 @@ private fun AppRoot(
      */
     var persistTick by remember { mutableStateOf(0) }
 
-    fun addLog(kind: LogKind, text: String, label: String? = null) {
-        logs.add(
-            LogEntry(
-                id = "l${logs.size}_${System.currentTimeMillis()}",
-                kind = kind,
-                text = text,
-                label = label,
-            )
+    fun addLog(kind: LogKind, text: String, label: String? = null): LogEntry {
+        val entry = LogEntry(
+            id = "l${logs.size}_${System.currentTimeMillis()}",
+            kind = kind,
+            text = text,
+            label = label,
         )
+        logs.add(entry)
+        return entry
+    }
+
+    /**
+     * 就地更新一条已经显示的消息（例如「正在总结记忆…」→「记忆总结完成」）。
+     *
+     * 列表长度不变，不会触发 `LaunchedEffect(logs.size)` 的自动滚动；
+     * 但落盘防抖也以 size 为 key，所以这里要自增 [persistTick]。
+     */
+    fun updateLog(id: String, text: String, kind: LogKind = LogKind.THOUGHT, label: String? = null) {
+        val i = logs.indexOfFirst { it.id == id }
+        if (i < 0) return
+        logs[i] = logs[i].copy(kind = kind, text = text, label = label)
+        persistTick++
     }
 
     // ---- 语音输入 ----
@@ -999,30 +1005,6 @@ private fun AppRoot(
                     )
                     progress = ""
 
-                    // 开了记忆就让 AI 把这一趟归纳成一条「用户洞察」。
-                    // 放在这里而不是等上下文被清空 —— 任务刚结束时记录最新鲜，
-                    // 而且用户可能几个月都不手动清一次上下文。
-                    // 记忆归纳是后台动作：不插对话卡片，只在底部显示
-                    // 「正在总结记忆…」，结果用轻 toast 提示（见 onDone）
-                    memoryJobs++
-                    memorizeAfterTask(
-                        scope = scope,
-                        context = context.applicationContext,
-                        settings = settings,
-                        conversation = conversation,
-                        sinceTurn = taskTurnStart,
-                        llm = llm,
-                        onDone = { outcome ->
-                            memoryJobs = (memoryJobs - 1).coerceAtLeast(0)
-                            // 新增记忆给轻 toast、不占对话卡片；没写入是常态
-                            // （没什么可记），保持安静，原因仍在 run.log 可查
-                            if (outcome is MemoryWriter.Outcome.Written) {
-                                toast = "已新增记忆：${outcome.title}"
-                            }
-                            refreshStats()
-                        },
-                    )
-
                     // 收尾卡只出现一次。
                     //
                     // Agent 在结束之前，往往已经用更具体的标签（「做不了」/「完成」/
@@ -1045,6 +1027,41 @@ private fun AppRoot(
                             if (success) "任务完成" else "任务结束",
                         )
                     }
+
+                    // 收尾卡之后再出现「正在总结记忆…」，像一条普通消息。
+                    // 放在这里而不是等上下文被清空 —— 任务刚结束时记录最新鲜，
+                    // 而且用户可能几个月都不手动清一次上下文。
+                    // 总结完成后同一条就地更新，不会再冒一条新消息。
+                    var memoryLogId: String? = null
+                    memorizeAfterTask(
+                        scope = scope,
+                        context = context.applicationContext,
+                        settings = settings,
+                        conversation = conversation,
+                        sinceTurn = taskTurnStart,
+                        llm = llm,
+                        onStart = {
+                            memoryLogId = addLog(
+                                LogKind.THOUGHT,
+                                "正在总结记忆…",
+                                "记忆",
+                            ).id
+                        },
+                        onDone = { outcome ->
+                            val id = memoryLogId
+                            if (id != null) {
+                                val text = when (outcome) {
+                                    is MemoryWriter.Outcome.Written ->
+                                        "记忆总结完成：${outcome.title}"
+
+                                    is MemoryWriter.Outcome.NotWritten ->
+                                        "记忆总结完成（未写入：${outcome.reason}）"
+                                }
+                                updateLog(id, text, LogKind.THOUGHT, "记忆")
+                            }
+                            refreshStats()
+                        },
+                    )
                 }
 
                 override fun isStopRequested(): Boolean = stopRequested
@@ -1710,7 +1727,6 @@ private fun AppRoot(
                 autoCapStats = autoCapStats,
                 appVersion = appVersion,
                 progress = progress,
-                memorySummarizing = memoryJobs > 0,
                 toast = toast,
                 recordingActive = recordingActive,
                 recordedSteps = recordedSteps,
@@ -1968,6 +1984,8 @@ private fun memorizeAfterTask(
     conversation: Conversation,
     sinceTurn: Int,
     llm: LlmClient,
+    /** 确认这一轮真的会调模型之后才触发（开关关着 / 没轮次时不显示） */
+    onStart: () -> Unit = {},
     onDone: (MemoryWriter.Outcome) -> Unit,
 ) {
     if (!settings.memoryEnabled) {
@@ -1982,6 +2000,7 @@ private fun memorizeAfterTask(
         onDone(MemoryWriter.Outcome.NotWritten("这段任务没有可归纳的轮次"))
         return
     }
+    onStart()
     scope.launch {
         // ⚠️ **必须切到 IO 线程。**
         //
