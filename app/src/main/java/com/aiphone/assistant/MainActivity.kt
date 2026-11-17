@@ -1326,14 +1326,21 @@ private fun AppRoot(
             // 悬浮条的背景模糊是**设置项**（默认关）：在起服务之前把它同步过去，
             // 服务里建窗口时才读得到
             OverlayBus.overlayBlurEnabled = settings.overlayBlur
+            // 悬浮条**默认不出现**：等模型在第一步选完通道、且确实在前屏操作时
+            // 才由 Agent 打开（0.16.0，用户 2026-11-17）。这里先清一次，
+            // 免得上一趟留下的 true 让这一趟刚发任务就闪出来。
+            OverlayBus.setOverlayAllowed(false)
             if (Settings.canDrawOverlays(context)) {
                 OverlayService.start(context.applicationContext)
             } else {
+                // 这条**不是错误**：任务照常跑，只是屏幕上看不到进度条，
+                // 通知栏里仍有「急停」。用 SYSTEM 而不是 ERROR 渲染，
+                // 免得一句常驻的红字让用户以为出了故障。
                 addLog(
-                    LogKind.ERROR,
-                    "没有悬浮窗权限，这次看不到屏幕上的进度面板；" +
-                        "下拉通知栏仍可用「急停」。到「权限」页里开一下可显示悬浮窗。",
-                    "悬浮窗不可用",
+                    LogKind.SYSTEM,
+                    "没开悬浮窗权限：任务照常跑，进度看通知栏（那里有「急停」）。" +
+                        "想要屏幕上的进度条，到「权限」页开一下悬浮窗。",
+                    "悬浮窗",
                 )
             }
 
@@ -1460,6 +1467,8 @@ private fun AppRoot(
                 runOnVirtualDisplay = false
                 isRunning = false
                 OverlayBus.taskRunning = false
+                // 这一趟结束了，悬浮条回到"默认不显示"，下一趟重新由第一步决定
+                OverlayBus.setOverlayAllowed(false)
                 progress = ""
                 // 任务结束，无条件把纸盒界面拉回前台（无论中途有没有让开）
                 bringAppToFront()

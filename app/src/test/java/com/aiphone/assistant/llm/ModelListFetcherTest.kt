@@ -1,6 +1,7 @@
 package com.aiphone.assistant.llm
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,5 +37,31 @@ class ModelListFetcherTest {
             "glm-5.3",
             "jev-1.13",             // 注意：jev-1.13-free 是免费的，这个不是
         ).forEach { assertFalse(it, ModelListFetcher.keepFreeModel(it)) }
+    }
+
+    /**
+     * 0.16.0：地址写错时**先说人话**。
+     *
+     * 现场：用户把 `http://10.0.2.2:8899` 里的冒号打成了分号，界面上显示的是
+     * `获取失败: no protocol: http://10.0.2.2;8899/v1/models` —— 一句英文
+     * Java 异常。现在要在发请求之前就拦住，并指出该看哪里。
+     */
+    @Test
+    fun `地址没有 scheme 时给中文提示，而不是 Java 异常`() {
+        val e = assertThrows(IllegalStateException::class.java) {
+            ModelListFetcher.fetch("10.0.2.2:8899", "sk-test")
+        }
+        val msg = e.message.orEmpty()
+        assertTrue(msg, msg.contains("http://"))
+        assertFalse(msg, msg.contains("no protocol"))
+        assertFalse(msg, msg.contains("MalformedURL"))
+    }
+
+    @Test
+    fun `冒号和斜杠混进中文标点也会被拦住`() {
+        val e = assertThrows(IllegalStateException::class.java) {
+            ModelListFetcher.fetch("http：//192.168.3.11:8899", "sk-test")
+        }
+        assertTrue(e.message.orEmpty(), e.message.orEmpty().contains("格式不对"))
     }
 }

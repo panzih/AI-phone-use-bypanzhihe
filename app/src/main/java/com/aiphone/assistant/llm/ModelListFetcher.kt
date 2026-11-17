@@ -41,14 +41,29 @@ object ModelListFetcher {
         }
 
         val url = modelsEndpoint(baseUrl)
+        // 地址不合法时**先说人话**：以前这里直接把 new URL(...) 的
+        // MalformedURLException 抛到界面上，用户看到的是
+        // 「获取失败: no protocol: http://10.0.2.2;8899/v1/models」——
+        // 一句英文 Java 异常，根本看不出是地址里混进了中文标点/漏了冒号。
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            throw IllegalStateException(
+                "接口地址格式不对：要以 http:// 或 https:// 开头，现在填的是「$baseUrl」。" +
+                    "检查一下是不是把冒号打成了分号、或者混进了空格/中文标点。" +
+                    "常见写法：https://api.deepseek.com，或 http://192.168.1.10:11434/v1",
+            )
+        }
         Log.i(TAG, "拉模型列表：$url")
 
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 15_000
-            setRequestProperty("Authorization", "Bearer $apiKey")
-            setRequestProperty("Accept", "application/json")
+        val conn = try {
+            (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 15_000
+                readTimeout = 15_000
+                setRequestProperty("Authorization", "Bearer $apiKey")
+                setRequestProperty("Accept", "application/json")
+            }
+        } catch (t: Throwable) {
+            throw IllegalStateException(describeNetworkError(t, url), t)
         }
 
         try {
@@ -72,8 +87,40 @@ object ModelListFetcher {
             // 排序一下，不然每次顺序都不一样，用户眼花
             ids.sort()
             return ids
+        } catch (t: IllegalStateException) {
+            throw t
+        } catch (t: Throwable) {
+            // 连不上 / 解析超时 / 读到一半断了：同样是"人话"，不是栈信息
+            throw IllegalStateException(describeNetworkError(t, url), t)
         } finally {
             conn.disconnect()
+        }
+    }
+
+    /**
+     * 把网络异常翻译成用户能照做的中文（0.16.0）。
+     *
+     * 判据只按异常类型分：这几种的"下一步动作"完全不同 ——
+     * 地址写错要改地址，域名解析失败要查网络/拼写，连不上要查端口，
+     * 超时是对方慢。混成一句"获取失败"用户没法处理。
+     */
+    private fun describeNetworkError(t: Throwable, url: String): String {
+        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: url
+        return when (t) {
+            is java.net.MalformedURLException ->
+                "接口地址格式不对（$url），检查冒号、斜杠和空格"
+            is java.net.UnknownHostException ->
+                "域名解析失败：$host。检查地址拼写，或看看手机网络是否正常"
+            is java.net.ConnectException ->
+                "连不上 $host：端口没开、或被防火墙拦住了"
+            is java.net.SocketTimeoutException ->
+                "连接 $url 超时：服务端没响应（本地模型是不是没启动？）"
+            is javax.net.ssl.SSLException ->
+                "HTTPS 握手失败：$host 的证书有问题，或地址该用 http://"
+            is java.io.IOException ->
+                "网络出错（${t.message ?: t.javaClass.simpleName}）：$url"
+            else ->
+                "拉模型列表失败：${t.message ?: t.javaClass.simpleName}"
         }
     }
 

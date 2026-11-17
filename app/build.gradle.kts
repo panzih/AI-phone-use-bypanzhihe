@@ -52,8 +52,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 88      // 0.15.0：界面视觉刷新（配色 / 圆角 / 字阶 / 按钮）
-        versionName = "0.15.0"
+        versionCode = 89      // 0.16.0：卡住不再硬停 + 第一步选通道 + 错误翻译
+        versionName = "0.16.0"
         // 设备冒烟测试：androidTest 用 AndroidJUnitRunner 跑
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 自动更新总开关（见文件开头 enableUpdate 的说明）

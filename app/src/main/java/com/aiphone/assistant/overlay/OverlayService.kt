@@ -174,7 +174,11 @@ class OverlayService : Service() {
                     android.util.Log.i(TAG, "没有悬浮窗权限，仅保留前台服务与急停通知")
                     return START_STICKY
                 }
-                showOverlay()
+                // 0.16.0：**先不建窗口**。任务第一步还没决定走哪条通道，
+                // 用户 2026-11-17 明确要求「模型选出来之前不弹」。
+                // 由 Agent 每步调 OverlayBus.setOverlayAllowed(...) 触发，
+                // 第一次允许时 [setVisible] 才把窗口建起来。
+                if (OverlayBus.overlayAllowed) showOverlay()
             }
         }
         return START_STICKY
@@ -653,6 +657,9 @@ class OverlayService : Service() {
      */
     fun setVisible(visible: Boolean) {
         main.post {
+            // 0.16.0：窗口是**按需**建的（任务第一步还没选通道时不该有悬浮条）。
+            // 第一次被允许显示时在这里补建，之后的 hide/show 只是改可见性。
+            if (visible && statusView == null && canDrawOverlays()) showOverlay()
             val v = if (visible) View.VISIBLE else View.INVISIBLE
             statusView?.visibility = v
             rippleView?.visibility = v
@@ -686,6 +693,8 @@ class OverlayService : Service() {
      */
     fun updateRecording(count: Int) {
         main.post {
+            // 窗口还没建（第一步 / 副屏 / 浏览器通道）：这些文本控件都是 lateinit，先挡一下
+            if (statusView == null) return@post
             phaseText.text = "录制中"
             (phaseDot.background as? GradientDrawable)?.setColor(RECORDING_COLOR)
             stepText.text = "已记录 $count 步"
@@ -709,6 +718,8 @@ class OverlayService : Service() {
         totalTokens: Int? = null,
     ) {
         main.post {
+            // 窗口还没建（第一步 / 副屏 / 浏览器通道）：指标照常算，但没地方画
+            if (statusView == null) return@post
             ttftText.text = when {
                 ttftMs <= 0 -> "TTFT —"
                 ttftMs < 1000 -> "TTFT ${ttftMs}ms"
@@ -738,6 +749,7 @@ class OverlayService : Service() {
     /** 切换阶段。圆点颜色和文字一起变 */
     fun updatePhase(phase: AgentPhase) {
         main.post {
+            if (statusView == null) return@post
             phaseText.text = phase.label
             (phaseDot.background as? GradientDrawable)?.setColor(phase.color)
         }
@@ -766,6 +778,7 @@ class OverlayService : Service() {
 
     fun updateStatus(step: Int, maxSteps: Int, current: String, nextHint: String) {
         main.post {
+            if (statusView == null) return@post
             // 普通任务里「补充」要在（录制结束回到任务时它可能还是 GONE）
             supplementButton?.visibility = View.VISIBLE
             stepText.text = stepsLabel(step, maxSteps)

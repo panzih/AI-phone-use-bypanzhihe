@@ -1276,12 +1276,23 @@ class LlmClient(private val cfg: LlmConfig) {
      *
      * 唯一例外是 SSL 握手失败 —— 那通常意味着证书/域名配置不对，
      * 重发只会浪费时间，直接判死更快让用户看到真正的问题。
+     *
+     * 地址格式错误（0.16.0）：以前会落到最后的兜底分支，用户看到
+     * 「请求出错：MalformedURLException no protocol」——同样是英文栈信息。
+     * 现在单独翻译，并给出常见写法。
      */
     private fun throwableToTry(t: Throwable): Try = when (t) {
         // ⚠️ SocketTimeoutException 是 InterruptedIOException 的子类，
         // 这两个分支的先后顺序不能调
         is java.net.SocketTimeoutException ->
             Try.Retry("超时（${cfg.timeoutMs / 1000}s 没等到响应）")
+        // MalformedURLException 也是 IOException 的子类，必须排在通用 IO 分支之前
+        is java.net.MalformedURLException -> Try.Fatal(
+            "接口地址格式不对：${t.message ?: cfg.baseUrl}。\n" +
+                "检查「设置 → 模型」里的地址：要以 http:// 或 https:// 开头，" +
+                "冒号不能写成分号，中间不能夹空格。\n" +
+                "常见写法：https://api.deepseek.com，或 http://192.168.1.10:11434/v1",
+        )
         // SSLException 也是 IOException 的子类，必须放在通用 IO 分支之前。
         // 证书或协议配置错误时重发同一请求只会重复失败。
         is javax.net.ssl.SSLException -> Try.Fatal("HTTPS 握手失败：${t.message}")

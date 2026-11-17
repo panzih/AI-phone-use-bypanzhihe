@@ -73,6 +73,31 @@ object OverlayBus {
     @Volatile
     var overlayBlurEnabled: Boolean = false
 
+    /**
+     * 现在允许悬浮条出现在屏幕上吗（0.16.0）。
+     *
+     * 用户 2026-11-17 定：**第一步不弹悬浮窗** —— 模型还没决定在哪条通道干活；
+     * 而且只有「操作前屏」时才有必要给用户看进度和急停，
+     * 后台（副屏）和内置浏览器两种通道都**不显示**。
+     *
+     * 默认 false：服务起来时先不建窗口，由 Agent 每步按通道状态改它。
+     * [show] 也要看它 —— 截图前 hide、截完 show 这条路径不能把
+     * 「本来就不该显示」的通道又拉回来。
+     */
+    @Volatile
+    var overlayAllowed: Boolean = false
+        private set
+
+    /**
+     * 改「允不允许显示」。放这里而不是让 Agent 直接调 Service：
+     * 判断依据（通道 + 第几步）在 Agent 那边，而窗口在 Service 里。
+     */
+    fun setOverlayAllowed(allowed: Boolean) {
+        if (overlayAllowed == allowed) return
+        overlayAllowed = allowed
+        service?.setVisible(allowed)
+    }
+
     /** 悬浮窗上按过急停。Agent 每步都会检查它 */
     @Volatile
     var stopRequested: Boolean = false
@@ -453,7 +478,14 @@ object OverlayBus {
         service?.setVisible(false)
     }
 
+    /**
+     * 截图/注入结束后恢复显示。
+     *
+     * ⚠️ 必须再看一眼 [overlayAllowed]：副屏 / 浏览器 / 第一步本来就不该显示，
+     * 这里无条件 show 会把它又拉回来（而且会抢走用户正在用的主屏注意力）。
+     */
     fun show() {
+        if (!overlayAllowed) return
         service?.setVisible(true)
     }
 }

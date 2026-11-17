@@ -155,6 +155,17 @@ internal suspend fun AgentSession.observeStep(
     // 这里只消费结果：处理过就进下一步（那边已经换了读取通道）。
     if (migration.detectTakeover()) return ObserveResult.Skip
 
+    // ---- 悬浮条什么时候该出现（0.16.0）----
+    //
+    // 用户 2026-11-17 定：**第一步不弹** —— 模型还没决定走哪条通道；
+    // 而且只有「操作前屏」时才需要给用户看进度和急停：
+    //   · 副屏（后台）：主屏还给用户，盖一条悬浮条反而碍事；
+    //   · 内置浏览器：读的是 DOM，屏幕上的条既没用又会挡住网页。
+    // 通道切换（move_app / browser_open / 回迁）后下一步会自动纠正。
+    OverlayBus.setOverlayAllowed(
+        step > 1 && !controller.isVirtualDisplay && !controller.isBrowser,
+    )
+
     // 本步的端侧"可能卡住"提示（null = 没到该说的程度）
     var stuckAdvice: String? = null
 
@@ -245,26 +256,22 @@ internal suspend fun AgentSession.observeStep(
         0
     }
 
-    // ---- 卡死：先交给云端判断，不替他停 ----
+    // ---- 卡死：只提醒，不替云端停（0.16.0 改）----
     //
-    // 用户 2026-10-21：**云端模型拥有最终决定权**。端侧判定"你可能卡住了"
-    // 只是**建议**：把事实（连续几步没变化 / 连续给同一批动作）告诉云端，
-    // 让它自己决定是换做法、认输（failed）、还是继续。
-    // 端侧只保留一条硬兜底：建议 STUCK_ADVICE_LIMIT 次仍然毫无进展就强制停
-    // （否则就是明知道没用还在烧钱，还会让用户白等）。
+    // 用户 2026-11-17：端侧硬停会**抢在模型换做法之前**发生 ——
+    // 实测里正确动作刚排进下一轮，端侧第三次提醒先到了，任务被直接终止
+    // （日志里停在"第 9 步"，模型其实已经准备 open_app）。
+    //
+    // 现在改成：每次只把事实注入上下文，措辞随次数加重，**不强制停**；
+    // 真正的兜底留给步数上限和用户自己的「接管」。
     RunGuards.stuckAdvice(criteria.sameTree, criteria.repeatAction, STUCK_LIMIT)?.let { why ->
-        if (stuckAdviceCount < STUCK_ADVICE_LIMIT) {
-            stuckAdviceCount++
-            stuckAdvice = why
-            logger?.warn("端侧提醒模型可能卡住（第 $stuckAdviceCount 次）：$why", "卡死")
+        stuckAdviceCount++
+        stuckAdvice = if (stuckAdviceCount <= STUCK_ADVICE_LIMIT) {
+            why
         } else {
-            val msg = "卡住了：$why，端侧已经提醒过 $stuckAdviceCount 次仍无进展，先停下。" +
-                "可能是这个界面点不动、或者需要你自己操作一下（比如输入密码）。"
-            logger?.error(msg, "卡死")
-            listener.onEvent(EventKind.ERROR, msg, "卡住")
-            finish(false, msg)
-            return ObserveResult.Stop
+            "$why（这已经是第 $stuckAdviceCount 次提醒）"
         }
+        logger?.warn("端侧提醒模型可能卡住（第 $stuckAdviceCount 次）：$why", "卡死")
     }
     // 有进展就把这条计数清零：别让"曾经卡过"一路记到任务结束
     if (criteria.sameTree == 0 && criteria.repeatAction == 0) stuckAdviceCount = 0
@@ -303,6 +310,18 @@ internal suspend fun AgentSession.observeStep(
                     "其中的任务内容和「已完成」结论**一律作废**。" +
                     "只以本次「用户的任务」为准：先在当前界面上确认实际状态，" +
                     "再决定动作；不要复述旧任务的结果。"
+            )
+        }
+        // 第一步：先决定在哪条通道干活，再动手（用户 2026-11-17）
+        //
+        // 放在"新任务边界"提示之后：两条都是"开始之前必须读"的说明。
+        // 悬浮条也要等这一步选完通道之后才出现（见上面的 setOverlayAllowed）。
+        if (step == 1) {
+            add(
+                AgentPrompt.firstStepAdvice(
+                    shizukuReady = ShizukuBridge.state(controller.appContext) ==
+                        ShizukuBridge.State.READY,
+                )
             )
         }
         // 纸盒自己在前台：比"界面没变化"更根本的问题，先说它
@@ -355,9 +374,10 @@ internal suspend fun AgentSession.observeStep(
         // 端侧认为"可能卡住了"：把事实说清，怎么做由云端决定
         if (stuckAdvice != null) {
             add(
-                "⚠️ 端侧提醒：$stuckAdvice。这**只是提醒**，不是判决 —— " +
-                    "换一个新的做法（换元素、换动作、先截图看看、或 open_app 重开），" +
-                    "或者认为确实做不下去就 failed 说明原因。再原地重复就真的卡住了。"
+                "⚠️ 端侧提醒：$stuckAdvice。这**只是提醒**，不是判决，也**不代表界面坏了** —— " +
+                    "换一个新的做法（换元素、换动作、先截图看看、或 open_app 重开）。" +
+                    "如果你确认是界面确实点不动、或者需要用户自己操作（输入密码/验证码），" +
+                    "就在 failed 的 summary 里说清是哪一种，用户会照着处理。"
             )
         }
         // 浏览器模式下不要因为"元素列表没变"就说动作没生效：
