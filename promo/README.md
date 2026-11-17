@@ -24,7 +24,7 @@
 `legacy/60s`、`legacy/90s`、`legacy/onetake` 以及 `v3`、`compare`、`cover`
 都自带说明（`README.md` / `brief.md` / `发布信息.md`），写明了用途与重建方式；
 `legacy/15s-python/` 只留渲染脚本，已被 `v3/` 取代。旧的 Swift 渲染脚本里用的是本机
-绝对路径（`/Users/panzhihe/DSH/AI手机/promo/...`），换机器要改。
+绝对路径（`~/DSH/AI手机/promo/...`），换机器要改。
 
 ## 备注
 

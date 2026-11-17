@@ -13,7 +13,7 @@
 # Set FPS / SIZE as variables (FPS=60 sh build.sh), not as flags. To re-render one segment, call render.mjs --start/--duration.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-SKILL="${SKILL:-/Users/panzhihe/.workbuddy/skills/motion-showreel}"
+SKILL="${SKILL:-$HOME/.workbuddy/skills/motion-showreel}"
 FPS=${FPS:-30}
 SIZE=${SIZE:-1920x1080}
 AUDIO=${AUDIO:-synth}
