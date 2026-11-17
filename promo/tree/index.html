@@ -21,6 +21,12 @@ const { W, H } = stageSize();
 const ctx = setupCanvas(document.getElementById('c'), W, H);
 const U = H / 1080;
 
+// ---- 卡点：一切出现都落在 0.25s 的格子上，动画只持续 0.12–0.26s，像"啪"地落上去
+// 注意方向：动画在拍点**之前**开始、在拍点那一刻**落定**（不是从拍点才开始动）。
+// 这样观众看到的"落下来"和听到的那一下是同一帧。
+const HIT = (t, at, d = 0.13) => ease.outCubic(seg(t, at - d, at));
+const SNAP = (t, at, d = 0.26) => ease.outCubic(seg(t, at - d, at));
+
 const C = {
   paper: '#F2EFE8',
   ink: '#171A18',
@@ -130,12 +136,13 @@ window.DUR = DUR;
   await loadFonts([
     F_DISP(46), F_DISP(62), F_DISP(74), F_DISP(76), F_DISP(86), F_DISP(92), F_DISP(96),
     F_DISP(112), F_DISP(150), F_DISP(170), F_DISP(200),
-    F_TEXT(28), F_TEXT(32), F_TEXT(36), F_TEXT(40), F_TEXT(42), F_TEXT(58),
-    F_MONO(19), F_MONO(30), F_MONO(34),
+    F_TEXT(28), F_TEXT(32), F_TEXT(36), F_TEXT(44), F_TEXT(52), F_TEXT(58),
+    F_MONO(19), F_MONO(36), F_MONO(41), F_MONO(45),
   ]);
   const S = { hook: shot('hook'), snap: shot('snap'), guess: shot('guess'),
               tree: shot('tree'), edge: shot('edge'), end: shot('end') };
   const flashT = [...hit('snap'), ...hit('impact')].sort((a, z) => a - z);
+
   // 先把截图缩一次存成离屏画布：逐帧 drawImage 同一份位图，
   // 避免大图在每帧解码/缩放时产生细微差异（会让确定性检查报错）
   const rawShot = await loadImage('assets/shots/inst.png');
@@ -158,40 +165,34 @@ window.DUR = DUR;
     ctx.save();
     ctx.translate(W / 2, H / 2); ctx.scale(cam, cam); ctx.translate(-W / 2, -H / 2);
 
-    // ================================================ 01 它看见了什么（0–4）
+    // ================================================ 01 它看见了什么（0–2）
     if (t < S.snap.t0) {
-      const a1 = ease.outCubic(seg(t, 0.04, 0.26));
-      const a2 = ease.outCubic(seg(t, 0.34, 0.56));
-      const a3 = ease.outCubic(seg(t, 0.80, 1.16));
+      const a1 = HIT(t, 0.25);
+      const a2 = HIT(t, 0.50);
+      const a3 = SNAP(t, 0.75);
+      const a4 = HIT(t, 1.00);
+      const a5 = HIT(t, 1.25);
 
-      ctx.save();
-      ctx.globalAlpha = a1;
+      ctx.save(); ctx.globalAlpha = a1;
       txt('AI 点一下屏幕', W / 2, 268, F_DISP(92), C.ink, 'center', 3);
       ctx.restore();
 
-      ctx.save();
-      ctx.globalAlpha = a2;
+      ctx.save(); ctx.globalAlpha = a2;
       txt('它看见了什么？', W / 2, 386, F_DISP(112), C.green, 'center', 4);
       ctx.restore();
 
-      // 左下：一张真实截图
       const pw = 292, ph = pw * 2400 / 1080;
       const px = 232, py = 300;
-      ctx.save();
-      ctx.globalAlpha = a3;
+      ctx.save(); ctx.globalAlpha = a3;
       ctx.fillStyle = '#0d0f0e';
       rr(px - 8, py - 8, pw + 16, ph + 16, 30); ctx.fill();
       ctx.restore();
-
-      ctx.save();
-      ctx.globalAlpha = a3;
+      ctx.save(); ctx.globalAlpha = a3;
       rr(px, py, pw, ph, 24); ctx.clip();
       ctx.drawImage(shotImg, px, py, pw, ph);
       ctx.restore();
 
-      // 右下：一段控件树文本（真实格式）
-      ctx.save();
-      ctx.globalAlpha = a3;
+      ctx.save(); ctx.globalAlpha = a4;
       const lines = [
         '[3] Button "继续" @(540,2175) [可点]',
         '[4] Image  ""     @(300,640)',
@@ -204,51 +205,40 @@ window.DUR = DUR;
       }
       ctx.restore();
 
-      // 中间的分隔与「还是」
-      ctx.save();
-      ctx.globalAlpha = a3 * 0.8;
+      ctx.save(); ctx.globalAlpha = a5;
       txt('还是', 748, 700, F_TEXT(52), C.dim, 'center', 3);
       ctx.restore();
     }
 
-    // ================================================ 02 做法一：发截图（4–11）
+    // ================================================ 02 做法一：发截图（2–6）
     if (t >= S.snap.t0 && t < S.guess.t0) {
       const t0 = S.snap.t0;
-      const a1 = ease.outCubic(seg(t, t0 + 0.04, t0 + 0.26));
-      const grow = ease.inOutCubic(seg(t, t0 + 0.26, t0 + 1.55));
+      const a1 = HIT(t, t0);
+      const grow = ease.inOutCubic(seg(t, t0 + 0.25, t0 + 1.75));
+      const a2 = HIT(t, t0 + 2.00);
+      const a3 = HIT(t, t0 + 2.50);
 
-      ctx.save();
-      ctx.globalAlpha = a1;
+      ctx.save(); ctx.globalAlpha = a1;
       txt('做法一 · 发一张截图', 120, 200, F_TEXT(52), C.dim, 'left', 2);
       ctx.fillStyle = C.faint;
       ctx.fillRect(120, 226, 1680, 1.5);
       ctx.restore();
 
-      // 字符带：从左边一张小截图里"流"出来，一路流到画外
-      const bandY = 330, bandH = 300;
-      const x0 = 120;
-      const maxW = W - 120;
-
+      const bandY = 330, bandH = 300, x0 = 120, maxW = W - 120;
       const pw = 132, ph = pw * 2400 / 1080;
-      ctx.save();
-      ctx.globalAlpha = a1;
+      ctx.save(); ctx.globalAlpha = a1;
       ctx.fillStyle = '#0d0f0e';
       rr(x0, bandY, pw + 12, ph + 12, 16); ctx.fill();
       ctx.restore();
-      ctx.save();
-      ctx.globalAlpha = a1;
+      ctx.save(); ctx.globalAlpha = a1;
       rr(x0 + 6, bandY + 6, pw, ph, 12); ctx.clip();
       ctx.drawImage(shotImg, x0 + 6, bandY + 6, pw, ph);
       ctx.restore();
 
-      // 流出来的 base64
       const flowX = x0 + pw + 26;
       const flowW = Math.max(0, Math.min(maxW - flowX, (maxW - flowX) * grow + 40));
-      ctx.save();
-      ctx.globalAlpha = a1;
-      ctx.beginPath();
-      ctx.rect(flowX, bandY, flowW, bandH);
-      ctx.clip();
+      ctx.save(); ctx.globalAlpha = a1;
+      ctx.beginPath(); ctx.rect(flowX, bandY, flowW, bandH); ctx.clip();
       ctx.font = F_MONO(19);
       ctx.fillStyle = 'rgba(23,26,24,.44)';
       let i = 0;
@@ -263,15 +253,14 @@ window.DUR = DUR;
       ctx.fillRect(flowX + flowW - 160, bandY, 160, bandH);
       ctx.restore();
 
-      // 数字
-      const a2 = ease.outCubic(seg(t, t0 + 1.05, t0 + 1.55));
-      ctx.save();
-      ctx.globalAlpha = a2;
+      ctx.save(); ctx.globalAlpha = a2;
       txt('一张', 120, 766, F_TEXT(50), C.dim, 'left', 1);
       const w = txt('689', 112, 916, F_DISP(150), C.ink);
       txt('KB', 112 + w + 22, 900, F_DISP(64), C.ink);
       txt('（深色安装器那张）', 120, 992, F_TEXT(36), C.dim, 'left', 1);
+      ctx.restore();
 
+      ctx.save(); ctx.globalAlpha = a3;
       txt('三十步', W - 120, 766, F_TEXT(50), C.dim, 'right', 1);
       ctx.font = F_DISP(150);
       const nW = ctx.measureText('6–20').width;
@@ -282,39 +271,33 @@ window.DUR = DUR;
       ctx.restore();
     }
 
-    // ================================================ 03 猜坐标（11–16）
+    // ================================================ 03 猜坐标（6–10）
     if (t >= S.guess.t0 && t < S.tree.t0) {
       const t0 = S.guess.t0;
-      const a1 = ease.outCubic(seg(t, t0 + 0.04, t0 + 0.26));
-      const a2 = ease.outCubic(seg(t, t0 + 0.32, t0 + 0.56));
-      const a3 = ease.outCubic(seg(t, t0 + 1.45, t0 + 1.80));
+      const a1 = HIT(t, t0);
+      const a2 = SNAP(t, t0 + 0.25);
+      const a3 = HIT(t, t0 + 0.75);
+      const a4 = HIT(t, t0 + 1.50, 0.2);
+      const a5 = HIT(t, t0 + 2.25);
 
-      ctx.save();
-      ctx.globalAlpha = a1;
+      ctx.save(); ctx.globalAlpha = a1;
       txt('可模型得自己看出：按钮在哪', 120, 226, F_DISP(74), C.ink, 'left', 2);
       ctx.restore();
 
-      // 只裁 INSTALL 那一个按钮
       const SR = { x: 384, y: 627, w: 126, h: 95 };
       const dw = 640, dh = dw * SR.h / SR.w;
       const dx = 640, dy = 320;
-      ctx.save();
-      ctx.globalAlpha = a1;
+      ctx.save(); ctx.globalAlpha = a2;
       ctx.fillStyle = '#0d0f0e';
       rr(dx - 8, dy - 8, dw + 16, dh + 16, 20); ctx.fill();
-      ctx.restore();
-      ctx.save();
-      ctx.globalAlpha = a1;
       rr(dx, dy, dw, dh, 14); ctx.clip();
       ctx.drawImage(shotImg, SR.x, SR.y, SR.w, SR.h, dx, dy, dw, dh);
       ctx.restore();
 
-      // 真实可点区域
       const k = dw / SR.w;
       const bx = dx + (395 - SR.x) * k, by = dy + (645 - SR.y) * k;
       const bw = (495 - 395) * k, bh = (700 - 645) * k;
-      ctx.save();
-      ctx.globalAlpha = a2;
+      ctx.save(); ctx.globalAlpha = a3;
       ctx.strokeStyle = C.green;
       ctx.lineWidth = 3.5;
       ctx.setLineDash([11, 8]);
@@ -323,38 +306,32 @@ window.DUR = DUR;
       txt('按钮真实位置', bx - 2, by - 26, F_TEXT(36), C.green, 'left', 1);
       ctx.restore();
 
-      // 模型"猜"出来的点：框外
       const gx = bx + bw * 0.55, gy = by + bh + 52;
-      const pop = ease.outCubic(seg(t, t0 + 0.80, t0 + 1.06));
-      ctx.save();
-      ctx.globalAlpha = pop;
+      ctx.save(); ctx.globalAlpha = a4;
       ctx.fillStyle = C.red;
       ctx.beginPath(); ctx.arc(gx, gy, 14, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = pop * 0.3;
+      ctx.globalAlpha = a4 * 0.3;
       ctx.strokeStyle = C.red; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(gx, gy, 30 + 22 * (1 - pop), 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(gx, gy, 30 + 22 * (1 - a4), 0, Math.PI * 2); ctx.stroke();
       ctx.restore();
 
-      ctx.save();
-      ctx.globalAlpha = a3;
+      ctx.save(); ctx.globalAlpha = a5;
       txt('猜偏 20 px，就点到空白', 120, 900, F_DISP(62), C.red, 'left', 2);
       txt('图上没有编号，模型只能"看着像"', 120, 972, F_TEXT(44), C.dim, 'left', 1);
       ctx.restore();
     }
 
-    // ================================================ 04 做法二：控件树（16–23）
+    // ================================================ 04 做法二：控件树（10–14）
     if (t >= S.tree.t0 && t < S.edge.t0) {
       const t0 = S.tree.t0;
-      const a0 = ease.outCubic(seg(t, t0 + 0.06, t0 + 0.4));
+      const a0 = HIT(t, t0);
 
-      ctx.save();
-      ctx.globalAlpha = a0;
+      ctx.save(); ctx.globalAlpha = a0;
       txt('做法二 · 发一屏控件树', 120, 200, F_TEXT(52), C.dim, 'left', 2);
       ctx.fillStyle = C.faint;
       ctx.fillRect(120, 226, 1680, 1.5);
       ctx.restore();
 
-      // 真实 dump 出来的行，逐行落下
       const LINES = [
         '[1] 文本 "Settings" @(235,472)',
         '[2] ViewGroup "" @(540,667) [可点]',
@@ -364,68 +341,58 @@ window.DUR = DUR;
       ];
       let y = 322;
       for (let i = 0; i < LINES.length; i++) {
-        const ti = t0 + 0.18 + i * 0.24;
-        const p = ease.outCubic(seg(t, ti, ti + 0.34));
+        const p = HIT(t, t0 + 0.5 + i * 0.25);
         ctx.save();
         ctx.globalAlpha = p;
-        ctx.translate(0, (1 - p) * 22);
+        ctx.translate(0, (1 - p) * 20);
         txt(LINES[i], 128, y, F_MONO(45), i === 3 ? C.ink : 'rgba(23,26,24,.62)');
         ctx.restore();
         y += 86;
       }
 
-      // 编号可以直接回传
-      const a2 = ease.outCubic(seg(t, t0 + 1.48, t0 + 1.82));
-      ctx.save();
-      ctx.globalAlpha = a2;
-      const bx = 130, by = 806;
-      ctx.fillStyle = 'rgba(62,107,74,.12)';
-      rr(bx - 14, by - 44, 700, 72, 36); ctx.fill();
-      txt('点 [7]', bx + 12, by + 2, F_DISP(46), C.green, 'left', 2);
-      txt('→ 不用描述"那个蓝的"', bx + 200, by - 4, F_TEXT(40), C.dim, 'left', 1);
-      ctx.restore();
-
-      // 右侧数字：1 KB vs 689 KB
-      const a3 = ease.outCubic(seg(t, t0 + 0.80, t0 + 1.24));
-      ctx.save();
-      ctx.globalAlpha = a3;
+      ctx.save(); ctx.globalAlpha = HIT(t, t0 + 1.75);
       txt('一屏 25 个元素', W - 120, 530, F_TEXT(44), C.dim, 'right', 1);
       ctx.font = F_DISP(170);
       const nW = ctx.measureText('922').width;
       txt('922', W - 120 - (nW + 18 + 60), 694, F_DISP(170), C.green);
       txt('字', W - 120 - 60 + 6, 694, F_DISP(64), C.green);
+      ctx.restore();
+
+      ctx.save(); ctx.globalAlpha = HIT(t, t0 + 2.25);
       txt('≈ 1 KB', W - 120, 788, F_DISP(56), C.dim, 'right', 2);
       ctx.restore();
 
-      const a4 = ease.outCubic(seg(t, t0 + 1.80, t0 + 2.14));
-      ctx.save();
-      ctx.globalAlpha = a4;
+      ctx.save(); ctx.globalAlpha = HIT(t, t0 + 2.50);
       txt('同一屏截图 689 KB', W - 120, 858, F_TEXT(40), C.grayInk, 'right', 1);
       ctx.restore();
 
-      const a5 = ease.outCubic(seg(t, t0 + 2.16, t0 + 2.5));
-      ctx.save();
-      ctx.globalAlpha = a5;
+      ctx.save(); ctx.globalAlpha = HIT(t, t0 + 2.75);
       txt('三十步 30 KB', W - 120, 938, F_DISP(48), C.green, 'right', 1);
       txt('截图要 6–20 MB', W - 120, 1002, F_TEXT(40), C.dim, 'right', 1);
       ctx.restore();
+
+      ctx.save(); ctx.globalAlpha = HIT(t, t0 + 3.25);
+      const p2 = HIT(t, t0 + 3.25);
+      const px2 = 130, py2 = 806;
+      ctx.fillStyle = 'rgba(62,107,74,.12)';
+      rr(px2 - 14, py2 - 44, 700, 72, 36); ctx.fill();
+      txt('点 [7]', px2 + 12, py2 + 2, F_DISP(46), C.green, 'left', 2);
+      txt('→ 不用描述"那个蓝的"', px2 + 200, py2 - 4, F_TEXT(40), C.dim, 'left', 1);
+      ctx.restore();
     }
 
-    // ================================================ 05 说不清的屏（23–26）
+    // ================================================ 05 说不清的屏（14–16）
     if (t >= S.edge.t0 && t < S.end.t0) {
       const t0 = S.edge.t0;
-      const a1 = ease.outCubic(seg(t, t0 + 0.04, t0 + 0.24));
-      const a2 = ease.outCubic(seg(t, t0 + 0.24, t0 + 0.46));
-      const a3 = ease.outCubic(seg(t, t0 + 0.70, t0 + 0.98));
+      const a1 = HIT(t, t0);
+      const a2 = HIT(t, t0 + 0.5);
+      const a3 = HIT(t, t0 + 1.0);
 
-      ctx.save();
-      ctx.globalAlpha = a1;
+      ctx.save(); ctx.globalAlpha = a1;
       txt('说不清的屏，它才要一张图', W / 2, 400, F_DISP(86), C.ink, 'center', 3);
       ctx.restore();
 
-      // 控件树读不到时会返回的那行原文
-      ctx.save();
-      ctx.globalAlpha = a2;
+      ctx.save(); ctx.globalAlpha = a2;
       const s1 = '（当前界面没有可交互元素，可能是游戏、视频或自定义绘制的页面）';
       ctx.font = F_MONO(36);
       const w1 = ctx.measureText(s1).width;
@@ -434,16 +401,16 @@ window.DUR = DUR;
       txt(s1, W / 2, 548, F_MONO(36), C.grayInk, 'center');
       ctx.restore();
 
-      ctx.save();
-      ctx.globalAlpha = a3;
+      ctx.save(); ctx.globalAlpha = a3;
       txt('这时候才发图，而且要它自己开口要', W / 2, 700, F_TEXT(46), C.dim, 'center', 2);
       ctx.restore();
     }
 
-    // ================================================ 06 收尾（26–28）
+    // ================================================ 06 收尾（16–20）
     if (t >= S.end.t0) {
       const t0 = S.end.t0;
-      const a0 = ease.outCubic(seg(t, t0, t0 + 0.20));
+      const a0 = HIT(t, t0);
+      const lp = ease.outCubic(seg(t, t0, t0 + 0.4));
 
       const L = 200 * U, wordSize = 138 * U;
       ctx.save();
@@ -452,22 +419,19 @@ window.DUR = DUR;
       ctx.restore();
       const gap = 42 * U;
       const left = W / 2 - (L + gap + ww) / 2;
-      const midY = 430 * U;
+      const midY = 400 * U;
 
-      ctx.save();
-      ctx.globalAlpha = a0;
-      logo(left + L / 2, midY, L, C.ink, 5 * U, ease.outCubic(seg(t, t0 + 0.02, t0 + 0.46)));
+      ctx.save(); ctx.globalAlpha = a0;
+      logo(left + L / 2, midY, L, C.ink, 5 * U, lp);
       txt('纸盒', left + L + gap, midY + wordSize * 0.36, F_DISP(wordSize), C.ink, 'left', 6);
       ctx.restore();
 
-      ctx.save();
-      ctx.globalAlpha = ease.outCubic(seg(t, t0 + 0.28, t0 + 0.58));
-      txt('不是省那点流量', W / 2, 620 * U, F_TEXT(58 * U), C.dim, 'center', 3);
+      ctx.save(); ctx.globalAlpha = HIT(t, t0 + 0.5);
+      txt('不是省那点流量', W / 2, 596 * U, F_TEXT(58 * U), C.dim, 'center', 3);
       ctx.restore();
 
-      ctx.save();
-      ctx.globalAlpha = ease.outCubic(seg(t, t0 + 0.50, t0 + 0.80));
-      txt('是别让它去猜', W / 2, 726 * U, F_DISP(96 * U), C.green, 'center', 4);
+      ctx.save(); ctx.globalAlpha = HIT(t, t0 + 1.0);
+      txt('是别让它去猜', W / 2, 706 * U, F_DISP(96 * U), C.green, 'center', 4);
       ctx.restore();
     }
 
