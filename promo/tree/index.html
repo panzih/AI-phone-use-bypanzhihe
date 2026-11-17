@@ -175,8 +175,8 @@ window.DUR = DUR;
       ctx.restore();
 
       // 左下：一张真实截图
-      const pw = 236, ph = pw * 2400 / 1080;
-      const px = 268, py = 520;
+      const pw = 292, ph = pw * 2400 / 1080;
+      const px = 232, py = 300;
       ctx.save();
       ctx.globalAlpha = a3;
       ctx.fillStyle = '#0d0f0e';
@@ -197,17 +197,17 @@ window.DUR = DUR;
         '[4] Image  ""     @(300,640)',
         '[5] Text   "安装" @(540,980)',
       ];
-      let ly = 640;
+      let ly = 604;
       for (const ln of lines) {
-        txt(ln, 900, ly, F_MONO(30), C.ink, 'left');
-        ly += 52;
+        txt(ln, 872, ly, F_MONO(41), C.ink, 'left');
+        ly += 62;
       }
       ctx.restore();
 
       // 中间的分隔与「还是」
       ctx.save();
       ctx.globalAlpha = a3 * 0.8;
-      txt('还是', 742, 800, F_TEXT(40), C.dim, 'center', 3);
+      txt('还是', 748, 700, F_TEXT(52), C.dim, 'center', 3);
       ctx.restore();
     }
 
@@ -219,7 +219,7 @@ window.DUR = DUR;
 
       ctx.save();
       ctx.globalAlpha = a1;
-      txt('做法一 · 发一张截图', 120, 200, F_TEXT(42), C.dim, 'left', 2);
+      txt('做法一 · 发一张截图', 120, 200, F_TEXT(52), C.dim, 'left', 2);
       ctx.fillStyle = C.faint;
       ctx.fillRect(120, 226, 1680, 1.5);
       ctx.restore();
@@ -267,18 +267,18 @@ window.DUR = DUR;
       const a2 = ease.outCubic(seg(t, t0 + 1.05, t0 + 1.55));
       ctx.save();
       ctx.globalAlpha = a2;
-      txt('一张', 120, 776, F_TEXT(40), C.dim, 'left', 1);
+      txt('一张', 120, 766, F_TEXT(50), C.dim, 'left', 1);
       const w = txt('689', 112, 916, F_DISP(150), C.ink);
-      txt('KB', 112 + w + 20, 914, F_DISP(62), C.ink);
-      txt('（深色安装器那张）', 120, 980, F_TEXT(28), C.dim, 'left', 1);
+      txt('KB', 112 + w + 22, 900, F_DISP(64), C.ink);
+      txt('（深色安装器那张）', 120, 992, F_TEXT(36), C.dim, 'left', 1);
 
-      txt('三十步', W - 120, 776, F_TEXT(40), C.dim, 'right', 1);
+      txt('三十步', W - 120, 766, F_TEXT(50), C.dim, 'right', 1);
       ctx.font = F_DISP(150);
       const nW = ctx.measureText('6–20').width;
       const uW = 58;
       txt('6–20', W - 120 - (nW + 18 + uW), 916, F_DISP(150), C.ink);
-      txt('MB', W - 120 - uW + 4, 916, F_DISP(58), C.ink);
-      txt('（按实测单张算）', W - 120, 980, F_TEXT(28), C.dim, 'right', 1);
+      txt('MB', W - 120 - uW + 6, 900, F_DISP(64), C.ink);
+      txt('（按实测单张算）', W - 120, 992, F_TEXT(34), C.dim, 'right', 1);
       ctx.restore();
     }
 
@@ -295,7 +295,7 @@ window.DUR = DUR;
       ctx.restore();
 
       // 只裁 INSTALL 那一个按钮
-      const SR = { x: 768, y: 1255, w: 252, h: 190 };
+      const SR = { x: 384, y: 627, w: 126, h: 95 };
       const dw = 640, dh = dw * SR.h / SR.w;
       const dx = 640, dy = 320;
       ctx.save();
@@ -311,8 +311,8 @@ window.DUR = DUR;
 
       // 真实可点区域
       const k = dw / SR.w;
-      const bx = dx + (790 - SR.x) * k, by = dy + (1290 - SR.y) * k;
-      const bw = (990 - 790) * k, bh = (1400 - 1290) * k;
+      const bx = dx + (395 - SR.x) * k, by = dy + (645 - SR.y) * k;
+      const bw = (495 - 395) * k, bh = (700 - 645) * k;
       ctx.save();
       ctx.globalAlpha = a2;
       ctx.strokeStyle = C.green;
@@ -320,7 +320,7 @@ window.DUR = DUR;
       ctx.setLineDash([11, 8]);
       rr(bx, by, bw, bh, 10); ctx.stroke();
       ctx.setLineDash([]);
-      txt('按钮真实位置', bx - 2, by - 22, F_TEXT(28), C.green, 'left', 1);
+      txt('按钮真实位置', bx - 2, by - 26, F_TEXT(36), C.green, 'left', 1);
       ctx.restore();
 
       // 模型"猜"出来的点：框外
@@ -338,7 +338,7 @@ window.DUR = DUR;
       ctx.save();
       ctx.globalAlpha = a3;
       txt('猜偏 20 px，就点到空白', 120, 900, F_DISP(62), C.red, 'left', 2);
-      txt('图上没有编号，模型只能"看着像"', 120, 966, F_TEXT(32), C.dim, 'left', 1);
+      txt('图上没有编号，模型只能"看着像"', 120, 972, F_TEXT(44), C.dim, 'left', 1);
       ctx.restore();
     }
 
@@ -349,7 +349,7 @@ window.DUR = DUR;
 
       ctx.save();
       ctx.globalAlpha = a0;
-      txt('做法二 · 发一屏控件树', 120, 200, F_TEXT(42), C.dim, 'left', 2);
+      txt('做法二 · 发一屏控件树', 120, 200, F_TEXT(52), C.dim, 'left', 2);
       ctx.fillStyle = C.faint;
       ctx.fillRect(120, 226, 1680, 1.5);
       ctx.restore();
@@ -362,52 +362,52 @@ window.DUR = DUR;
         '[7] 文本 "Network & internet" @(540,712) [可点]',
         '[8] 文本 "Mobile, Wi-Fi, hotspot" @(540,780)',
       ];
-      let y = 330;
+      let y = 322;
       for (let i = 0; i < LINES.length; i++) {
         const ti = t0 + 0.18 + i * 0.24;
         const p = ease.outCubic(seg(t, ti, ti + 0.34));
         ctx.save();
         ctx.globalAlpha = p;
         ctx.translate(0, (1 - p) * 22);
-        txt(LINES[i], 130, y, F_MONO(34), i === 3 ? C.ink : 'rgba(23,26,24,.62)');
+        txt(LINES[i], 128, y, F_MONO(45), i === 3 ? C.ink : 'rgba(23,26,24,.62)');
         ctx.restore();
-        y += 62;
+        y += 86;
       }
 
       // 编号可以直接回传
       const a2 = ease.outCubic(seg(t, t0 + 1.48, t0 + 1.82));
       ctx.save();
       ctx.globalAlpha = a2;
-      const bx = 130, by = 700;
+      const bx = 130, by = 806;
       ctx.fillStyle = 'rgba(62,107,74,.12)';
       rr(bx - 14, by - 44, 700, 72, 36); ctx.fill();
       txt('点 [7]', bx + 12, by + 2, F_DISP(46), C.green, 'left', 2);
-      txt('→ 不用描述"那个蓝的"', bx + 196, by - 2, F_TEXT(30), C.dim, 'left', 1);
+      txt('→ 不用描述"那个蓝的"', bx + 200, by - 4, F_TEXT(40), C.dim, 'left', 1);
       ctx.restore();
 
       // 右侧数字：1 KB vs 689 KB
       const a3 = ease.outCubic(seg(t, t0 + 0.80, t0 + 1.24));
       ctx.save();
       ctx.globalAlpha = a3;
-      txt('一屏 25 个元素', W - 120, 560, F_TEXT(36), C.dim, 'right', 1);
+      txt('一屏 25 个元素', W - 120, 530, F_TEXT(44), C.dim, 'right', 1);
       ctx.font = F_DISP(170);
       const nW = ctx.measureText('922').width;
-      txt('922', W - 120 - (nW + 18 + 60), 720, F_DISP(170), C.green);
-      txt('字', W - 120 - 60 + 6, 720, F_DISP(64), C.green);
-      txt('≈ 1 KB', W - 120, 800, F_DISP(56), C.dim, 'right', 2);
+      txt('922', W - 120 - (nW + 18 + 60), 694, F_DISP(170), C.green);
+      txt('字', W - 120 - 60 + 6, 694, F_DISP(64), C.green);
+      txt('≈ 1 KB', W - 120, 788, F_DISP(56), C.dim, 'right', 2);
       ctx.restore();
 
       const a4 = ease.outCubic(seg(t, t0 + 1.80, t0 + 2.14));
       ctx.save();
       ctx.globalAlpha = a4;
-      txt('同一屏截图 689 KB', W - 120, 858, F_TEXT(32), C.grayInk, 'right', 1);
+      txt('同一屏截图 689 KB', W - 120, 858, F_TEXT(40), C.grayInk, 'right', 1);
       ctx.restore();
 
       const a5 = ease.outCubic(seg(t, t0 + 2.16, t0 + 2.5));
       ctx.save();
       ctx.globalAlpha = a5;
-      txt('三十步 30 KB', W - 120, 936, F_DISP(48), C.green, 'right', 1);
-      txt('截图要 6–20 MB', W - 120, 992, F_TEXT(32), C.dim, 'right', 1);
+      txt('三十步 30 KB', W - 120, 938, F_DISP(48), C.green, 'right', 1);
+      txt('截图要 6–20 MB', W - 120, 1002, F_TEXT(40), C.dim, 'right', 1);
       ctx.restore();
     }
 
@@ -427,16 +427,16 @@ window.DUR = DUR;
       ctx.save();
       ctx.globalAlpha = a2;
       const s1 = '（当前界面没有可交互元素，可能是游戏、视频或自定义绘制的页面）';
-      ctx.font = F_MONO(30);
+      ctx.font = F_MONO(36);
       const w1 = ctx.measureText(s1).width;
       ctx.fillStyle = 'rgba(23,26,24,.05)';
       rr(W / 2 - w1 / 2 - 34, 496, w1 + 68, 76, 38); ctx.fill();
-      txt(s1, W / 2, 545, F_MONO(30), C.grayInk, 'center');
+      txt(s1, W / 2, 548, F_MONO(36), C.grayInk, 'center');
       ctx.restore();
 
       ctx.save();
       ctx.globalAlpha = a3;
-      txt('这时候才发图，而且要它自己开口要', W / 2, 690, F_TEXT(36), C.dim, 'center', 2);
+      txt('这时候才发图，而且要它自己开口要', W / 2, 700, F_TEXT(46), C.dim, 'center', 2);
       ctx.restore();
     }
 
