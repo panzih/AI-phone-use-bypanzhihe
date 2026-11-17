@@ -21,7 +21,7 @@ const browser = await launch(chromium);
 const { server, port } = await serve(ROOT);
 
 try {
-  const page = await openPage(browser, { port, rel: 'cover/' + rel, w: W, h: H, dpr: 1 });
+  const page = await openPage(browser, { port, rel: path.basename(HERE) + '/' + rel, w: W, h: H, dpr: 1 });
   await page.waitForFunction(() => window.READY === true, null, { timeout: 60000 });
   await page.waitForTimeout(300);
   await page.screenshot({ path: OUT, clip: { x: 0, y: 0, width: W, height: H } });

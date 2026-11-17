@@ -106,12 +106,13 @@ local.properties
 # 历史版本由 GitHub Releases / update-site 分发，本机不再保留 release/ 目录。
 # 每个版本的更新说明放在 docs/release-notes/，随源码入库。
 
-# 宣传素材（音频 / 封面 / 成片）只留本机，不入库；脚本与说明照常入库
-promo/*.wav
-promo/*.png
-promo/*.mp4
-# Python 虚拟环境（宣传片渲染用）
-promo/.venv/
+# 宣传素材目录的结构：
+#   promo/films/     成片（只留本机，B 站等平台分发）
+#   promo/fonts/     三个项目共用的一份字体（24MB，硬链接进各项目）
+#   promo/projects/  每个项目自带 index.html / timeline.js / score.mjs / brief.md
+#   各项目的 out/ qa/ audio/ fonts/ 由项目内的 .gitignore 挡
+promo/films/
+promo/fonts/
 
 # 旧版宣传片（promo/legacy/）：成片、录制原素材、解说音轨不入库；
 # 脚本、README、封面图入库。

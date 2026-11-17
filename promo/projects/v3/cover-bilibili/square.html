@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <title>纸盒 · B站封面 4:3</title>
 <style>
-  @font-face { font-family: "Display"; src: url(../v3/fonts/SmileySans.ttf) format("truetype"); }
-  @font-face { font-family: "Text";    src: url(../v3/fonts/WenKai.ttf)     format("truetype"); }
+  @font-face { font-family: "Display"; src: url(../fonts/SmileySans.ttf) format("truetype"); }
+  @font-face { font-family: "Text";    src: url(../fonts/WenKai.ttf)     format("truetype"); }
   html, body { margin: 0; background: #000; overflow: hidden; }
   canvas { display: block; }
 </style>
@@ -83,7 +83,7 @@ const loadImage = src => new Promise((res, rej) => {
     document.fonts.load(F_DISP(80)), document.fonts.load(F_DISP(230)),
     document.fonts.load(F_TEXT(46)),
   ]);
-  const shot = await loadImage('../v3/assets/shots/main-empty.png');
+  const shot = await loadImage('../assets/shots/main-empty.png');
 
   ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, W, H);

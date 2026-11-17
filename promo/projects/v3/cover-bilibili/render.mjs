@@ -10,7 +10,7 @@ const SKILL_DIR = process.env.SKILL || path.join(os.homedir(), '.workbuddy/skill
 const { loadChromium, launch, serve, openPage } = await import(SKILL_DIR + '/scripts/lib/browser.mjs');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, '..');          // promo/ —— ../v3/... 的字体和截图都从这里取
+const ROOT = path.resolve(HERE, '..');          // projects/v3 —— 字体和截图都从这层取
 
 const rel = process.argv[2] || 'square.html';
 const [W, H] = (process.argv[3] || '1600x1200').split('x').map(Number);
@@ -21,7 +21,7 @@ const browser = await launch(chromium);
 const { server, port } = await serve(ROOT);
 
 try {
-  const page = await openPage(browser, { port, rel: 'cover/' + rel, w: W, h: H, dpr: 1 });
+  const page = await openPage(browser, { port, rel: path.basename(HERE) + '/' + rel, w: W, h: H, dpr: 1 });
   await page.waitForFunction(() => window.READY === true, null, { timeout: 60000 });
   await page.waitForTimeout(300);
   await page.screenshot({ path: OUT, clip: { x: 0, y: 0, width: W, height: H } });

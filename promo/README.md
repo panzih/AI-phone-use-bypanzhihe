@@ -1,33 +1,58 @@
-# 宣传物料
+# promo · 宣传物料
 
-所有宣传片、封面工程都在这里。**脚本、HTML、说明入库；成片、录制素材、音频、
-渲染中间产物不入库**（规则见根目录 [`.gitignore`](../.gitignore)）。
-成片只留本机，需要发布时从这里取。
+给 B 站做的三条片子，以及各自的封面与数据出处。
 
-## 当前版本
+## 目录
 
-| 目录 | 内容 | 规格 | 成片 |
+```
+promo/
+  films/                     成片（不入库，只留本机）
+  fonts/                     三个项目共用的一份字体（硬链接进各项目，磁盘只占一份）
+  projects/
+    v3/                      ① 宣传片 15 秒
+      cover-bilibili/        它的 B 站封面（4:3 + 16:9）
+    compare/                 ② 体积对比 12 秒
+      cover/                 它的 B 站封面
+    tree/                    ③ 控件树 20 秒
+      cover/                 它的 B 站封面
+  legacy/                    早期版本（15s Python / 60s / 90s / onetake），只留不维护
+  README.md                  这一份
+```
+
+## 三条片子
+
+| 片子 | 时长 | 讲什么 | 说明 |
 |---|---|---|---|
-| [`v3/`](v3/) | 15 秒横屏宣传片 | 1920×1080 / 30fps | `v3/纸盒-宣传片-15s-横屏.mp4` |
-| [`compare/`](compare/) | 体积对比片：安装包 / 占用 / 提示词 | 1920×1080 / 12s | `compare/纸盒-体积对比-12s.mp4` |
-| [`cover/`](cover/) | B 站封面（16:9 与 4:3） | — | `cover/cover-*.png` |
+| `films/纸盒-宣传片-15s-横屏.mp4` | 15s | 说五个字，它自己下载、安装、打开 | `projects/v3/` |
+| `films/纸盒-体积对比-12s.mp4` | 12s | 都能操作手机、效果一样，体积差 61 倍 | `projects/compare/发布信息.md` |
+| `films/纸盒-控件树-20s.mp4` | 20s | 为什么只发控件树不发截图 | `projects/tree/brief.md` |
 
-## 旧版（`legacy/`）
+每个项目目录里的 `brief.md` 记着**每个数字的出处**与分镜；`发布信息.md` 是可直接粘贴的
+标题与简介。改片之前先看 `brief.md`，别把已经核对过的数改错。
 
-| 目录 | 内容 | 规格 |
-|---|---|---|
-| [`legacy/15s-python/`](legacy/15s-python/) | 早期 15 秒版，Python 逐帧渲染 | 1920×1080 / 15s |
-| [`legacy/60s/`](legacy/60s/) | 60 秒竖屏，只有字幕、无解说 | 1080×1920 / 60s |
-| [`legacy/90s/`](legacy/90s/) | 90 秒竖屏，中文解说 + 配乐 | 1080×1920 / 90.6s |
-| [`legacy/onetake/`](legacy/onetake/) | 60 秒一镜到底，无旁白（onetake + HTML） | 1080×1920 / 60s |
+## 重出一条片子
 
-`legacy/60s`、`legacy/90s`、`legacy/onetake` 以及 `v3`、`compare`、`cover`
-都自带说明（`README.md` / `brief.md` / `发布信息.md`），写明了用途与重建方式；
-`legacy/15s-python/` 只留渲染脚本，已被 `v3/` 取代。旧的 Swift 渲染脚本里用的是本机
-绝对路径（`~/DSH/AI手机/promo/...`），换机器要改。
+```bash
+cd promo/projects/tree          # 换成要重出的项目
+node "$HOME/.workbuddy/skills/motion-showreel/scripts/audio.mjs" build score.mjs
+sh build.sh                      # 渲染 + 技术验收，产物在 out/final.mp4
+cp out/final.mp4 ../../films/纸盒-控件树-20s.mp4
+```
 
-## 备注
+重出封面：
 
-- `promo/.venv/` 是本机 Python 虚拟环境，不入库。
-- `v3/` 与 `compare/` 用 `build.sh` 一条命令重建，产物在各自的 `out/`（不入库）。
-- 成片命名与版本无关时，按「内容-时长」写；发版后需要长期保留的成片再单独归档。
+```bash
+cd promo/projects/tree/cover
+node render.mjs square.html 1600x1200 cover-4x3.png    # 4:3 首页与分区列表
+node render.mjs wide.html   1920x1080 cover-16x9.png   # 16:9 播放页与推荐流
+```
+
+需要 `$SKILL` 指向 motion-showreel 技能目录；不设就用 `~/.workbuddy/skills/motion-showreel`。
+
+## 约定
+
+- **成片只放 `films/`**，不要散在项目里或根目录。
+- **命名 = 内容-时长**；与版本号无关的片子不写版本号。
+- **字体只存一份**在 `promo/fonts/`，各项目用硬链接引；换字体三处一起换。
+- `out/` `qa/` `audio/` 是可重算的中间产物，不入库。
+- 片子里出现的数字必须追得到出处；追不到就别往画面里写。
