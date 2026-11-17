@@ -83,6 +83,14 @@ data class MainUiState(
     /** 执行中的进度文字，例如 "AI 正在执行 · 第 3 / 30 步" */
     val progress: String = "",
 
+    /**
+     * 任务结束后正在归纳记忆（后台还会调一次模型）。
+     *
+     * 和 [isRunning] 分开：任务已经结束，但总结还在跑；底部单独给一行
+     * 「正在总结记忆…」，否则用户只会觉得软件莫名其妙又多花了一次钱。
+     */
+    val memorySummarizing: Boolean = false,
+
     /** 中间那块显示的日志（AI 的思考 / 动作 / 结果）。空的时候显示 logo */
     val logs: List<LogEntry> = emptyList(),
 

@@ -49,8 +49,8 @@ android {
         applicationId = "com.aiphone.assistant"
         minSdk = 28          // Android 9，与 MAA-Meow 一致
         targetSdk = 35
-        versionCode = 92      // 0.17.2：反提示词注入（页面文字只当数据 + 控件文字一行化 + 记忆防污染）
-        versionName = "0.17.2"
+        versionCode = 93      // 0.17.3：记忆归纳时底部显示「正在总结记忆…」
+        versionName = "0.17.3"
         // 设备冒烟测试：androidTest 用 AndroidJUnitRunner 跑
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

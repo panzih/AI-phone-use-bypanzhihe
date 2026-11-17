@@ -366,6 +366,13 @@ private fun AppRoot(
      */
     var taskTurnStart by host.taskTurnStartState
     var progress by host.progressState
+    /**
+     * 正在排队/进行中的记忆归纳数量。
+     *
+     * 用计数而不是布尔：任务可能连着结束两次，第二次写入会排队等第一次；
+     * 布尔会在第一次结束时提前把「正在总结记忆」关掉。
+     */
+    var memoryJobs by remember { mutableStateOf(0) }
     var toast by remember { mutableStateOf<String?>(null) }
 
     // ---- 操作记录 ----
@@ -995,11 +1002,9 @@ private fun AppRoot(
                     // 开了记忆就让 AI 把这一趟归纳成一条「用户洞察」。
                     // 放在这里而不是等上下文被清空 —— 任务刚结束时记录最新鲜，
                     // 而且用户可能几个月都不手动清一次上下文。
-                    // 记忆总结也当成对话的一部分显示出来 ——
-                    // 它确实是"助手在做的一件事"，藏起来用户只会觉得
-                    // 软件莫名其妙多花了钱
-                    // 记忆归纳是后台动作：不再插「正在整理记忆」卡片，
-                    // 结果用轻 toast 提示（见 onDone）
+                    // 记忆归纳是后台动作：不插对话卡片，只在底部显示
+                    // 「正在总结记忆…」，结果用轻 toast 提示（见 onDone）
+                    memoryJobs++
                     memorizeAfterTask(
                         scope = scope,
                         context = context.applicationContext,
@@ -1008,6 +1013,7 @@ private fun AppRoot(
                         sinceTurn = taskTurnStart,
                         llm = llm,
                         onDone = { outcome ->
+                            memoryJobs = (memoryJobs - 1).coerceAtLeast(0)
                             // 新增记忆给轻 toast、不占对话卡片；没写入是常态
                             // （没什么可记），保持安静，原因仍在 run.log 可查
                             if (outcome is MemoryWriter.Outcome.Written) {
@@ -1704,6 +1710,7 @@ private fun AppRoot(
                 autoCapStats = autoCapStats,
                 appVersion = appVersion,
                 progress = progress,
+                memorySummarizing = memoryJobs > 0,
                 toast = toast,
                 recordingActive = recordingActive,
                 recordedSteps = recordedSteps,
