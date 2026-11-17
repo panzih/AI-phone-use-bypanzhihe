@@ -339,7 +339,7 @@ internal suspend fun AgentSession.observeStep(
             } else {
                 add(
                     "现在前台是「纸盒」自己，不是用户要操作的应用。先用 open_app 打开目标应用" +
-                        "（包名不确定就先调 list_apps 查真实包名），不要在纸盒的界面上点击。"
+                        "（包名不确定就先写 \"use_skill\":\"list_apps\" 查真实包名），不要在纸盒的界面上点击。"
                 )
             }
         }
@@ -361,7 +361,7 @@ internal suspend fun AgentSession.observeStep(
         if (blindOnVd) {
             add(
                 "副屏现在**还没有画面**（连截图都抓不到）：多半是还没有应用切到副屏上。" +
-                    "先用 open_app 打开目标任务的应用（包名不确定就先调 list_apps），" +
+                    "先用 open_app 打开目标任务的应用（包名不确定就先写 \"use_skill\":\"list_apps\"），" +
                     "等它出现在副屏上再截图确认。**不要**照抄历史里主屏那张界面的坐标。"
             )
         }
